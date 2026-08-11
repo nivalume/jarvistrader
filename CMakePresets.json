@@ -1,0 +1,88 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "JARVIS_BUILD_PYTHON": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Debug with ASan and UBSan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "rel",
+      "inherits": "base",
+      "displayName": "Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF"
+      }
+    },
+    {
+      "name": "det-o0",
+      "inherits": "base",
+      "displayName": "Determinism comparison build at O0",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF",
+        "JARVIS_FORCE_O0": "ON"
+      }
+    },
+    {
+      "name": "bench",
+      "inherits": "base",
+      "displayName": "Release benchmark scaffold",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "JARVIS_BUILD_TESTS": "OFF",
+        "JARVIS_BUILD_BENCHMARKS": "ON",
+        "JARVIS_ENABLE_SANITIZERS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "rel", "configurePreset": "rel" },
+    { "name": "det-o0", "configurePreset": "det-o0" },
+    { "name": "bench", "configurePreset": "bench" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "rel",
+      "configurePreset": "rel",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "det-o0",
+      "configurePreset": "det-o0",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

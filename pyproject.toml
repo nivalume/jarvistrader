@@ -1,0 +1,45 @@
+[build-system]
+requires = ["scikit-build-core==1.0.3"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "jarvis"
+version = "0.0.0"
+description = "Deterministic event-driven backtesting kernel scaffold"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+  "Programming Language :: C++",
+  "Programming Language :: C++ :: 20",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit==4.6.2",
+  "pytest==9.1.1",
+]
+
+[tool.scikit-build]
+cmake.version = ">=3.25"
+build-dir = "build/wheel/{wheel_tag}"
+wheel.packages = ["python/jarvis"]
+cmake.args = [
+  "-DJARVIS_BUILD_TESTS=OFF",
+  "-DJARVIS_BUILD_BENCHMARKS=OFF",
+]
+sdist.include = [
+  "CMakeLists.txt",
+  "cmake/CPM.cmake",
+  "cmake/Dependencies.cmake",
+  "jarvis/**",
+  "python/**",
+  "testkit/freestanding.cpp",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+addopts = ["--strict-config", "--strict-markers"]

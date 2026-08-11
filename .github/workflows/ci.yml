@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            compiler: gcc-13
+            cc: gcc-13
+            cxx: g++-13
+          - os: ubuntu-24.04
+            compiler: clang-18
+            cc: clang-18
+            cxx: clang++-18
+          - os: macos-14
+            compiler: AppleClang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Linux compiler tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build gcc-13 g++-13 clang-18 clang-format-18 clang-tidy-18
+
+      - name: Install Python build tools
+        run: python -m pip install "scikit-build-core==1.0.3" "pytest==9.1.1" "pre-commit==4.6.2"
+
+      - name: Configure sanitizer build
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake --preset dev -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+
+      - name: Build sanitizer targets
+        run: cmake --build --preset dev
+
+      - name: Run CTest scaffold
+        run: ctest --preset dev
+
+      - name: Check formatting and static analysis
+        if: matrix.compiler == 'clang-18'
+        env:
+          CLANG_FORMAT: clang-format-18
+          CLANG_TIDY: clang-tidy-18
+        run: pre-commit run --all-files
+
+      - name: Build and install the wheel
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: python -m pip install --force-reinstall .
+
+      - name: Run Python import smoke test
+        run: python -m pytest
+
+  determinism:
+    name: determinism build paths
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18
+      - name: Configure and build Release
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake --preset rel -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          cmake --build --preset rel
+      - name: Configure and build O0
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake --preset det-o0 -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          cmake --build --preset det-o0
+      - name: Record deferred fingerprint gate
+        run: echo "No kernel state exists; byte-for-byte fingerprint comparison is deferred."
+
+  bench:
+    name: benchmark build path
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18
+      - name: Configure benchmark dependencies
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: cmake --preset bench -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+      - name: Build benchmark scaffold
+        run: cmake --build --preset bench --target jarvis_bench
+      - name: Record deferred benchmark output
+        run: echo "No benchmark exists; JSON archival is deferred."
