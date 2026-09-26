@@ -9,24 +9,26 @@
 
 ## M0 工程门与 harness 骨架（在写领域代码之前，让三层门禁都能运行）
 
-- [ ] task: build — 新增 `jarvis_shell` 静态库目标与 `JARVIS_BUILD_LIVE` 选项，纯回测 wheel 不依赖网络栈（architecture §3、§13）
-- [ ] task: build — 新增 `tsan` 与 `fuzz` 两个 CMake preset，并接入 justfile（§17.2）
-- [ ] task: tools — `tools/check-layering.py`：按 §3 分层表检查 include 关系，接入 pre-commit 与 CI
-- [ ] task: tests — 按层建立 `tests/cpp/test_<layer>.cpp` 骨架与 ctest 标签 `unit`、`property`、`conformance`、`golden`
-- [ ] task: testkit — `jarvis::testkit::Gen`（splitmix64）性质测试生成器，支持 `JARVIS_PROP_SEED` 与 `JARVIS_PROP_ITERS`
-- [ ] task: tests — 零分配门夹具：debug 构建替换 `operator new` 并计数
-- [ ] task: tools — golden 工具骨架：`tests/golden/<case>/` 布局、`just golden`、`just golden-update`
-- [ ] task: bench — 建立 `benchmarks/hot/`、`benchmarks/report/`、`benchmarks/thresholds.toml`，用一个 `bench_noop` 基准验证管线
-- [ ] task: tools — `tools/bench_compare.py`：中位数比较、逐项阈值与 `abs_floor_ns`、三轮 A/B 中两轮复现才判定回归
-- [ ] task: ci — `bench-compare` job：`git worktree` 同时构建 merge-base 与 head，在同一 runner 上绑核交替运行
-- [ ] task: specs — `specs/tla/` 骨架、钉定 `tla2tools.jar` 的 SHA-256、一个 20 行的占位规约
-- [ ] task: tools — `specs/tla/MAP.toml`、`tools/tla/select_specs.py`、由两者生成 `tools/core-paths.txt`（§17.4、§17.5）
-- [ ] task: ci — `formal` job（仅当改动触及核心路径时运行）与 PR 的 `core` 标签自动标注
-- [ ] task: ci — 作业图改为 lint → functional → {determinism, bench-compare, formal} → gate，新增 nightly 工作流（§17.6）
-- [ ] task: justfile — `just check` 与 §17.7 的全部配方；对应功能落地前，配方明确打印"跳过：尚未实现"，不伪装为通过
-- [ ] task: docs — 修订 `docs/cpp-subset.md`：`OrderId` 更名为 `OrderHandle`，补充热路径定义、`DynamicStrategySet` 函数指针表例外、零分配规则（D06、D24）
-- [ ] task: docs — 更新 `init-project.md` 的非目标：不内置策略；v1.0 订单子集为 MARKET、LIMIT（GTC/IOC/FOK/GTX）、reduceOnly、STP
-- [ ] task: 验收 — 在当前脚手架上 `just check` 通过；分别故意引入一次分层违规、一次 `step` 内分配、一次 15% 基准回归，三道门各自报错
+> 2026-09-26 完成。验收结果：`just check` 通过（指纹门与 A/B 基准按设计输出 SKIPPED）；注入内核 include `<chrono>` 与 shell 层头文件，分层检查报 2 处违规；注入内核头 `throw`，freestanding 目标编译失败；在零分配门的计量范围内分配，测试报 1000 次分配；`noop/loop` 实测回归 +15.0%，三轮 A/B 中复现两轮，判定 REGRESSION 并非零退出；不改代码的对照组为 -1.7%，判定 ok。另修复了脚手架遗留问题：clang-tidy 的头文件过滤正则从未匹配绝对路径，项目头文件此前没有被检查。
+
+- [x] task: build — 新增 `jarvis_shell` 静态库目标与 `JARVIS_BUILD_LIVE` 选项，纯回测 wheel 不依赖网络栈（architecture §3、§13）
+- [x] task: build — 新增 `tsan` 与 `fuzz` 两个 CMake preset，并接入 justfile（§17.2）
+- [x] task: tools — `tools/check-layering.py`：按 §3 分层表检查 include 关系，接入 pre-commit 与 CI
+- [x] task: tests — 按层建立 `tests/cpp/test_<layer>.cpp` 骨架与 ctest 标签 `unit`、`property`、`conformance`、`golden`、`zero-alloc`（`jarvis_add_layer_test()`；各层的测试二进制随该层代码一起加入）
+- [x] task: testkit — `jarvis::testkit::Gen`（splitmix64）性质测试生成器，支持 `JARVIS_PROP_SEED` 与 `JARVIS_PROP_ITERS`
+- [x] task: tests — 零分配门夹具：debug 构建替换 `operator new` 并计数
+- [x] task: tools — golden 工具骨架：`tests/golden/<case>/` 布局、`just golden`、`just golden-update`
+- [x] task: bench — 建立 `benchmarks/hot/`、`benchmarks/report/`、`benchmarks/thresholds.toml`，用一个 `bench_noop` 基准验证管线
+- [x] task: tools — `tools/bench_compare.py`：中位数比较、逐项阈值与 `abs_floor_ns`、三轮 A/B 中两轮复现才判定回归
+- [x] task: ci — `bench-compare` job：`git worktree` 同时构建 merge-base 与 head，在同一 runner 上绑核交替运行
+- [x] task: specs — `specs/tla/` 骨架、钉定 `tla2tools.jar` 的 SHA-256、一个 20 行的占位规约
+- [x] task: tools — `specs/tla/MAP.toml`、`tools/tla/select_specs.py`、由两者生成 `tools/core-paths.txt`（§17.4、§17.5）
+- [x] task: ci — `formal` job（仅当改动触及核心路径时运行）与 PR 的 `core` 标签自动标注
+- [x] task: ci — 作业图改为 lint → functional → {determinism, bench-compare, formal} → gate，新增 nightly 工作流（§17.6）
+- [x] task: justfile — `just check` 与 §17.7 的全部配方；对应功能落地前，配方明确打印"跳过：尚未实现"，不伪装为通过
+- [x] task: docs — 修订 `docs/cpp-subset.md`：`OrderId` 更名为 `OrderHandle`，补充热路径定义、`DynamicStrategySet` 函数指针表例外、零分配规则（D06、D24）
+- [x] task: docs — 更新 `init-project.md` 的非目标：不内置策略；v1.0 订单子集为 MARKET、LIMIT（GTC/IOC/FOK/GTX）、reduceOnly、STP
+- [x] task: 验收 — 在当前脚手架上 `just check` 通过；分别故意引入一次分层违规、一次 `step` 内分配、一次 15% 基准回归，三道门各自报错
 
 ## M1 core 与 model（兼容契约落地，确定性门变成真实检查）
 
