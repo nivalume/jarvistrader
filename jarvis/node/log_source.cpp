@@ -79,8 +79,8 @@ Status LogSource::next(core::EventKey& key, model::Event& event) {
       return s;
     }
     last_seq_ = record.header.seq;
-    key = core::EventKey{record.header.ts, record.header.source_id,
-                         seq_offset_ + record.header.seq};
+    key =
+        core::EventKey{record.header.ts, record.header.source_id, seq_offset_ + record.header.seq};
     return Status::Ok;
   }
   return Status::EndOfStream;
