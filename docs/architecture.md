@@ -112,26 +112,29 @@ jarvis 自己的组件不使用 `Actor`、`MessageBus`、`Cache`、`Trader`、`K
 ### 内核与外壳
 
 - **kernel**（`jarvis::kernel`）：header-only，经 `jarvis_kernel_freestanding` 以 `-fno-exceptions -fno-rtti` 编译守门。包含 `core`、`model`、`data`、`cost`、`portfolio`、`risk`、`execution`、`strategy`、`engine`、`backtest`。错误用 `enum class Status` 加输出参数表达。
-- **shell**（`jarvis_shell` 静态库与 `_core` 绑定模块）：`network`、`adapter/binance`、`live`、`python`。内部可以使用异常与第三方库，跨入内核前翻译成 `Status`。
+- **shell**（`jarvis_shell` 静态库与 `_core` 绑定模块）：`node`、`network`、`adapter/binance`、`live`、`python`。内部可以使用异常与第三方库，跨入内核前翻译成 `Status`。`node` 层（配置解析、Node 组合、命令行入口、构建信息）回测也需要，因此总是构建；`network`、`adapter`、`live` 只在 `JARVIS_BUILD_LIVE=ON` 时编入，纯回测构建不依赖网络栈。
 
 ### 分层与依赖规则
 
-依赖只能从上往下。`tools/check-layering.py` 在 CI 中检查 include 关系；freestanding 目标只能拦住 `throw`，拦不住分层违规，所以两者都需要。
+依赖只能从上往下。内核层的顺序是 `core < model < {data, cost} < portfolio < execution < risk < strategy < engine < backtest`：一个内核头文件只能 include 本层或更低的层，同级的 `data` 与 `cost` 不能互相 include。`tools/check-layering.py` 在 CI 中检查 include 关系，并禁止内核 include 线程、时钟、流、随机数、异常类与第三方库头；freestanding 目标只能拦住 `throw`，拦不住分层违规，所以两者都需要。
 
 | 层 | 目录 | 归属 | 允许 include |
 | --- | --- | --- | --- |
 | core | `jarvis/core` | kernel | 标准库子集 |
 | model | `jarvis/model` | kernel | core |
 | data、cost | `jarvis/data`、`jarvis/cost` | kernel | core、model |
-| portfolio、risk、execution | `jarvis/portfolio`、`jarvis/risk`、`jarvis/execution` | kernel | 以上各层 |
+| portfolio | `jarvis/portfolio` | kernel | core、model、data、cost |
+| execution | `jarvis/execution` | kernel | 以上各层（OMS 的预留敞口读取持仓） |
+| risk | `jarvis/risk` | kernel | 以上各层（风控读取 Portfolio 与 OMS） |
 | strategy | `jarvis/strategy` | kernel | 以上各层，不得 include backtest、live、adapter |
 | engine | `jarvis/engine` | kernel | 以上各层 |
 | backtest | `jarvis/backtest` | kernel | 以上各层 |
+| node | `jarvis/node` | shell | 全部 kernel 层；toml++ |
 | network | `jarvis/network` | shell | core；Asio、OpenSSL、picohttpparser |
 | adapter | `jarvis/adapter/binance` | shell | network 与全部 kernel 层；simdjson、SBE 生成代码 |
-| live | `jarvis/live` | shell | adapter 与全部 kernel 层 |
+| live | `jarvis/live` | shell | node、network、adapter 与全部 kernel 层 |
 | python | `python/src`、`python/jarvis` | shell | 全部；nanobind |
-| examples | `examples/py`、`examples/cpp` | 使用方 | 只允许公开 API，不得 include live、backtest、adapter 内部头 |
+| examples | `examples/py`、`examples/cpp` | 使用方 | 只允许公开 API：core、model、data、strategy、node |
 
 ### 目录结构
 
@@ -147,6 +150,7 @@ jarvis/
   strategy/     Strategy concept, Context, StrategySet (Static/Dynamic), registry
   engine/       Engine<StrategySet>, EventSource/CommandSink concepts, EngineState
   backtest/     ReplaySource, ReplayClock, matching/ (SimulatedExchange, fill models)
+  node/         build info, NodeConfig parsing, Node composition, command-line entry points
   network/      Transport, WsClient (RFC 6455), HttpClient, Signer
   adapter/binance/  codec/ (json, sbe/gen), streams, user_stream, ws_api, rest, instruments
   live/         Node wiring, rings, threads, persist, telemetry, admin, health
@@ -158,9 +162,10 @@ specs/
   tla/          OrderLifecycle, Reconciliation, TradingState, Matching, DepthSync, MAP.toml
   map/          规约动作 → 内核事件的映射头文件
   sbe/binance/  钉版本的 SBE XML schema
-tests/          cpp/、golden/、fuzz/
+tests/          cpp/、golden/、fuzz/、tools/（工具脚本的 pytest）
+testkit/        性质测试生成器、零分配计数器、doctest 入口
 benchmarks/     hot/（门禁）、report/（只报告）、thresholds.toml
-tools/          check-layering.py, bench_compare.py, tla/, core-paths.txt
+tools/          check-layering.py, golden.py, bench_compare.py, bench_ab.sh, tla/, core-paths.txt
 ```
 
 ---
@@ -1252,33 +1257,33 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - `specs/tla/MAP.toml` 把规约映射到源码路径，CI 据此判断一个改动影响哪些规约：
 
 ```toml
-[OrderLifecycle]
+[specs.OrderLifecycle]
 paths = ["jarvis/execution/order_fsm.hpp", "jarvis/execution/order_core.hpp",
          "jarvis/model/events/order_*.hpp", "jarvis/model/enums/order_status.hpp"]
 forward = true
 backward = true
 budget_min = 10
 
-[Reconciliation]
+[specs.Reconciliation]
 paths = ["jarvis/execution/reconcile/**", "jarvis/live/sync*.hpp",
          "jarvis/adapter/binance/user_stream*.hpp"]
 forward = true
 backward = true
 budget_min = 20
 
-[TradingState]
+[specs.TradingState]
 paths = ["jarvis/risk/trading_state.hpp", "jarvis/risk/token_bucket.hpp", "jarvis/risk/monitors/**"]
 forward = true
 backward = false
 budget_min = 5
 
-[Matching]
+[specs.Matching]
 paths = ["jarvis/backtest/matching/**", "jarvis/execution/algorithms/**"]
 forward = true
 backward = false
 budget_min = 15
 
-[DepthSync]
+[specs.DepthSync]
 paths = ["jarvis/adapter/binance/depth_sync*.hpp", "jarvis/data/book/**"]
 forward = true
 backward = false
@@ -1286,9 +1291,13 @@ budget_min = 5
 
 [global]
 always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"]   # 触及即运行全部规约
+
+[core]
+extra = ["jarvis/core/**", "jarvis/engine/**", "jarvis/execution/**", "jarvis/risk/**",
+         "jarvis/backtest/matching/**", "jarvis/data/book/**", "specs/**"]
 ```
 
-- `tools/tla/select.py --base <merge-base>` 输出受影响的规约列表；改动 `.tla` 文件本身也会触发该规约；每周运行一次全量。
+- `tools/tla/select_specs.py --base <merge-base>` 输出受影响的规约列表；改动 `.tla` 文件本身也会触发该规约；每周运行一次全量。
 
 ### 17.5 核心路径的机械定义
 
@@ -1299,7 +1308,7 @@ always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"] 
         ∪ specs/**
 ```
 
-该集合生成到 `tools/core-paths.txt`，`select.py` 与 PR 标签机器人共用。触及核心路径的 PR 自动打上 `core` 标签，形式化层成为必需检查，性能阈值收紧。
+该集合由 `tools/tla/select_specs.py --emit` 从 `MAP.toml` 生成到 `tools/core-paths.txt` 与 `.github/labeler.yml`，lint 检查两者是否过期；`select_specs.py` 与 PR 标签机器人共用这一份定义。触及核心路径的 PR 自动打上 `core` 标签，形式化层成为必需检查，性能阈值收紧。
 
 ### 17.6 CI 作业图
 

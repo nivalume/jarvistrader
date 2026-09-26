@@ -41,5 +41,5 @@ sdist.include = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["python/tests", "tests/tools"]
 addopts = ["--strict-config", "--strict-markers"]

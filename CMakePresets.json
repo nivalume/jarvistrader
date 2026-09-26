@@ -23,7 +23,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "JARVIS_BUILD_TESTS": "ON",
-        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_BUILD_BENCHMARKS": "ON",
         "JARVIS_ENABLE_SANITIZERS": "ON"
       }
     },
@@ -60,29 +60,95 @@
         "JARVIS_BUILD_BENCHMARKS": "ON",
         "JARVIS_ENABLE_SANITIZERS": "OFF"
       }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "Debug with ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JARVIS_BUILD_PYTHON": "OFF",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF",
+        "JARVIS_ENABLE_TSAN": "ON"
+      }
+    },
+    {
+      "name": "fuzz",
+      "inherits": "base",
+      "displayName": "libFuzzer targets (Clang only)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "JARVIS_BUILD_PYTHON": "OFF",
+        "JARVIS_BUILD_TESTS": "OFF",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF",
+        "JARVIS_ENABLE_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "dev", "configurePreset": "dev" },
-    { "name": "rel", "configurePreset": "rel" },
-    { "name": "det-o0", "configurePreset": "det-o0" },
-    { "name": "bench", "configurePreset": "bench" }
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "rel",
+      "configurePreset": "rel"
+    },
+    {
+      "name": "det-o0",
+      "configurePreset": "det-o0"
+    },
+    {
+      "name": "bench",
+      "configurePreset": "bench",
+      "targets": [
+        "jarvis_bench"
+      ]
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "fuzz",
+      "configurePreset": "fuzz",
+      "targets": [
+        "jarvis_fuzz"
+      ]
+    }
   ],
   "testPresets": [
     {
       "name": "dev",
       "configurePreset": "dev",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "rel",
       "configurePreset": "rel",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "det-o0",
       "configurePreset": "det-o0",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

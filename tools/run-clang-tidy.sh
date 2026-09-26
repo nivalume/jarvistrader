@@ -15,4 +15,9 @@ if [[ ! -f build/dev/compile_commands.json ]]; then
   exit 1
 fi
 
-exec "${tool}" -p build/dev "$@"
+# .clang-tidy's HeaderFilterRegex is matched against absolute paths, so a repository-relative
+# pattern never matches. Anchor the filter at this checkout instead.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+header_filter="^${repo_root}/(jarvis|python|testkit|tests|benchmarks)/"
+
+exec "${tool}" -p build/dev --header-filter="${header_filter}" "$@"

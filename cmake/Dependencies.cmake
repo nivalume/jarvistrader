@@ -25,6 +25,7 @@ function(jarvis_add_doctest)
     GITHUB_REPOSITORY doctest/doctest
     GIT_TAG 2d0a9359a60c51affe2a9bebb1be1dca47868151
     EXCLUDE_FROM_ALL YES
+    SYSTEM YES
   )
 endfunction()
 
@@ -39,6 +40,7 @@ function(jarvis_add_benchmark)
     GITHUB_REPOSITORY google/benchmark
     GIT_TAG 192ef10025eb2c4cdd392bc502f0c852196baa48
     EXCLUDE_FROM_ALL YES
+    SYSTEM YES
     OPTIONS
       "BENCHMARK_ENABLE_TESTING OFF"
       "BENCHMARK_ENABLE_GTEST_TESTS OFF"

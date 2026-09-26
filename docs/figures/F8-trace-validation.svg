@@ -13,7 +13,7 @@
   <!-- selector -->
   <rect x="20" y="180" width="160" height="64" rx="4" fill="#ffffff" stroke="#57606a"/>
   <text x="100" y="202" text-anchor="middle" font-size="11">改动文件</text>
-  <text x="100" y="218" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">select.py</text>
+  <text x="100" y="218" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">select_specs.py</text>
   <text x="100" y="234" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">specs/tla/MAP.toml</text>
   <line x1="180" y1="212" x2="218" y2="212" stroke="#57606a" marker-end="url(#f8-arrow)"/>
   <text x="199" y="204" text-anchor="middle" font-size="10" fill="#57606a">受影响</text>

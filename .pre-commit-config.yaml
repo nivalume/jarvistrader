@@ -18,3 +18,20 @@ repos:
         language: system
         files: '(^|/)CMakeLists\.txt$|\.cmake$'
         pass_filenames: false
+      - id: check-layering
+        name: kernel and shell layering
+        entry: python3 tools/check-layering.py
+        language: system
+        files: '^(jarvis|examples|python/src)/'
+        pass_filenames: false
+      - id: generated-files
+        name: files generated from specs/tla/MAP.toml are current
+        entry: python3 tools/tla/select_specs.py --check
+        language: system
+        files: '^(specs/tla/MAP\.toml|tools/core-paths\.txt|\.github/labeler\.yml|tools/tla/.*\.py)$'
+        pass_filenames: false
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: '^\.github/workflows/.*\.ya?ml$'

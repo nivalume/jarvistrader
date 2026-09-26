@@ -1,0 +1,65 @@
+name: Nightly
+
+# Long-running checks (docs/architecture.md section 17.6). Soak runs and backward trace
+# validation of soak logs join this workflow when the sandbox environment exists (plan.md M4, M5).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18 libclang-rt-18-dev
+      - name: ThreadSanitizer build and tests
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake --preset tsan -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          cmake --build --preset tsan
+          ctest --preset tsan
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18 libclang-rt-18-dev
+      - name: Build fuzz targets
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake --preset fuzz -DCMAKE_CXX_COMPILER=clang++-18
+          cmake --build --preset fuzz
+      - name: Fuzz each target for 10 minutes
+        run: |
+          for exe in build/fuzz/tests/fuzz/fuzz_*; do
+            target="$(basename "$exe")"
+            target="${target#fuzz_}"
+            mkdir -p "build/fuzz/corpus-scratch/$target"
+            "$exe" -max_total_time=600 "build/fuzz/corpus-scratch/$target" "tests/fuzz/corpus/$target"
+          done
+
+  formal-full:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Run every spec
+        run: python3 tools/tla/run_tlc.py --all

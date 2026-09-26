@@ -20,7 +20,7 @@
 - [ ] task: tools — `tools/bench_compare.py`：中位数比较、逐项阈值与 `abs_floor_ns`、三轮 A/B 中两轮复现才判定回归
 - [ ] task: ci — `bench-compare` job：`git worktree` 同时构建 merge-base 与 head，在同一 runner 上绑核交替运行
 - [ ] task: specs — `specs/tla/` 骨架、钉定 `tla2tools.jar` 的 SHA-256、一个 20 行的占位规约
-- [ ] task: tools — `specs/tla/MAP.toml`、`tools/tla/select.py`、由两者生成 `tools/core-paths.txt`（§17.4、§17.5）
+- [ ] task: tools — `specs/tla/MAP.toml`、`tools/tla/select_specs.py`、由两者生成 `tools/core-paths.txt`（§17.4、§17.5）
 - [ ] task: ci — `formal` job（仅当改动触及核心路径时运行）与 PR 的 `core` 标签自动标注
 - [ ] task: ci — 作业图改为 lint → functional → {determinism, bench-compare, formal} → gate，新增 nightly 工作流（§17.6）
 - [ ] task: justfile — `just check` 与 §17.7 的全部配方；对应功能落地前，配方明确打印"跳过：尚未实现"，不伪装为通过

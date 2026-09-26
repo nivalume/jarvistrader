@@ -1,0 +1,19 @@
+name: Labeler
+
+# Adds the `core` label to pull requests that touch core paths (tools/core-paths.txt).
+# The label rules in .github/labeler.yml are generated from specs/tla/MAP.toml.
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          sync-labels: true

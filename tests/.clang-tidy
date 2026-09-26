@@ -1,0 +1,5 @@
+# Test code inherits the repository checks. doctest assertion macros expand into branches,
+# so cognitive complexity is not meaningful for test cases.
+InheritParentConfig: true
+Checks: >
+  -readability-function-cognitive-complexity

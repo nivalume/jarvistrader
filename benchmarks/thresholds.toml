@@ -1,0 +1,22 @@
+# Regression thresholds for tools/bench_compare.py (docs/architecture.md section 17.3).
+#
+# A benchmark regresses when its median time grows by more than max_regression_pct and the
+# absolute change exceeds abs_floor_ns. A gating regression fails the change only if it
+# reproduces in at least `min_reproductions` of the A/B rounds.
+#
+# Resolution order: [benchmarks."<name>"] overrides [groups.<group>] overrides [defaults].
+# The group is the executable name without the "bench_" prefix.
+
+[defaults]
+max_regression_pct = 10.0
+abs_floor_ns = 1.0
+gating = true
+min_reproductions = 2
+
+[groups.hot]
+gating = true
+
+[groups.report]
+gating = false
+
+# Core-path thresholds tighten to 3% once the self-hosted benchmark runner exists (decision D21).

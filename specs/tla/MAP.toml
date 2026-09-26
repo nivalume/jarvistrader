@@ -1,0 +1,35 @@
+# Spec-to-source map (docs/architecture.md sections 17.4 and 17.5).
+#
+# tools/tla/select_specs.py reads this file to decide which specs a change affects, and generates
+# tools/core-paths.txt and .github/labeler.yml from it. Run `python3 tools/tla/select_specs.py --emit`
+# after editing; the lint job fails when the generated files are stale.
+#
+# [specs.<Name>] keys:
+#   paths       globs of the source files the spec models (** matches any depth)
+#   forward     TLC behaviours are replayed through Engine.step (from M3)
+#   backward    recorded event logs are checked against the spec (from M3)
+#   budget_min  wall-clock budget for one TLC run
+#   tlc_args    extra TLC command-line arguments
+
+[specs.SeqOrder]
+paths = ["jarvis/core/event_key.hpp", "jarvis/core/priority_queue.hpp"]
+forward = false
+backward = false
+budget_min = 2
+tlc_args = ["-deadlock"]
+
+[global]
+# Touching any of these runs every spec.
+always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"]
+
+[core]
+# Core paths are the union of all spec paths and these globs.
+extra = [
+  "jarvis/core/**",
+  "jarvis/engine/**",
+  "jarvis/execution/**",
+  "jarvis/risk/**",
+  "jarvis/backtest/matching/**",
+  "jarvis/data/book/**",
+  "specs/**",
+]
