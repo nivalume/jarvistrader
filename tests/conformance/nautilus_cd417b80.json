@@ -1,0 +1,2395 @@
+{
+ "source": {
+  "repository": "nautechsystems/nautilus_trader",
+  "commit": "cd417b801942c9753f70024be11f078d940ccf99"
+ },
+ "enums": {
+  "AccountType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Cash",
+     "value": 1,
+     "string": "CASH",
+     "aliases": []
+    },
+    {
+     "name": "Margin",
+     "value": 2,
+     "string": "MARGIN",
+     "aliases": []
+    },
+    {
+     "name": "Betting",
+     "value": 3,
+     "string": "BETTING",
+     "aliases": []
+    },
+    {
+     "name": "Wallet",
+     "value": 4,
+     "string": "WALLET",
+     "aliases": []
+    }
+   ]
+  },
+  "AggregationSource": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "External",
+     "value": 1,
+     "string": "EXTERNAL",
+     "aliases": []
+    },
+    {
+     "name": "Internal",
+     "value": 2,
+     "string": "INTERNAL",
+     "aliases": []
+    }
+   ]
+  },
+  "AggressorSide": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "NoAggressor",
+     "value": 0,
+     "string": "NO_AGGRESSOR",
+     "aliases": []
+    },
+    {
+     "name": "Buy",
+     "value": 1,
+     "string": "BUY",
+     "aliases": [
+      "BUYER"
+     ]
+    },
+    {
+     "name": "Sell",
+     "value": 2,
+     "string": "SELL",
+     "aliases": [
+      "SELLER"
+     ]
+    }
+   ]
+  },
+  "AssetClass": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "FX",
+     "value": 1,
+     "string": "FX",
+     "aliases": []
+    },
+    {
+     "name": "Equity",
+     "value": 2,
+     "string": "EQUITY",
+     "aliases": []
+    },
+    {
+     "name": "Commodity",
+     "value": 3,
+     "string": "COMMODITY",
+     "aliases": []
+    },
+    {
+     "name": "Debt",
+     "value": 4,
+     "string": "DEBT",
+     "aliases": []
+    },
+    {
+     "name": "Index",
+     "value": 5,
+     "string": "INDEX",
+     "aliases": []
+    },
+    {
+     "name": "Cryptocurrency",
+     "value": 6,
+     "string": "CRYPTOCURRENCY",
+     "aliases": []
+    },
+    {
+     "name": "Alternative",
+     "value": 7,
+     "string": "ALTERNATIVE",
+     "aliases": []
+    }
+   ]
+  },
+  "BarAggregation": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Tick",
+     "value": 1,
+     "string": "TICK",
+     "aliases": []
+    },
+    {
+     "name": "TickImbalance",
+     "value": 2,
+     "string": "TICK_IMBALANCE",
+     "aliases": []
+    },
+    {
+     "name": "TickRuns",
+     "value": 3,
+     "string": "TICK_RUNS",
+     "aliases": []
+    },
+    {
+     "name": "Volume",
+     "value": 4,
+     "string": "VOLUME",
+     "aliases": []
+    },
+    {
+     "name": "VolumeImbalance",
+     "value": 5,
+     "string": "VOLUME_IMBALANCE",
+     "aliases": []
+    },
+    {
+     "name": "VolumeRuns",
+     "value": 6,
+     "string": "VOLUME_RUNS",
+     "aliases": []
+    },
+    {
+     "name": "Value",
+     "value": 7,
+     "string": "VALUE",
+     "aliases": []
+    },
+    {
+     "name": "ValueImbalance",
+     "value": 8,
+     "string": "VALUE_IMBALANCE",
+     "aliases": []
+    },
+    {
+     "name": "ValueRuns",
+     "value": 9,
+     "string": "VALUE_RUNS",
+     "aliases": []
+    },
+    {
+     "name": "Millisecond",
+     "value": 10,
+     "string": "MILLISECOND",
+     "aliases": []
+    },
+    {
+     "name": "Second",
+     "value": 11,
+     "string": "SECOND",
+     "aliases": []
+    },
+    {
+     "name": "Minute",
+     "value": 12,
+     "string": "MINUTE",
+     "aliases": []
+    },
+    {
+     "name": "Hour",
+     "value": 13,
+     "string": "HOUR",
+     "aliases": []
+    },
+    {
+     "name": "Day",
+     "value": 14,
+     "string": "DAY",
+     "aliases": []
+    },
+    {
+     "name": "Week",
+     "value": 15,
+     "string": "WEEK",
+     "aliases": []
+    },
+    {
+     "name": "Month",
+     "value": 16,
+     "string": "MONTH",
+     "aliases": []
+    },
+    {
+     "name": "Year",
+     "value": 17,
+     "string": "YEAR",
+     "aliases": []
+    },
+    {
+     "name": "Renko",
+     "value": 18,
+     "string": "RENKO",
+     "aliases": []
+    }
+   ]
+  },
+  "BarIntervalType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "LeftOpen",
+     "value": 1,
+     "string": "LEFT_OPEN",
+     "aliases": []
+    },
+    {
+     "name": "RightOpen",
+     "value": 2,
+     "string": "RIGHT_OPEN",
+     "aliases": []
+    }
+   ]
+  },
+  "BetSide": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Back",
+     "value": 1,
+     "string": "BACK",
+     "aliases": []
+    },
+    {
+     "name": "Lay",
+     "value": 2,
+     "string": "LAY",
+     "aliases": []
+    }
+   ]
+  },
+  "BookAction": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Add",
+     "value": 1,
+     "string": "ADD",
+     "aliases": []
+    },
+    {
+     "name": "Update",
+     "value": 2,
+     "string": "UPDATE",
+     "aliases": []
+    },
+    {
+     "name": "Delete",
+     "value": 3,
+     "string": "DELETE",
+     "aliases": []
+    },
+    {
+     "name": "Clear",
+     "value": 4,
+     "string": "CLEAR",
+     "aliases": []
+    }
+   ]
+  },
+  "BookType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "L1_MBP",
+     "value": 1,
+     "string": "L1_MBP",
+     "aliases": []
+    },
+    {
+     "name": "L2_MBP",
+     "value": 2,
+     "string": "L2_MBP",
+     "aliases": []
+    },
+    {
+     "name": "L3_MBO",
+     "value": 3,
+     "string": "L3_MBO",
+     "aliases": []
+    }
+   ]
+  },
+  "ContingencyType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Oco",
+     "value": 1,
+     "string": "OCO",
+     "aliases": []
+    },
+    {
+     "name": "Oto",
+     "value": 2,
+     "string": "OTO",
+     "aliases": []
+    },
+    {
+     "name": "Ouo",
+     "value": 3,
+     "string": "OUO",
+     "aliases": []
+    }
+   ]
+  },
+  "ContinuousFutureAdjustmentType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "BackwardSpread",
+     "value": 1,
+     "string": "BACKWARD_SPREAD",
+     "aliases": []
+    },
+    {
+     "name": "ForwardSpread",
+     "value": 2,
+     "string": "FORWARD_SPREAD",
+     "aliases": []
+    },
+    {
+     "name": "BackwardRatio",
+     "value": 3,
+     "string": "BACKWARD_RATIO",
+     "aliases": []
+    },
+    {
+     "name": "ForwardRatio",
+     "value": 4,
+     "string": "FORWARD_RATIO",
+     "aliases": []
+    }
+   ]
+  },
+  "CurrencyType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Crypto",
+     "value": 1,
+     "string": "CRYPTO",
+     "aliases": []
+    },
+    {
+     "name": "Fiat",
+     "value": 2,
+     "string": "FIAT",
+     "aliases": []
+    },
+    {
+     "name": "CommodityBacked",
+     "value": 3,
+     "string": "COMMODITY_BACKED",
+     "aliases": []
+    }
+   ]
+  },
+  "InstrumentClass": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Spot",
+     "value": 1,
+     "string": "SPOT",
+     "aliases": []
+    },
+    {
+     "name": "Swap",
+     "value": 2,
+     "string": "SWAP",
+     "aliases": []
+    },
+    {
+     "name": "Future",
+     "value": 3,
+     "string": "FUTURE",
+     "aliases": []
+    },
+    {
+     "name": "FuturesSpread",
+     "value": 4,
+     "string": "FUTURES_SPREAD",
+     "aliases": []
+    },
+    {
+     "name": "Forward",
+     "value": 5,
+     "string": "FORWARD",
+     "aliases": []
+    },
+    {
+     "name": "Cfd",
+     "value": 6,
+     "string": "CFD",
+     "aliases": []
+    },
+    {
+     "name": "Bond",
+     "value": 7,
+     "string": "BOND",
+     "aliases": []
+    },
+    {
+     "name": "Option",
+     "value": 8,
+     "string": "OPTION",
+     "aliases": []
+    },
+    {
+     "name": "OptionSpread",
+     "value": 9,
+     "string": "OPTION_SPREAD",
+     "aliases": []
+    },
+    {
+     "name": "Warrant",
+     "value": 10,
+     "string": "WARRANT",
+     "aliases": []
+    },
+    {
+     "name": "SportsBetting",
+     "value": 11,
+     "string": "SPORTS_BETTING",
+     "aliases": []
+    },
+    {
+     "name": "BinaryOption",
+     "value": 12,
+     "string": "BINARY_OPTION",
+     "aliases": []
+    }
+   ]
+  },
+  "InstrumentCloseType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "EndOfSession",
+     "value": 1,
+     "string": "END_OF_SESSION",
+     "aliases": []
+    },
+    {
+     "name": "ContractExpired",
+     "value": 2,
+     "string": "CONTRACT_EXPIRED",
+     "aliases": []
+    }
+   ]
+  },
+  "LiquiditySide": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "NoLiquiditySide",
+     "value": 0,
+     "string": "NO_LIQUIDITY_SIDE",
+     "aliases": []
+    },
+    {
+     "name": "Maker",
+     "value": 1,
+     "string": "MAKER",
+     "aliases": []
+    },
+    {
+     "name": "Taker",
+     "value": 2,
+     "string": "TAKER",
+     "aliases": []
+    }
+   ]
+  },
+  "MarketStatus": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Open",
+     "value": 1,
+     "string": "OPEN",
+     "aliases": []
+    },
+    {
+     "name": "Closed",
+     "value": 2,
+     "string": "CLOSED",
+     "aliases": []
+    },
+    {
+     "name": "Paused",
+     "value": 3,
+     "string": "PAUSED",
+     "aliases": []
+    },
+    {
+     "name": "Halted",
+     "value": 4,
+     "string": "HALTED",
+     "aliases": []
+    },
+    {
+     "name": "Suspended",
+     "value": 5,
+     "string": "SUSPENDED",
+     "aliases": []
+    },
+    {
+     "name": "NotAvailable",
+     "value": 6,
+     "string": "NOT_AVAILABLE",
+     "aliases": []
+    }
+   ]
+  },
+  "MarketStatusAction": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "None",
+     "value": 0,
+     "string": "NONE",
+     "aliases": []
+    },
+    {
+     "name": "PreOpen",
+     "value": 1,
+     "string": "PRE_OPEN",
+     "aliases": []
+    },
+    {
+     "name": "PreCross",
+     "value": 2,
+     "string": "PRE_CROSS",
+     "aliases": []
+    },
+    {
+     "name": "Quoting",
+     "value": 3,
+     "string": "QUOTING",
+     "aliases": []
+    },
+    {
+     "name": "Cross",
+     "value": 4,
+     "string": "CROSS",
+     "aliases": []
+    },
+    {
+     "name": "Rotation",
+     "value": 5,
+     "string": "ROTATION",
+     "aliases": []
+    },
+    {
+     "name": "NewPriceIndication",
+     "value": 6,
+     "string": "NEW_PRICE_INDICATION",
+     "aliases": []
+    },
+    {
+     "name": "Trading",
+     "value": 7,
+     "string": "TRADING",
+     "aliases": []
+    },
+    {
+     "name": "Halt",
+     "value": 8,
+     "string": "HALT",
+     "aliases": []
+    },
+    {
+     "name": "Pause",
+     "value": 9,
+     "string": "PAUSE",
+     "aliases": []
+    },
+    {
+     "name": "Suspend",
+     "value": 10,
+     "string": "SUSPEND",
+     "aliases": []
+    },
+    {
+     "name": "PreClose",
+     "value": 11,
+     "string": "PRE_CLOSE",
+     "aliases": []
+    },
+    {
+     "name": "Close",
+     "value": 12,
+     "string": "CLOSE",
+     "aliases": []
+    },
+    {
+     "name": "PostClose",
+     "value": 13,
+     "string": "POST_CLOSE",
+     "aliases": []
+    },
+    {
+     "name": "ShortSellRestrictionChange",
+     "value": 14,
+     "string": "SHORT_SELL_RESTRICTION_CHANGE",
+     "aliases": []
+    },
+    {
+     "name": "NotAvailableForTrading",
+     "value": 15,
+     "string": "NOT_AVAILABLE_FOR_TRADING",
+     "aliases": []
+    }
+   ]
+  },
+  "OmsType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Unspecified",
+     "value": 0,
+     "string": "UNSPECIFIED",
+     "aliases": []
+    },
+    {
+     "name": "Netting",
+     "value": 1,
+     "string": "NETTING",
+     "aliases": []
+    },
+    {
+     "name": "Hedging",
+     "value": 2,
+     "string": "HEDGING",
+     "aliases": []
+    }
+   ]
+  },
+  "OptionKind": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Call",
+     "value": 1,
+     "string": "CALL",
+     "aliases": []
+    },
+    {
+     "name": "Put",
+     "value": 2,
+     "string": "PUT",
+     "aliases": []
+    }
+   ]
+  },
+  "GreeksConvention": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "BlackScholes",
+     "value": 1,
+     "string": "BLACK_SCHOLES",
+     "aliases": []
+    },
+    {
+     "name": "PriceAdjusted",
+     "value": 2,
+     "string": "PRICE_ADJUSTED",
+     "aliases": []
+    }
+   ]
+  },
+  "OtoTriggerMode": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Partial",
+     "value": 0,
+     "string": "PARTIAL",
+     "aliases": []
+    },
+    {
+     "name": "Full",
+     "value": 1,
+     "string": "FULL",
+     "aliases": []
+    }
+   ]
+  },
+  "OrderSide": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Buy",
+     "value": 1,
+     "string": "BUY",
+     "aliases": []
+    },
+    {
+     "name": "Sell",
+     "value": 2,
+     "string": "SELL",
+     "aliases": []
+    }
+   ]
+  },
+  "OrderStatus": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Initialized",
+     "value": 1,
+     "string": "INITIALIZED",
+     "aliases": []
+    },
+    {
+     "name": "Denied",
+     "value": 2,
+     "string": "DENIED",
+     "aliases": []
+    },
+    {
+     "name": "Emulated",
+     "value": 3,
+     "string": "EMULATED",
+     "aliases": []
+    },
+    {
+     "name": "Released",
+     "value": 4,
+     "string": "RELEASED",
+     "aliases": []
+    },
+    {
+     "name": "Submitted",
+     "value": 5,
+     "string": "SUBMITTED",
+     "aliases": []
+    },
+    {
+     "name": "Accepted",
+     "value": 6,
+     "string": "ACCEPTED",
+     "aliases": []
+    },
+    {
+     "name": "Rejected",
+     "value": 7,
+     "string": "REJECTED",
+     "aliases": []
+    },
+    {
+     "name": "Canceled",
+     "value": 8,
+     "string": "CANCELED",
+     "aliases": []
+    },
+    {
+     "name": "Expired",
+     "value": 9,
+     "string": "EXPIRED",
+     "aliases": []
+    },
+    {
+     "name": "Triggered",
+     "value": 10,
+     "string": "TRIGGERED",
+     "aliases": []
+    },
+    {
+     "name": "PendingUpdate",
+     "value": 11,
+     "string": "PENDING_UPDATE",
+     "aliases": []
+    },
+    {
+     "name": "PendingCancel",
+     "value": 12,
+     "string": "PENDING_CANCEL",
+     "aliases": []
+    },
+    {
+     "name": "PartiallyFilled",
+     "value": 13,
+     "string": "PARTIALLY_FILLED",
+     "aliases": []
+    },
+    {
+     "name": "Filled",
+     "value": 14,
+     "string": "FILLED",
+     "aliases": []
+    },
+    {
+     "name": "Voided",
+     "value": 15,
+     "string": "VOIDED",
+     "aliases": []
+    }
+   ]
+  },
+  "OrderType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Market",
+     "value": 1,
+     "string": "MARKET",
+     "aliases": []
+    },
+    {
+     "name": "Limit",
+     "value": 2,
+     "string": "LIMIT",
+     "aliases": []
+    },
+    {
+     "name": "StopMarket",
+     "value": 3,
+     "string": "STOP_MARKET",
+     "aliases": []
+    },
+    {
+     "name": "StopLimit",
+     "value": 4,
+     "string": "STOP_LIMIT",
+     "aliases": []
+    },
+    {
+     "name": "MarketToLimit",
+     "value": 5,
+     "string": "MARKET_TO_LIMIT",
+     "aliases": []
+    },
+    {
+     "name": "MarketIfTouched",
+     "value": 6,
+     "string": "MARKET_IF_TOUCHED",
+     "aliases": []
+    },
+    {
+     "name": "LimitIfTouched",
+     "value": 7,
+     "string": "LIMIT_IF_TOUCHED",
+     "aliases": []
+    },
+    {
+     "name": "TrailingStopMarket",
+     "value": 8,
+     "string": "TRAILING_STOP_MARKET",
+     "aliases": []
+    },
+    {
+     "name": "TrailingStopLimit",
+     "value": 9,
+     "string": "TRAILING_STOP_LIMIT",
+     "aliases": []
+    }
+   ]
+  },
+  "PositionAdjustmentType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Commission",
+     "value": 1,
+     "string": "COMMISSION",
+     "aliases": []
+    },
+    {
+     "name": "Funding",
+     "value": 2,
+     "string": "FUNDING",
+     "aliases": []
+    }
+   ]
+  },
+  "PositionSide": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Flat",
+     "value": 1,
+     "string": "FLAT",
+     "aliases": []
+    },
+    {
+     "name": "Long",
+     "value": 2,
+     "string": "LONG",
+     "aliases": []
+    },
+    {
+     "name": "Short",
+     "value": 3,
+     "string": "SHORT",
+     "aliases": []
+    }
+   ]
+  },
+  "PriceType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Bid",
+     "value": 1,
+     "string": "BID",
+     "aliases": []
+    },
+    {
+     "name": "Ask",
+     "value": 2,
+     "string": "ASK",
+     "aliases": []
+    },
+    {
+     "name": "Mid",
+     "value": 3,
+     "string": "MID",
+     "aliases": []
+    },
+    {
+     "name": "Last",
+     "value": 4,
+     "string": "LAST",
+     "aliases": []
+    },
+    {
+     "name": "Mark",
+     "value": 5,
+     "string": "MARK",
+     "aliases": []
+    }
+   ]
+  },
+  "RecordFlag": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "F_LAST",
+     "value": 128,
+     "string": "F_LAST",
+     "aliases": []
+    },
+    {
+     "name": "F_TOB",
+     "value": 64,
+     "string": "F_TOB",
+     "aliases": []
+    },
+    {
+     "name": "F_SNAPSHOT",
+     "value": 32,
+     "string": "F_SNAPSHOT",
+     "aliases": []
+    },
+    {
+     "name": "F_MBP",
+     "value": 16,
+     "string": "F_MBP",
+     "aliases": []
+    },
+    {
+     "name": "RESERVED_2",
+     "value": 8,
+     "string": "RESERVED_2",
+     "aliases": []
+    },
+    {
+     "name": "RESERVED_1",
+     "value": 4,
+     "string": "RESERVED_1",
+     "aliases": []
+    }
+   ]
+  },
+  "TimeInForce": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Gtc",
+     "value": 1,
+     "string": "GTC",
+     "aliases": []
+    },
+    {
+     "name": "Ioc",
+     "value": 2,
+     "string": "IOC",
+     "aliases": []
+    },
+    {
+     "name": "Fok",
+     "value": 3,
+     "string": "FOK",
+     "aliases": []
+    },
+    {
+     "name": "Gtd",
+     "value": 4,
+     "string": "GTD",
+     "aliases": []
+    },
+    {
+     "name": "Day",
+     "value": 5,
+     "string": "DAY",
+     "aliases": []
+    },
+    {
+     "name": "AtTheOpen",
+     "value": 6,
+     "string": "AT_THE_OPEN",
+     "aliases": []
+    },
+    {
+     "name": "AtTheClose",
+     "value": 7,
+     "string": "AT_THE_CLOSE",
+     "aliases": []
+    }
+   ]
+  },
+  "TradingState": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Active",
+     "value": 1,
+     "string": "ACTIVE",
+     "aliases": []
+    },
+    {
+     "name": "Reducing",
+     "value": 2,
+     "string": "REDUCING",
+     "aliases": []
+    },
+    {
+     "name": "Halted",
+     "value": 3,
+     "string": "HALTED",
+     "aliases": []
+    }
+   ]
+  },
+  "TrailingOffsetType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Price",
+     "value": 1,
+     "string": "PRICE",
+     "aliases": []
+    },
+    {
+     "name": "BasisPoints",
+     "value": 2,
+     "string": "BASIS_POINTS",
+     "aliases": []
+    },
+    {
+     "name": "Ticks",
+     "value": 3,
+     "string": "TICKS",
+     "aliases": []
+    },
+    {
+     "name": "PriceTier",
+     "value": 4,
+     "string": "PRICE_TIER",
+     "aliases": []
+    }
+   ]
+  },
+  "TriggerType": {
+   "case_insensitive": true,
+   "variants": [
+    {
+     "name": "Default",
+     "value": 1,
+     "string": "DEFAULT",
+     "aliases": []
+    },
+    {
+     "name": "LastPrice",
+     "value": 2,
+     "string": "LAST_PRICE",
+     "aliases": []
+    },
+    {
+     "name": "MarkPrice",
+     "value": 3,
+     "string": "MARK_PRICE",
+     "aliases": []
+    },
+    {
+     "name": "IndexPrice",
+     "value": 4,
+     "string": "INDEX_PRICE",
+     "aliases": []
+    },
+    {
+     "name": "BidAsk",
+     "value": 5,
+     "string": "BID_ASK",
+     "aliases": []
+    },
+    {
+     "name": "DoubleLast",
+     "value": 6,
+     "string": "DOUBLE_LAST",
+     "aliases": []
+    },
+    {
+     "name": "DoubleBidAsk",
+     "value": 7,
+     "string": "DOUBLE_BID_ASK",
+     "aliases": []
+    },
+    {
+     "name": "LastOrBidAsk",
+     "value": 8,
+     "string": "LAST_OR_BID_ASK",
+     "aliases": []
+    },
+    {
+     "name": "MidPoint",
+     "value": 9,
+     "string": "MID_POINT",
+     "aliases": []
+    }
+   ]
+  }
+ },
+ "legacy_none_tokens": {
+  "OrderSide": "NO_ORDER_SIDE",
+  "PositionSide": "NO_POSITION_SIDE",
+  "ContingencyType": "NO_CONTINGENCY",
+  "TrailingOffsetType": "NO_TRAILING_OFFSET",
+  "TriggerType": "NO_TRIGGER"
+ },
+ "constants": {
+  "FIXED_PRECISION": 9.0,
+  "PRICE_MAX": 9223372036.0,
+  "PRICE_MIN": -9223372036.0,
+  "QUANTITY_MAX": 18446744073.0,
+  "QUANTITY_MIN": 0.0,
+  "MONEY_MAX": 9223372036.0,
+  "MONEY_MIN": -9223372036.0
+ },
+ "structs": {
+  "QuoteTick": [
+   "instrument_id",
+   "bid_price",
+   "ask_price",
+   "bid_size",
+   "ask_size",
+   "ts_event",
+   "ts_init"
+  ],
+  "TradeTick": [
+   "instrument_id",
+   "price",
+   "size",
+   "aggressor_side",
+   "trade_id",
+   "ts_event",
+   "ts_init"
+  ],
+  "Bar": [
+   "bar_type",
+   "open",
+   "high",
+   "low",
+   "close",
+   "volume",
+   "ts_event",
+   "ts_init"
+  ],
+  "BarSpecification": [
+   "step",
+   "aggregation",
+   "price_type"
+  ],
+  "BookOrder": [
+   "side",
+   "price",
+   "size",
+   "order_id"
+  ],
+  "OrderBookDelta": [
+   "instrument_id",
+   "action",
+   "order",
+   "flags",
+   "sequence",
+   "ts_event",
+   "ts_init"
+  ],
+  "OrderBookDeltas": [
+   "instrument_id",
+   "deltas",
+   "flags",
+   "sequence",
+   "ts_event",
+   "ts_init"
+  ],
+  "InstrumentStatus": [
+   "instrument_id",
+   "action",
+   "ts_event",
+   "ts_init",
+   "reason",
+   "trading_event",
+   "is_trading",
+   "is_quoting",
+   "is_short_sell_restricted"
+  ],
+  "MarkPriceUpdate": [
+   "instrument_id",
+   "value",
+   "ts_event",
+   "ts_init"
+  ],
+  "IndexPriceUpdate": [
+   "instrument_id",
+   "value",
+   "ts_event",
+   "ts_init"
+  ],
+  "FundingRateUpdate": [
+   "instrument_id",
+   "rate",
+   "interval",
+   "next_funding_ns",
+   "ts_event",
+   "ts_init"
+  ],
+  "InstrumentClose": [
+   "instrument_id",
+   "close_price",
+   "close_type",
+   "ts_event",
+   "ts_init"
+  ],
+  "CurrencyPair": [
+   "id",
+   "raw_symbol",
+   "base_currency",
+   "quote_currency",
+   "price_precision",
+   "size_precision",
+   "price_increment",
+   "size_increment",
+   "multiplier",
+   "lot_size",
+   "margin_init",
+   "margin_maint",
+   "max_quantity",
+   "min_quantity",
+   "max_notional",
+   "min_notional",
+   "max_price",
+   "min_price",
+   "tick_scheme",
+   "info",
+   "ts_event",
+   "ts_init"
+  ],
+  "CryptoPerpetual": [
+   "id",
+   "raw_symbol",
+   "base_currency",
+   "quote_currency",
+   "settlement_currency",
+   "is_inverse",
+   "price_precision",
+   "size_precision",
+   "price_increment",
+   "size_increment",
+   "multiplier",
+   "lot_size",
+   "margin_init",
+   "margin_maint",
+   "max_quantity",
+   "min_quantity",
+   "max_notional",
+   "min_notional",
+   "max_price",
+   "min_price",
+   "tick_scheme",
+   "info",
+   "ts_event",
+   "ts_init"
+  ],
+  "CryptoFuture": [
+   "id",
+   "raw_symbol",
+   "underlying",
+   "quote_currency",
+   "settlement_currency",
+   "is_inverse",
+   "activation_ns",
+   "expiration_ns",
+   "price_precision",
+   "size_precision",
+   "price_increment",
+   "size_increment",
+   "multiplier",
+   "lot_size",
+   "margin_init",
+   "margin_maint",
+   "max_quantity",
+   "min_quantity",
+   "max_notional",
+   "min_notional",
+   "max_price",
+   "min_price",
+   "tick_scheme",
+   "info",
+   "ts_event",
+   "ts_init"
+  ],
+  "Currency": [
+   "code",
+   "precision",
+   "iso4217",
+   "name",
+   "currency_type"
+  ],
+  "AccountBalance": [
+   "currency",
+   "total",
+   "locked",
+   "free"
+  ],
+  "MarginBalance": [
+   "initial",
+   "maintenance",
+   "currency",
+   "instrument_id"
+  ],
+  "AccountState": [
+   "account_id",
+   "account_type",
+   "base_currency",
+   "balances",
+   "margins",
+   "is_reported",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "info"
+  ],
+  "OrderInitialized": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "order_side",
+   "order_type",
+   "quantity",
+   "time_in_force",
+   "post_only",
+   "reduce_only",
+   "quote_quantity",
+   "reconciliation",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "price",
+   "activation_price",
+   "trigger_price",
+   "trigger_type",
+   "limit_offset",
+   "trailing_offset",
+   "trailing_offset_type",
+   "expire_time",
+   "display_qty",
+   "emulation_trigger",
+   "trigger_instrument_id",
+   "contingency_type",
+   "order_list_id",
+   "linked_order_ids",
+   "parent_order_id",
+   "exec_algorithm_id",
+   "exec_algorithm_params",
+   "exec_spawn_id",
+   "tags",
+   "causation_id"
+  ],
+  "OrderDenied": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "reason",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "causation_id"
+  ],
+  "OrderEmulated": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "causation_id"
+  ],
+  "OrderReleased": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "released_price",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "causation_id"
+  ],
+  "OrderSubmitted": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "account_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "causation_id"
+  ],
+  "OrderAccepted": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "venue_order_id",
+   "account_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "causation_id"
+  ],
+  "OrderRejected": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "account_id",
+   "reason",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "due_post_only",
+   "causation_id"
+  ],
+  "OrderCanceled": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "account_id",
+   "reason",
+   "causation_id"
+  ],
+  "OrderExpired": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "account_id",
+   "causation_id"
+  ],
+  "OrderTriggered": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "account_id",
+   "causation_id"
+  ],
+  "OrderPendingUpdate": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "account_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "causation_id"
+  ],
+  "OrderPendingCancel": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "account_id",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "causation_id"
+  ],
+  "OrderModifyRejected": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "reason",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "account_id",
+   "causation_id"
+  ],
+  "OrderCancelRejected": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "reason",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "venue_order_id",
+   "account_id",
+   "causation_id"
+  ],
+  "OrderUpdated": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "venue_order_id",
+   "account_id",
+   "quantity",
+   "price",
+   "trigger_price",
+   "protection_price",
+   "is_quote_quantity",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "causation_id"
+  ],
+  "OrderFilled": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "venue_order_id",
+   "account_id",
+   "trade_id",
+   "order_side",
+   "order_type",
+   "last_qty",
+   "last_px",
+   "currency",
+   "liquidity_side",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "position_id",
+   "commission",
+   "info",
+   "causation_id"
+  ],
+  "OrderFillVoided": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "client_order_id",
+   "venue_order_id",
+   "account_id",
+   "correction_id",
+   "trade_id",
+   "voided_qty",
+   "commission_voided",
+   "order_side",
+   "order_type",
+   "last_px",
+   "currency",
+   "liquidity_side",
+   "position_id",
+   "reason",
+   "info",
+   "event_id",
+   "ts_event",
+   "ts_init",
+   "reconciliation",
+   "is_reopened",
+   "causation_id"
+  ],
+  "PositionOpened": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "position_id",
+   "account_id",
+   "opening_order_id",
+   "entry",
+   "side",
+   "signed_qty",
+   "quantity",
+   "last_qty",
+   "last_px",
+   "currency",
+   "avg_px_open",
+   "realized_pnl",
+   "event_id",
+   "ts_event",
+   "ts_init"
+  ],
+  "PositionChanged": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "position_id",
+   "account_id",
+   "opening_order_id",
+   "entry",
+   "side",
+   "signed_qty",
+   "quantity",
+   "peak_quantity",
+   "last_qty",
+   "last_px",
+   "currency",
+   "avg_px_open",
+   "avg_px_close",
+   "realized_return",
+   "realized_pnl",
+   "unrealized_pnl",
+   "event_id",
+   "ts_opened",
+   "ts_event",
+   "ts_init"
+  ],
+  "PositionClosed": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "position_id",
+   "account_id",
+   "opening_order_id",
+   "closing_order_id",
+   "entry",
+   "side",
+   "signed_qty",
+   "quantity",
+   "peak_quantity",
+   "last_qty",
+   "last_px",
+   "currency",
+   "avg_px_open",
+   "avg_px_close",
+   "realized_return",
+   "realized_pnl",
+   "unrealized_pnl",
+   "duration",
+   "event_id",
+   "ts_opened",
+   "ts_closed",
+   "ts_event",
+   "ts_init"
+  ],
+  "PositionAdjusted": [
+   "trader_id",
+   "strategy_id",
+   "instrument_id",
+   "position_id",
+   "account_id",
+   "adjustment_type",
+   "quantity_change",
+   "pnl_change",
+   "reason",
+   "event_id",
+   "ts_event",
+   "ts_init"
+  ]
+ },
+ "currencies": [
+  {
+   "code": "AUD",
+   "precision": 2,
+   "iso4217": 36,
+   "name": "Australian dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "BRL",
+   "precision": 2,
+   "iso4217": 986,
+   "name": "Brazilian real",
+   "type": "Fiat"
+  },
+  {
+   "code": "CAD",
+   "precision": 2,
+   "iso4217": 124,
+   "name": "Canadian dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "CHF",
+   "precision": 2,
+   "iso4217": 756,
+   "name": "Swiss franc",
+   "type": "Fiat"
+  },
+  {
+   "code": "CNY",
+   "precision": 2,
+   "iso4217": 156,
+   "name": "Chinese yuan",
+   "type": "Fiat"
+  },
+  {
+   "code": "CNH",
+   "precision": 2,
+   "iso4217": 0,
+   "name": "Chinese yuan (offshore)",
+   "type": "Fiat"
+  },
+  {
+   "code": "CZK",
+   "precision": 2,
+   "iso4217": 203,
+   "name": "Czech koruna",
+   "type": "Fiat"
+  },
+  {
+   "code": "DKK",
+   "precision": 2,
+   "iso4217": 208,
+   "name": "Danish krone",
+   "type": "Fiat"
+  },
+  {
+   "code": "EUR",
+   "precision": 2,
+   "iso4217": 978,
+   "name": "Euro",
+   "type": "Fiat"
+  },
+  {
+   "code": "GBP",
+   "precision": 2,
+   "iso4217": 826,
+   "name": "British Pound",
+   "type": "Fiat"
+  },
+  {
+   "code": "HKD",
+   "precision": 2,
+   "iso4217": 344,
+   "name": "Hong Kong dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "HUF",
+   "precision": 2,
+   "iso4217": 348,
+   "name": "Hungarian forint",
+   "type": "Fiat"
+  },
+  {
+   "code": "ILS",
+   "precision": 2,
+   "iso4217": 376,
+   "name": "Israeli new shekel",
+   "type": "Fiat"
+  },
+  {
+   "code": "INR",
+   "precision": 2,
+   "iso4217": 356,
+   "name": "Indian rupee",
+   "type": "Fiat"
+  },
+  {
+   "code": "JPY",
+   "precision": 0,
+   "iso4217": 392,
+   "name": "Japanese yen",
+   "type": "Fiat"
+  },
+  {
+   "code": "KRW",
+   "precision": 0,
+   "iso4217": 410,
+   "name": "South Korean won",
+   "type": "Fiat"
+  },
+  {
+   "code": "MXN",
+   "precision": 2,
+   "iso4217": 484,
+   "name": "Mexican peso",
+   "type": "Fiat"
+  },
+  {
+   "code": "NOK",
+   "precision": 2,
+   "iso4217": 578,
+   "name": "Norwegian krone",
+   "type": "Fiat"
+  },
+  {
+   "code": "NZD",
+   "precision": 2,
+   "iso4217": 554,
+   "name": "New Zealand dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "PLN",
+   "precision": 2,
+   "iso4217": 985,
+   "name": "Polish złoty",
+   "type": "Fiat"
+  },
+  {
+   "code": "RUB",
+   "precision": 2,
+   "iso4217": 643,
+   "name": "Russian ruble",
+   "type": "Fiat"
+  },
+  {
+   "code": "SAR",
+   "precision": 2,
+   "iso4217": 682,
+   "name": "Saudi riyal",
+   "type": "Fiat"
+  },
+  {
+   "code": "SEK",
+   "precision": 2,
+   "iso4217": 752,
+   "name": "Swedish krona",
+   "type": "Fiat"
+  },
+  {
+   "code": "SGD",
+   "precision": 2,
+   "iso4217": 702,
+   "name": "Singapore dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "THB",
+   "precision": 2,
+   "iso4217": 764,
+   "name": "Thai baht",
+   "type": "Fiat"
+  },
+  {
+   "code": "TRY",
+   "precision": 2,
+   "iso4217": 949,
+   "name": "Turkish lira",
+   "type": "Fiat"
+  },
+  {
+   "code": "TWD",
+   "precision": 2,
+   "iso4217": 901,
+   "name": "New Taiwan dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "USD",
+   "precision": 2,
+   "iso4217": 840,
+   "name": "United States dollar",
+   "type": "Fiat"
+  },
+  {
+   "code": "ZAR",
+   "precision": 2,
+   "iso4217": 710,
+   "name": "South African rand",
+   "type": "Fiat"
+  },
+  {
+   "code": "XAG",
+   "precision": 2,
+   "iso4217": 961,
+   "name": "Silver (one troy ounce)",
+   "type": "CommodityBacked"
+  },
+  {
+   "code": "XAU",
+   "precision": 2,
+   "iso4217": 959,
+   "name": "Gold (one troy ounce)",
+   "type": "CommodityBacked"
+  },
+  {
+   "code": "XPT",
+   "precision": 2,
+   "iso4217": 962,
+   "name": "Platinum (one troy ounce)",
+   "type": "CommodityBacked"
+  },
+  {
+   "code": "1INCH",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "1inch Network",
+   "type": "Crypto"
+  },
+  {
+   "code": "AAVE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Aave",
+   "type": "Crypto"
+  },
+  {
+   "code": "ACA",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Acala Token",
+   "type": "Crypto"
+  },
+  {
+   "code": "ADA",
+   "precision": 6,
+   "iso4217": 0,
+   "name": "Cardano",
+   "type": "Crypto"
+  },
+  {
+   "code": "APT",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Aptos",
+   "type": "Crypto"
+  },
+  {
+   "code": "ARB",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Arbitrum",
+   "type": "Crypto"
+  },
+  {
+   "code": "AVAX",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Avalanche",
+   "type": "Crypto"
+  },
+  {
+   "code": "BCH",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Bitcoin Cash",
+   "type": "Crypto"
+  },
+  {
+   "code": "BIO",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "BioPassport",
+   "type": "Crypto"
+  },
+  {
+   "code": "BTC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Bitcoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "BTTC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "BitTorrent",
+   "type": "Crypto"
+  },
+  {
+   "code": "BNB",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Binance Coin",
+   "type": "Crypto"
+  },
+  {
+   "code": "BRZ",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Brazilian Digital Token",
+   "type": "Crypto"
+  },
+  {
+   "code": "BSV",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Bitcoin SV",
+   "type": "Crypto"
+  },
+  {
+   "code": "BUSD",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Binance USD",
+   "type": "Crypto"
+  },
+  {
+   "code": "CAKE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "PancakeSwap",
+   "type": "Crypto"
+  },
+  {
+   "code": "CRV",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Curve DAO Token",
+   "type": "Crypto"
+  },
+  {
+   "code": "DASH",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Dash",
+   "type": "Crypto"
+  },
+  {
+   "code": "DOT",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Polkadot",
+   "type": "Crypto"
+  },
+  {
+   "code": "DOGE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Dogecoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "ENA",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Ethena",
+   "type": "Crypto"
+  },
+  {
+   "code": "EOS",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "EOS",
+   "type": "Crypto"
+  },
+  {
+   "code": "ETH",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Ethereum",
+   "type": "Crypto"
+  },
+  {
+   "code": "ETHW",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "EthereumPoW",
+   "type": "Crypto"
+  },
+  {
+   "code": "FDUSD",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "First Digital USD",
+   "type": "Crypto"
+  },
+  {
+   "code": "GWEI",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Gwei",
+   "type": "Crypto"
+  },
+  {
+   "code": "HYPE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Hyperliquid",
+   "type": "Crypto"
+  },
+  {
+   "code": "JOE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "JOE",
+   "type": "Crypto"
+  },
+  {
+   "code": "LINK",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Chainlink",
+   "type": "Crypto"
+  },
+  {
+   "code": "LTC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Litecoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "LUNA",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Terra",
+   "type": "Crypto"
+  },
+  {
+   "code": "MAMUSD",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "MAMUSD",
+   "type": "Crypto"
+  },
+  {
+   "code": "NBT",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "NanoByte Token",
+   "type": "Crypto"
+  },
+  {
+   "code": "POL",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Polygon",
+   "type": "Crypto"
+  },
+  {
+   "code": "PROVE",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Prove AI",
+   "type": "Crypto"
+  },
+  {
+   "code": "RLUSD",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Ripple USD",
+   "type": "Crypto"
+  },
+  {
+   "code": "SOL",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Solana",
+   "type": "Crypto"
+  },
+  {
+   "code": "SHIB",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Shiba Inu",
+   "type": "Crypto"
+  },
+  {
+   "code": "SUI",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Sui",
+   "type": "Crypto"
+  },
+  {
+   "code": "TON",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Toncoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "TRX",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "TRON",
+   "type": "Crypto"
+  },
+  {
+   "code": "TRYB",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "BiLira",
+   "type": "Crypto"
+  },
+  {
+   "code": "TUSD",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "TrueUSD",
+   "type": "Crypto"
+  },
+  {
+   "code": "UNI",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Uniswap",
+   "type": "Crypto"
+  },
+  {
+   "code": "VTC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Vertcoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "WBTC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Wrapped Bitcoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "WSB",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "WallStreetBets DApp",
+   "type": "Crypto"
+  },
+  {
+   "code": "XBT",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Bitcoin",
+   "type": "Crypto"
+  },
+  {
+   "code": "XEC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "eCash",
+   "type": "Crypto"
+  },
+  {
+   "code": "XLM",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Stellar Lumen",
+   "type": "Crypto"
+  },
+  {
+   "code": "XMR",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Monero",
+   "type": "Crypto"
+  },
+  {
+   "code": "USDT",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Tether",
+   "type": "Crypto"
+  },
+  {
+   "code": "XRP",
+   "precision": 6,
+   "iso4217": 0,
+   "name": "XRP",
+   "type": "Crypto"
+  },
+  {
+   "code": "XTZ",
+   "precision": 6,
+   "iso4217": 0,
+   "name": "Tezos",
+   "type": "Crypto"
+  },
+  {
+   "code": "USDC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "USD Coin",
+   "type": "Crypto"
+  },
+  {
+   "code": "USDC.e",
+   "precision": 6,
+   "iso4217": 0,
+   "name": "USD Coin (PoS)",
+   "type": "Crypto"
+  },
+  {
+   "code": "USDG",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Global Dollar",
+   "type": "Crypto"
+  },
+  {
+   "code": "USDP",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Pax Dollar",
+   "type": "Crypto"
+  },
+  {
+   "code": "ZEC",
+   "precision": 8,
+   "iso4217": 0,
+   "name": "Zcash",
+   "type": "Crypto"
+  }
+ ]
+}

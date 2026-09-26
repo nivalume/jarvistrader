@@ -47,6 +47,8 @@ function(jarvis_add_layer_test layer)
 endfunction()
 
 jarvis_add_layer_test(testkit SOURCES cpp/test_testkit.cpp SUITES unit property zero-alloc)
+jarvis_add_layer_test(core SOURCES cpp/test_core.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
+jarvis_add_layer_test(model SOURCES cpp/test_model.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(node SOURCES cpp/test_node.cpp SUITES unit LIBS jarvis::shell)
 
 # Golden trace conformance (tests/golden/<case>/case.toml).
