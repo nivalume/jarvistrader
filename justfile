@@ -21,7 +21,7 @@ build preset="dev": (configure preset)
     cmake --build --preset {{preset}}
 
 install: bootstrap
-    uv pip install --python {{python}} --reinstall .
+    uv pip install --python {{python}} --reinstall ".[parquet]"
 
 # Everything a contributor runs before pushing: lint, functional tier, benchmark A/B, formal tier.
 check: lint test golden fp bench-compare tla-changed

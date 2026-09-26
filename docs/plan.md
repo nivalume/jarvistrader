@@ -74,8 +74,8 @@
 - [x] task: python — `jarvis.Strategy` 基类、`jarvis.Node`、`jarvis.main()` 与命令行参数（§4.5）
 - [x] task: python — `on_batch` 的列式只读 `nb::ndarray` 视图与 debug 代际检查
 - [x] task: backtest — `ReplaySource`（多源合并，按 `(ts, source_id, seq)` 排序）与 `BacktestWiring`
-- [ ] task: python — 数据转换器：data.binance.vision 的 aggTrades、bookTicker、klines、markPrice 转为解码事件日志
-- [ ] task: python — 数据转换器：nautilus Parquet 目录与解码事件日志双向转换（pyarrow，§16.5）
+- [x] task: python — 数据转换器：data.binance.vision 的 aggTrades、bookTicker、klines、markPrice 转为解码事件日志
+- [x] task: python — 数据转换器：nautilus Parquet 目录与解码事件日志双向转换（pyarrow，§16.5）
 - [x] task: tools — `jarvis replay`（`--until`、`--dump-state`）与回放偏差检测 `ReplayDivergence`
 - [ ] task: examples — `examples/py/trade_logger.py` 与 `examples/cpp/trade_logger.cpp`：订阅 trade 与 quote，只记录不下单
 - [ ] task: harness — golden 回放一致性用例：trade、quote、book、bar、feature

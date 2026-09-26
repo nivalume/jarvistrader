@@ -33,6 +33,8 @@ std::string text_of(const model::InstrumentId& id) { return std::string{id.text(
 Status LogSource::open(std::vector<std::string> directories) {
   directories_ = std::move(directories);
   index_ = 0;
+  seq_offset_ = 0;
+  last_seq_ = 0;
   opened_ = false;
   if (directories_.empty()) {
     return Status::Ok;
@@ -57,6 +59,8 @@ Status LogSource::next(core::EventKey& key, model::Event& event) {
         return Status::EndOfStream;
       }
       ++index_;
+      seq_offset_ += last_seq_;
+      last_seq_ = 0;
       s = reader_.open(directories_[index_]);
       if (!core::ok(s)) {
         opened_ = false;
@@ -74,7 +78,9 @@ Status LogSource::next(core::EventKey& key, model::Event& event) {
     if (!core::ok(s)) {
       return s;
     }
-    key = core::EventKey{record.header.ts, record.header.source_id, record.header.seq};
+    last_seq_ = record.header.seq;
+    key = core::EventKey{record.header.ts, record.header.source_id,
+                         seq_offset_ + record.header.seq};
     return Status::Ok;
   }
   return Status::EndOfStream;

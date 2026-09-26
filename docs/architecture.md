@@ -1226,8 +1226,10 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 ### 16.5 Parquet 互转
 
 - 与 nautilus 数据目录的互转只在 Python 中实现（pyarrow），Arrow C++ 不进入内核构建（`init-project.md` 把引入 Arrow C++ 列为切换依赖管理方式的触发条件）。
-- 布局：`{root}/data/{type_dir}/{identifier}/{start}_{end}.parquet`；价格、数量、金额为 `Decimal128(38, 16)`；时间戳为 `Timestamp(ns, UTC)`；枚举为 `Dictionary(Int8, Utf8)`；schema 元数据含 `instrument_id`、`price_precision`、`size_precision`。
-- 转换器同时支持 data.binance.vision 的 CSV 归档到解码日志的转换。
+- 布局：`{root}/data/{type_dir}/{identifier}/{start}_{end}.parquet`，`type_dir` 为 `trades`、`quotes`、`bars`、`order_book_deltas`、`mark_prices`、`index_prices`（读取时也接受旧名 `trade_tick`、`quote_tick`、`bar`、`order_book_delta`、`mark_price_update`、`index_price_update`）；价格、数量为 `Decimal128(38, 16)`；时间戳为 `Timestamp(ns, UTC)`；枚举为 `Dictionary(Int8, Utf8)`，取值为 nautilus 的枚举名；另有可空的 `identifier` 列；schema 元数据含 `instrument_id`（bar 为 `bar_type`）、`price_precision`、`size_precision`。文件名为首末 `ts_init` 的纳秒整数。读取时价格与数量也接受旧编码（10^9 刻度的 `Int64` 或 `FixedSizeBinary(8)`、10^16 刻度的 `FixedSizeBinary(16)`），时间戳也接受 `UInt64`。
+- 这些字段、类型与元数据键按 nautilus `cd417b80` 的 `crates/serialization/src/arrow` 源码编写。测试覆盖本仓库内的往返，没有用运行中的 nautilus 读写验证。nautilus 在该版本开始把目录迁移到共享表格式，旧的按 identifier 分目录的布局由它的迁移工具导入。
+- nautilus 的订单簿文件逐行存放单个 delta：读取时按 `F_LAST`（128）把连续的 delta 合成一个 `OrderBookDeltas`，写出时拆回单行。
+- 转换器与命令行在 `jarvis.data`（`python -m jarvis.data binance-vision|parquet-to-catalog|catalog-to-parquet`）。data.binance.vision 的日归档（aggTrades、bookTicker、klines、markPriceKlines、indexPriceKlines）逐文件转换为一个数据目录日志，下载时按发布的 SHA-256 校验。成交的 `ts_event` 为成交时间；报价的 `ts_event` 为撮合时间、`ts_init` 为推送时间；由 kline 得到的事件打在收盘时刻（开盘时间加周期）。同一文件内 `ts_init` 保持不减。未指定精度时取文件中实际用到的最多小数位（bookTicker 总是打印八位小数，末尾的零不计）。期货 bookTicker 归档只发布到 2024 年春季。
 
 ---
 

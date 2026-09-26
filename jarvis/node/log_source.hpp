@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ namespace jarvis::node {
 
 // Yields the input records of several logs, one directory after another; output records are
 // skipped. An event that borrows storage (OrderBookDeltas) stays valid until the next call.
+// Each log numbers its records from 1, so a later directory's seq is offset by the records
+// already read: keys stay strictly increasing across days even when two days meet at the same
+// timestamp.
 class LogSource {
 public:
   LogSource() = default;
@@ -39,6 +43,8 @@ public:
 private:
   std::vector<std::string> directories_;
   std::size_t index_ = 0;
+  std::uint64_t seq_offset_ = 0; // records of the directories before index_
+  std::uint64_t last_seq_ = 0;   // seq of the last record read, before the offset
   EventLogReader reader_;
   bool opened_ = false;
 };

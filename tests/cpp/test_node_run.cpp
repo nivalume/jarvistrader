@@ -284,6 +284,7 @@ TEST_SUITE("unit") {
       REQUIRE(writer.append(EventKey{UnixNanos{1}, 1, 1}, trade(1, 10)) == Status::Ok);
       REQUIRE(writer.append_output(EventKey{UnixNanos{1}, 0, 1}, m::Output{m::FeatureUpdate{}}) ==
               Status::Ok);
+      REQUIRE(writer.append(EventKey{UnixNanos{2}, 1, 2}, trade(2, 10)) == Status::Ok);
       REQUIRE(writer.close() == Status::Ok);
     }
     {
@@ -297,9 +298,12 @@ TEST_SUITE("unit") {
     EventKey key;
     m::Event event;
     REQUIRE(source.next(key, event) == Status::Ok);
-    CHECK(key.ts == UnixNanos{1});
+    CHECK(key == EventKey{UnixNanos{1}, 1, 1});
     REQUIRE(source.next(key, event) == Status::Ok);
-    CHECK(key.ts == UnixNanos{2});
+    CHECK(key == EventKey{UnixNanos{2}, 1, 2});
+    // The second day starts at the same ts; its seq continues after the first day's.
+    REQUIRE(source.next(key, event) == Status::Ok);
+    CHECK(key == EventKey{UnixNanos{2}, 1, 3});
     CHECK(source.next(key, event) == Status::EndOfStream);
   }
 

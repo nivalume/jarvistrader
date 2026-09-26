@@ -125,6 +125,10 @@ def _patch(module: types.ModuleType, attribute: str, qualified: str) -> None:
 
 
 class _GuardedDateTime(_datetime.datetime):
+    # No instance dict: the replacement keeps datetime's layout, which compiled extensions such
+    # as pyarrow check when they import it.
+    __slots__ = ()
+
     @classmethod
     def now(cls, tz: _datetime.tzinfo | None = None) -> _datetime.datetime:  # type: ignore[override]
         _check("datetime.now")
@@ -142,6 +146,8 @@ class _GuardedDateTime(_datetime.datetime):
 
 
 class _GuardedDate(_datetime.date):
+    __slots__ = ()
+
     @classmethod
     def today(cls) -> _datetime.date:  # type: ignore[override]
         _check("date.today")
