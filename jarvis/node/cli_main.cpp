@@ -6,6 +6,7 @@
 //   jarvis fingerprint --compare A B [--records inputs|outputs|all]
 //   jarvis dump DIR [--out FILE] [--no-header] [--limit N]
 //   jarvis roundtrip INPUT --out FILE
+//   jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]
 //
 // Exit status: 0 success, 1 failure or difference, 2 usage error.
 
@@ -30,6 +31,7 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/build_info.hpp"
+#include "jarvis/node/config.hpp"
 #include "jarvis/node/corpus.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/event_text.hpp"
@@ -53,7 +55,8 @@ constexpr std::string_view kUsageText =
     "  jarvis fingerprint DIR [--records inputs|outputs|all] [--out FILE]\n"
     "  jarvis fingerprint --compare A B [--records inputs|outputs|all]\n"
     "  jarvis dump DIR [--out FILE] [--no-header] [--limit N]\n"
-    "  jarvis roundtrip INPUT --out FILE\n";
+    "  jarvis roundtrip INPUT --out FILE\n"
+    "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
 // those listed as flags.
@@ -69,6 +72,15 @@ struct Args {
       }
     }
     return std::nullopt;
+  }
+  [[nodiscard]] std::vector<std::string> all(std::string_view name) const {
+    std::vector<std::string> out;
+    for (const auto& [key, value] : options) {
+      if (key == name) {
+        out.emplace_back(value);
+      }
+    }
+    return out;
   }
   [[nodiscard]] bool flag(std::string_view name) const {
     return std::ranges::find(flags, name) != flags.end();
@@ -324,6 +336,37 @@ int cmd_roundtrip(const Args& args) {
   return kOk;
 }
 
+int cmd_config(const Args& args) {
+  if (args.positional.size() != 1) {
+    return usage("config needs one TOML file");
+  }
+  const std::string path{args.positional[0]};
+  node::ConfigOverrides overrides;
+  if (const auto env = args.option("--env")) {
+    overrides.env = std::string{*env};
+  }
+  overrides.sets = args.all("--set");
+  node::NodeConfig config;
+  std::vector<node::ConfigError> errors;
+  if (!jarvis::core::ok(node::load_config(path, overrides, config, errors))) {
+    std::cerr << node::format_errors(path, errors);
+    return kFailed;
+  }
+  const std::string text = "# hashed: settings that change what the kernel computes\n" +
+                           node::canonical_hashed_text(config) +
+                           "# not hashed: where inputs come from and where outputs go\n" +
+                           node::canonical_operational_text(config) +
+                           "config_hash = " + node::hex(node::config_hash(config)) + "\n";
+  if (const auto out = args.option("--out")) {
+    if (!write_file(std::string{*out}, text)) {
+      return failed("write " + std::string{*out}, Status::IoError);
+    }
+  } else {
+    std::cout << text;
+  }
+  return kOk;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -354,6 +397,10 @@ int main(int argc, char** argv) {
   if (command == "roundtrip") {
     constexpr std::array<std::string_view, 1> kValues = {"--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_roundtrip(args) : kUsage;
+  }
+  if (command == "config") {
+    constexpr std::array<std::string_view, 3> kValues = {"--env", "--set", "--out"};
+    return parse_args(rest, kValues, {}, args) ? cmd_config(args) : kUsage;
   }
   if (command == "--help" || command == "help") {
     std::cout << kUsageText;

@@ -160,10 +160,17 @@ add_library(
   jarvis/node/event_text.cpp
   jarvis/node/fingerprint.cpp
   jarvis/node/model_text.cpp
+  jarvis/node/config.cpp
+  jarvis/node/epoch_store.cpp
+  jarvis/node/toml_impl.cpp
 )
 add_library(jarvis::shell ALIAS jarvis_shell)
 target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)
 target_include_directories(jarvis_shell PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
+jarvis_add_tomlplusplus()
+# toml++ stays private to the shell: headers that other targets include never expose it.
+target_link_libraries(jarvis_shell PRIVATE tomlplusplus::tomlplusplus)
+target_compile_definitions(jarvis_shell PRIVATE TOML_HEADER_ONLY=0 TOML_EXCEPTIONS=0 TOML_ENABLE_FORMATTERS=0)
 
 if(JARVIS_BUILD_CLI)
   add_executable(jarvis_cli jarvis/node/cli_main.cpp)

@@ -47,3 +47,18 @@ function(jarvis_add_benchmark)
       "BENCHMARK_ENABLE_INSTALL OFF"
   )
 endfunction()
+
+function(jarvis_add_tomlplusplus)
+  if(TARGET tomlplusplus::tomlplusplus)
+    return()
+  endif()
+
+  # toml++ v3.4.0 (header-only; compiled once in jarvis/node/toml_impl.cpp)
+  CPMAddPackage(
+    NAME tomlplusplus
+    GITHUB_REPOSITORY marzer/tomlplusplus
+    GIT_TAG 30172438cee64926dc41fdd9c11fb3ba5b2ba9de
+    EXCLUDE_FROM_ALL YES
+    SYSTEM YES
+  )
+endfunction()

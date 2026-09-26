@@ -1,0 +1,62 @@
+# Example node configuration (docs/architecture.md section 4.2). `jarvis config` checks it and
+# prints the canonical form and hash that the event log header records.
+
+[node]
+id = "mm01"
+env = "backtest"                  # backtest | sandbox | live
+seed = 42
+strict_determinism = true
+capacity = { orders = 4096, instruments = 64, batch = 1024, timers = 256, strategies = 8 }
+
+[data]                            # used by backtest
+catalog = "runs/2026-09/"
+range = { start = "2026-09-01T00:00:00Z", end = "2026-09-02T00:00:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker", "depth@100ms", "markPrice@1s"]
+codec = "json"                    # json | sbe (where the venue offers it)
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+endpoint = "prod"                 # prod | testnet
+credentials = "env:BINANCE_USDM_KEY"   # a reference, never the secret
+account_mode = "one_way"          # one_way | hedge; must match the exchange account
+oms = "netting"                   # must match account_mode
+
+[venues.sim]                      # used by backtest and sandbox
+fill_model = "queue_position"     # queue_position | top_of_book
+latency = { feed_ns = 800000, out_ns = 1500000, in_ns = 1500000, jitter_ns = 300000 }
+fee = { schedule = "binance_usdm_vip0" }
+
+[[strategies]]
+id = "mm-001"
+impl = "py:MyMM"                  # py:<class> | cpp:<registered name>
+instruments = ["BTCUSDT-PERP.BINANCE"]
+params = { spread_bps = 2, size = "0.010" }
+
+[risk]
+initial_state = "active"
+max_order_notional = "50000 USDT"
+daily_loss_limit = "2000 USDT"
+countdown_cancel_all_ms = 120000
+on_strategy_error = "halt_strategy"    # halt_strategy | halt_node | ignore
+
+[python]
+callback_budget_us = 2000
+overrun_limit = 50
+
+[persistence]
+mode = "async"                    # none | async | barrier
+dir = "runs/{node_id}/{run_id}"
+snapshot_every = 1000000
+raw_frames = true                 # true | false | "sampled"
+
+[telemetry]
+prometheus = "0.0.0.0:9100"
+jsonl = true
+
+[admin]
+socket = "unix:///run/jarvis/{node_id}.sock"

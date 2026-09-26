@@ -1,0 +1,17 @@
+# Canonical form and hash of the example node configuration, as written to the event log header.
+# The second run applies command-line overrides: only operational lines may differ in a way that
+# keeps the hash; the seed override must change it.
+commands = [
+  ["{bin}/bin/jarvis", "config", "{root}/examples/config/node.toml", "--out", "{out}/canonical.txt"],
+  ["{bin}/bin/jarvis", "config", "{root}/examples/config/node.toml", "--env", "sandbox",
+   "--set", "venues.BINANCE_USDM.endpoint=testnet", "--set", "node.seed=7",
+   "--out", "{out}/overridden.txt"],
+]
+
+[[compare]]
+produced = "canonical.txt"
+expected = "expected.canonical.txt"
+
+[[compare]]
+produced = "overridden.txt"
+expected = "expected.overridden.txt"

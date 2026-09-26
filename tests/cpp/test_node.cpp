@@ -7,11 +7,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <variant>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -22,7 +24,9 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/build_info.hpp"
+#include "jarvis/node/config.hpp"
 #include "jarvis/node/corpus.hpp"
+#include "jarvis/node/epoch_store.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/fingerprint.hpp"
@@ -135,6 +139,31 @@ Status read_all(const std::string& dir, std::vector<std::vector<std::byte>>& rec
     }
   }
   return s;
+}
+
+constexpr std::string_view kMinimalConfig = R"toml(
+[node]
+id = "mm01"
+)toml";
+
+// Parses `text` with optional overrides; returns the errors (empty on success).
+std::vector<node::ConfigError> parse(std::string_view text, node::NodeConfig& out,
+                                     const node::ConfigOverrides& overrides = {}) {
+  std::vector<node::ConfigError> errors;
+  const Status s = node::parse_config(text, "test.toml", overrides, out, errors);
+  CHECK(jarvis::core::ok(s) == errors.empty());
+  return errors;
+}
+
+bool has_error(const std::vector<node::ConfigError>& errors, std::string_view path,
+               std::string_view fragment) {
+  return std::ranges::any_of(errors, [&](const node::ConfigError& e) {
+    return e.path == path && e.message.find(fragment) != std::string::npos;
+  });
+}
+
+std::string example_config_path() {
+  return std::string{JARVIS_SOURCE_DIR} + "/examples/config/node.toml";
 }
 
 } // namespace
@@ -382,6 +411,172 @@ TEST_SUITE("unit") {
     CHECK(node::roundtrip_text("nope", "X") == "ERROR UnknownType");
     CHECK(node::roundtrip_lines("# c\n\nprice 1\n") ==
           "# c\n\nprice 1 => 1 raw=1000000000 precision=0\n");
+  }
+  TEST_CASE("the example configuration loads with every section typed") {
+    node::NodeConfig c;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::load_config(example_config_path(), {}, c, errors) == Status::Ok);
+    CHECK(c.node.id == "mm01");
+    CHECK(c.node.env == node::Env::Backtest);
+    CHECK(c.node.seed == 42);
+    CHECK(c.node.capacity.orders == 4096);
+    REQUIRE(c.data.range.has_value());
+    CHECK((c.data.range && c.data.range->start < c.data.range->end));
+    REQUIRE(c.data.streams.size() == 1);
+    CHECK(c.data.streams[0].streams.size() == 4);
+    REQUIRE(c.venues.size() == 1);
+    CHECK(c.venues[0].account_mode == node::AccountMode::OneWay);
+    const std::optional<node::SimSection>& sim = c.venues[0].sim;
+    REQUIRE(sim.has_value());
+    CHECK((sim && sim->fill_model == node::FillModel::QueuePosition));
+    CHECK((sim && sim->latency.out_ns == 1'500'000));
+    REQUIRE(c.strategies.size() == 1);
+    REQUIRE(c.strategies[0].params.size() == 2);
+    CHECK(c.strategies[0].params[0].key == "size"); // sorted
+    CHECK(std::get<std::string>(c.strategies[0].params[0].value) == "0.010");
+    CHECK(std::get<std::int64_t>(c.strategies[0].params[1].value) == 2);
+    const std::optional<m::Money>& notional = c.risk.max_order_notional;
+    REQUIRE(notional.has_value());
+    CHECK((notional && notional->raw() == 50'000'000'000'000));
+    CHECK(c.persistence.raw_frames == node::RawFrames::On);
+  }
+
+  TEST_CASE("a minimal configuration takes the documented defaults") {
+    node::NodeConfig c;
+    REQUIRE(parse(kMinimalConfig, c).empty());
+    CHECK(c.node.env == node::Env::Backtest);
+    CHECK(c.node.strict_determinism);
+    CHECK(c.node.capacity.strategies == 8);
+    CHECK(c.risk.initial_state == m::TradingState::Active);
+    CHECK_FALSE(c.risk.max_order_notional.has_value());
+    CHECK(c.persistence.mode == node::PersistenceMode::Async);
+    CHECK(c.python.callback_budget_us == 2000);
+  }
+
+  TEST_CASE("configuration errors name the path and line of every problem") {
+    node::NodeConfig c;
+    const auto errors = parse(R"toml(
+[node]
+id = "mm01"
+capcity = 3
+seed = 1.5
+
+[[venues]]
+id = "V"
+kind = "binance_usdm"
+account_mode = "hedge"
+oms = "netting"
+credentials = "plain-secret"
+
+[[strategies]]
+id = "mm-001"
+impl = "rust:Nope"
+params = { spread = 0.5 }
+)toml",
+                              c);
+    CHECK(has_error(errors, "node.capcity", "unknown key"));
+    CHECK(has_error(errors, "node.seed", "floating-point"));
+    CHECK(has_error(errors, "venues[0].oms", "must be hedging"));
+    CHECK(has_error(errors, "venues[0].credentials", "reference"));
+    CHECK(has_error(errors, "strategies[0].impl", "py:"));
+    CHECK(has_error(errors, "strategies[0].params.spread", "floating-point"));
+    const auto capcity = std::ranges::find(errors, "node.capcity", &node::ConfigError::path);
+    REQUIRE(capcity != errors.end());
+    CHECK(capcity->line == 4);
+    CHECK(node::format_errors("test.toml", errors).find("test.toml:4: node.capcity: unknown key") !=
+          std::string::npos);
+  }
+
+  TEST_CASE("missing [node] and TOML syntax errors are reported") {
+    node::NodeConfig c;
+    CHECK(has_error(parse("[risk]\n", c), "node", "missing"));
+    CHECK(has_error(parse("[node]\n", c), "node.id", "missing"));
+    std::vector<node::ConfigError> errors;
+    CHECK(node::parse_config("[node\nid = 1", "x.toml", {}, c, errors) == Status::ParseError);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].line >= 1);
+  }
+
+  TEST_CASE("overrides set values, select array elements by id and report bad paths") {
+    node::NodeConfig c;
+    node::ConfigOverrides overrides;
+    overrides.env = "live";
+    overrides.sets = {"node.seed=7", "strategies.mm-001.params.size=0.020",
+                      "venues.0.endpoint=testnet", "risk.initial_state=\"halted\"",
+                      "persistence.raw_frames=sampled"};
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::load_config(example_config_path(), overrides, c, errors) == Status::Ok);
+    CHECK(c.node.env == node::Env::Live);
+    CHECK(c.node.seed == 7);
+    CHECK(std::get<std::string>(c.strategies[0].params[0].value) == "0.020");
+    CHECK(c.venues[0].endpoint == node::Endpoint::Testnet);
+    CHECK(c.risk.initial_state == m::TradingState::Halted);
+    CHECK(c.persistence.raw_frames == node::RawFrames::Sampled);
+
+    node::ConfigOverrides bad;
+    bad.sets = {"strategies.nope.params.a=1", "node.id.x=1", "noequals", "node.unknown=1"};
+    CHECK(node::load_config(example_config_path(), bad, c, errors) == Status::InvalidArgument);
+    CHECK(has_error(errors, "strategies.nope.params.a", "no element"));
+    CHECK(has_error(errors, "node.id.x", "not a table"));
+    CHECK(has_error(errors, "noequals", "path=value"));
+    CHECK(has_error(errors, "node.unknown", "unknown key"));
+  }
+
+  TEST_CASE("the config hash covers what the kernel computes and nothing else") {
+    node::NodeConfig base;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::load_config(example_config_path(), {}, base, errors) == Status::Ok);
+    const auto hash_with = [&](std::vector<std::string> sets, std::optional<std::string> env = {}) {
+      node::NodeConfig c;
+      node::ConfigOverrides o;
+      o.env = std::move(env);
+      o.sets = std::move(sets);
+      REQUIRE(node::load_config(example_config_path(), o, c, errors) == Status::Ok);
+      return node::config_hash(c);
+    };
+    const auto h = node::config_hash(base);
+    // Operational settings do not change the hash.
+    CHECK(hash_with({}, "sandbox") == h);
+    CHECK(hash_with({"venues.0.endpoint=testnet", "persistence.mode=barrier",
+                     "data.catalog=elsewhere", "telemetry.jsonl=false"}) == h);
+    // Writing a default explicitly is the same as omitting it.
+    CHECK(hash_with({"node.capacity.timers=256"}) == h);
+    // Behavioural settings do.
+    CHECK(hash_with({"node.seed=43"}) != h);
+    CHECK(hash_with({"strategies.mm-001.params.spread_bps=3"}) != h);
+    CHECK(hash_with({"risk.initial_state=halted"}) != h);
+    CHECK(hash_with({"venues.0.sim.latency.out_ns=1"}) != h);
+  }
+
+  TEST_CASE("key order and formatting in the file do not change the canonical form") {
+    node::NodeConfig a;
+    node::NodeConfig b;
+    REQUIRE(parse("[node]\nid = \"mm01\"\nseed = 5\n[risk]\ndaily_loss_limit = \"10 USDT\"\n", a)
+                .empty());
+    REQUIRE(parse("[risk]\ndaily_loss_limit = \"10.00 USDT\"\n\n[node]\nseed=5\nid=\"mm01\"\n", b)
+                .empty());
+    CHECK(node::canonical_hashed_text(a) == node::canonical_hashed_text(b));
+    CHECK(node::config_hash(a) == node::config_hash(b));
+  }
+
+  TEST_CASE("the epoch counter starts at 1, persists and refuses damaged files") {
+    const TempDir dir{"epoch"};
+    std::filesystem::create_directories(dir.str());
+    const std::string path = dir.sub("epoch");
+    std::uint64_t epoch = 0;
+    CHECK(node::read_epoch(path, epoch) == Status::NotFound);
+    REQUIRE(node::next_epoch(path, epoch) == Status::Ok);
+    CHECK(epoch == 1);
+    REQUIRE(node::next_epoch(path, epoch) == Status::Ok);
+    CHECK(epoch == 2);
+    std::uint64_t read = 0;
+    REQUIRE(node::read_epoch(path, read) == Status::Ok);
+    CHECK(read == 2);
+    CHECK_FALSE(std::filesystem::exists(path + ".tmp"));
+
+    write_file(path, std::vector<char>{'g', 'a', 'r', 'b', 'a', 'g', 'e'});
+    CHECK(node::next_epoch(path, epoch) == Status::ParseError);
+    CHECK(epoch == 2); // unchanged on failure
   }
 }
 

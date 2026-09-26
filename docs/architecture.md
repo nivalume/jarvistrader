@@ -186,7 +186,13 @@ testnet 不是 sandbox。testnet 是 `env = "live"` 加上 `endpoint = "testnet"
 
 ### 4.2 NodeConfig
 
-配置是类型化 TOML，解析为 C++ 结构体。未知键直接报错。命令行的 `--env` 与 `--set a.b=c` 覆盖之后的最终配置被规范化并计算 hash，hash 写入事件日志头，回放时据此确认配置一致。
+配置是类型化 TOML，解析为 C++ 结构体（`jarvis/node/config.hpp`）。未知键直接报错。命令行的 `--env` 与 `--set a.b=c` 覆盖之后的最终配置被规范化并计算 hash，hash 写入事件日志头，回放时据此确认配置一致。
+
+- **报错方式。** 所有错误一次性报告，每条带路径与行号，例如 `node.toml:7: venues[0].oms: must be hedging when account_mode is hedge`。
+- **不允许浮点。** 任何位置出现 TOML 浮点都报错，小数一律写成字符串（`size = "0.010"`），这样它们能精确解析为定点数。时间戳同理，写成带引号的 RFC 3339 字符串。
+- **覆盖语法。** 先应用 `--env`，再按顺序应用每个 `--set`。路径段可以是表的键、数组下标，或者按 `id` 选中数组中的表（`--set strategies.mm-001.params.size=0.020`）。值能解析为 TOML 的字符串、整数、布尔、数组或内联表时按 TOML 解释；否则（裸词、小数、时间戳）按原文字符串处理。
+- **hash 的范围。** 规范形式是每个字段一行 `path = value`，包含默认值，顺序固定，策略参数按键排序；因此显式写出默认值与省略它得到同一个 hash，文件中键的顺序也不影响 hash。hash 只覆盖影响内核计算结果的字段：`[node]` 的 id、seed、strict_determinism、capacity，venue 的 id、kind、account_mode、oms、sim，`[[strategies]]`，`[risk]`，`[python]`。`node.env`、`[data]`、venue 的 endpoint 与凭据引用、`[persistence]`、`[telemetry]`、`[admin]` 不进 hash：它们决定输入从哪里来、输出写到哪里，而输入本身已经记录在事件日志中。这样 sandbox 录制在 backtest 中回放时 hash 仍然相同（4.6 节的环境等价测试依赖这一点）。`jarvis config <file>` 打印两部分规范形式与 hash。
+- **凭据。** `credentials` 只能是引用（`env:NAME` 或 `file:PATH`），写入明文密钥会被拒绝。
 
 ```toml
 [node]
@@ -285,7 +291,8 @@ public:
 | `Stopping` | 写最终快照与报告 | 默认 `cancel_all_then_exit`：撤单、确认、排空出站环、关闭连接 | core 线程，依据 EOF 或 `Shutdown` 事件 |
 | `Faulted` | 保留日志，非零退出 | KillSwitch（尽力撤全单），非零退出 | core 线程，依据 `step` 返回错误、容量耗尽、日志写失败、Python 致命错误 |
 
-- 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它。
+- 转移表位于 `jarvis/engine/lifecycle.hpp`，是纯函数 `next_state(from, reason)`。原因码：`Configured`（Init → Wired）、`RunRequested`（Wired → Starting）、`Started`（Starting → Syncing）、`Synced`（Syncing → Running）、`HealthLost`（Syncing 或 Running → Degraded）、`HealthRestored`（Degraded → Syncing）、`EndOfData`（Running → Stopping）、`ShutdownRequested`（Wired 到 Degraded 之间任一状态 → Stopping；Stopping 中重复请求保持原状态）、`Drained`（Stopping → Stopped）、`Fault`（任一非终态 → Faulted）。表外的组合返回 `InvalidTransition`。
+- 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它；回放时每条记录都必须与转移表给出的结果一致，否则报 `InvalidTransition`。
 - 只有 core 线程推动状态。IO、admin、信号处理只入队事件。
 - 组件没有自己的生命周期，它们是 `EngineState` 中的数据。策略收到 `on_start` / `on_stop`，这两个回调本身也是记录事件。
 - `TradingState`（`Active / Reducing / Halted`）与 Node 生命周期正交，由第 10 节描述。
@@ -459,7 +466,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 | `TradeId` | 非空 ASCII，最长 36 字符 | `4812765123` |
 | `UUID4` | RFC 4122 v4，36 字符 | |
 
-内核内部把 `InstrumentId` 在配置阶段 intern 为 `uint32` 槽位，字符串只存于侧表；`ClientOrderId`、`TradeId` 以定长内联数组存储。
+内核内部把 `InstrumentId` 在配置阶段 intern 为 `uint32` 槽位（`InstrumentTable`，`jarvis/model/instrument_table.hpp`），字符串只存于侧表。槽位按首次出现的顺序分配，由于事件顺序确定，槽位也确定；表的容量来自 `node.capacity.instruments`，构造后 intern 不再分配内存。`ClientOrderId`、`TradeId` 以定长内联数组存储。
 
 ### 6.3 时间
 
@@ -687,8 +694,8 @@ Python 代码运行在 `step` 之内，所以 ADR 0001 的纯函数约束同样�
 
 格式：`{node_tag}-{epoch}-{seq}`。
 
-- `node_tag`：配置中的节点标签，最多 8 字符。
-- `epoch`：持久化计数器，每次节点启动加一，Base32 编码 6 字符。
+- `node_tag`：即 `node.id`，1 到 8 个 ASCII 字母或数字，配置解析时校验。
+- `epoch`：持久化计数器，每次节点启动加一，Base32 编码 6 字符。计数器文件（`jarvis/node/epoch_store.hpp`）以原子方式替换：写临时文件、fsync、rename、fsync 目录。文件损坏时启动失败而不是从 1 重来，因为从 1 重来可能复用仍挂在交易所的订单的 id。
 - `seq`：本 epoch 内单调递增，Base32 编码 8 字符。
 - 总长不超过 24 字符，满足 Binance `newClientOrderId` 的正则 `^[\.A-Z\:/a-z0-9_-]{1,36}$`。
 - 不含墙钟时间，在回放中确定。Binance 只保证未完成订单之间的 `clientOrderId` 唯一，jarvis 通过 epoch 保证永不复用。

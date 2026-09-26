@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -20,6 +21,7 @@
 #include "jarvis/model/fixed_point.hpp"
 #include "jarvis/model/generated/enums.hpp"
 #include "jarvis/model/identifiers.hpp"
+#include "jarvis/model/instrument_table.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
@@ -413,6 +415,30 @@ TEST_SUITE("unit") {
     CHECK(m::ClientOrderIdGenerator::create("mm01", m::kMaxEpoch + 1, generator) ==
           Status::InvalidArgument);
   }
+  TEST_CASE("InstrumentTable hands out dense slots in first-seen order") {
+    m::InstrumentTable table{3};
+    m::InstrumentSlot a;
+    m::InstrumentSlot b;
+    m::InstrumentSlot again;
+    REQUIRE(table.intern(instrument_id("BTCUSDT-PERP.BINANCE"), a) == Status::Ok);
+    REQUIRE(table.intern(instrument_id("ETHUSDT-PERP.BINANCE"), b) == Status::Ok);
+    REQUIRE(table.intern(instrument_id("BTCUSDT-PERP.BINANCE"), again) == Status::Ok);
+    CHECK(a.value == 0);
+    CHECK(b.value == 1);
+    CHECK(again == a);
+    CHECK(table.size() == 2);
+    CHECK(table.id(b) == instrument_id("ETHUSDT-PERP.BINANCE"));
+    m::InstrumentSlot found;
+    CHECK(table.find(instrument_id("ETHUSDT-PERP.BINANCE"), found) == Status::Ok);
+    CHECK(found == b);
+    CHECK(table.find(instrument_id("SOLUSDT-PERP.BINANCE"), found) == Status::NotFound);
+    m::InstrumentSlot c;
+    REQUIRE(table.intern(instrument_id("SOLUSDT-PERP.BINANCE"), c) == Status::Ok);
+    CHECK(table.intern(instrument_id("XRPUSDT-PERP.BINANCE"), c) == Status::CapacityExceeded);
+    CHECK(table.size() == 3);
+    // Same symbol on another venue is another instrument.
+    CHECK(table.find(instrument_id("BTCUSDT-PERP.OKX"), found) == Status::NotFound);
+  }
 }
 
 TEST_SUITE("property") {
@@ -548,6 +574,36 @@ TEST_SUITE("property") {
       CHECK(back == type);
     });
   }
+  TEST_CASE("InstrumentTable agrees with an ordered map reference") {
+    jarvis::testkit::for_all([](Gen& gen) {
+      const auto capacity = static_cast<std::uint32_t>(gen.range(1, 40));
+      m::InstrumentTable table{capacity};
+      std::map<std::string, std::uint32_t> reference;
+      for (int i = 0; i < 120; ++i) {
+        const std::string text =
+            "S" + std::to_string(gen.below(60)) + "-PERP." + (gen.coin() ? "BINANCE" : "OKX");
+        m::InstrumentSlot slot;
+        const Status s = table.intern(instrument_id(text), slot);
+        const auto it = reference.find(text);
+        if (it != reference.end()) {
+          REQUIRE(s == Status::Ok);
+          CHECK(slot.value == it->second);
+        } else if (reference.size() < capacity) {
+          REQUIRE(s == Status::Ok);
+          CHECK(slot.value == reference.size());
+          reference.emplace(text, slot.value);
+        } else {
+          CHECK(s == Status::CapacityExceeded);
+        }
+      }
+      for (const auto& [text, value] : reference) {
+        m::InstrumentSlot slot;
+        REQUIRE(table.find(instrument_id(text), slot) == Status::Ok);
+        CHECK(slot.value == value);
+        CHECK(table.id(slot) == instrument_id(text));
+      }
+    });
+  }
 }
 
 TEST_SUITE("zero-alloc") {
@@ -579,5 +635,17 @@ TEST_SUITE("zero-alloc") {
     const std::uint64_t counted = scope.allocations();
     CHECK(counted == 0U);
     CHECK(sink > 0U);
+  }
+  TEST_CASE("interning instruments does not allocate once the table is built") {
+    m::InstrumentTable table{8};
+    const m::InstrumentId btc = instrument_id("BTCUSDT-PERP.BINANCE");
+    const m::InstrumentId eth = instrument_id("ETHUSDT-PERP.BINANCE");
+    const AllocationScope scope;
+    m::InstrumentSlot slot;
+    for (int i = 0; i < 100; ++i) {
+      static_cast<void>(table.intern(i % 2 == 0 ? btc : eth, slot));
+      static_cast<void>(table.find(btc, slot));
+    }
+    CHECK(scope.allocations() == 0);
   }
 }

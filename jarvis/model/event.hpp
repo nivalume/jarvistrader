@@ -29,16 +29,19 @@ enum class NodeState : std::uint8_t {
   Faulted = 8,
 };
 
+// Why the node changed state; each reason drives the transitions listed in
+// jarvis/engine/lifecycle.hpp.
 enum class LifecycleReason : std::uint8_t {
-  Configured = 0,
-  Started = 1,
-  Synced = 2,
-  HealthLost = 3,
-  HealthRestored = 4,
-  EndOfData = 5,
-  ShutdownRequested = 6,
-  Drained = 7,
-  Fault = 8,
+  Configured = 0,        // Init -> Wired
+  RunRequested = 1,      // Wired -> Starting
+  Started = 2,           // Starting -> Syncing: log open, connections up
+  Synced = 3,            // Syncing -> Running
+  HealthLost = 4,        // Syncing | Running -> Degraded
+  HealthRestored = 5,    // Degraded -> Syncing
+  EndOfData = 6,         // Running -> Stopping (backtest)
+  ShutdownRequested = 7, // Wired | Starting | Syncing | Running | Degraded -> Stopping
+  Drained = 8,           // Stopping -> Stopped
+  Fault = 9,             // any non-terminal state -> Faulted
 };
 
 enum class StrategyErrorKind : std::uint8_t {
@@ -78,6 +81,8 @@ enum class ShutdownMode : std::uint8_t {
   switch (v) {
   case LifecycleReason::Configured:
     return "CONFIGURED";
+  case LifecycleReason::RunRequested:
+    return "RUN_REQUESTED";
   case LifecycleReason::Started:
     return "STARTED";
   case LifecycleReason::Synced:
