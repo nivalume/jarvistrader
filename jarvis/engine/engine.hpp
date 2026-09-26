@@ -1,0 +1,569 @@
+#pragma once
+
+#include <array>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <type_traits>
+#include <variant>
+
+#include "jarvis/core/clock.hpp"
+#include "jarvis/core/event_key.hpp"
+#include "jarvis/core/fixed_vector.hpp"
+#include "jarvis/core/status.hpp"
+#include "jarvis/core/time.hpp"
+#include "jarvis/data/book.hpp"
+#include "jarvis/data/features.hpp"
+#include "jarvis/data/subscription.hpp"
+#include "jarvis/model/event.hpp"
+#include "jarvis/model/outputs.hpp"
+#include "jarvis/strategy/context.hpp"
+#include "jarvis/strategy/strategy.hpp"
+#include "jarvis/strategy/strategy_set.hpp"
+
+// The deterministic kernel (docs/architecture.md sections 3, 4.3 and 5): `step(key, event)`
+// updates the kernel state, calls strategies and collects outputs. It reads nothing but its
+// arguments and its state, so replaying the same inputs reproduces the same calls and outputs.
+//
+// Delivery order within a step is fixed: a trade goes to its subscribers first, then the
+// features it updates, then the bars it completes; within one (row, kind) subscribers are served
+// in subscription order. Subscribers are collected before any callback runs, so a callback that
+// subscribes or unsubscribes changes the next delivery, not the current one.
+
+namespace jarvis::engine {
+
+using strategy::KernelConfig;
+using strategy::KernelServices;
+using strategy::StrategyIndex;
+
+// Where inputs come from (ReplaySource, the live rings).
+template <typename S>
+concept EventSource = requires(S& source, core::EventKey& key, model::Event& event) {
+  { source.next(key, event) } -> std::same_as<core::Status>;
+};
+
+// Where outputs go (the event log, the order sender from M3).
+template <typename S>
+concept CommandSink = requires(S& sink, const core::EventKey& key, const model::Output& output) {
+  { sink.emit(key, output) } -> std::same_as<core::Status>;
+};
+
+template <strategy::StrategySet SS> class Engine {
+public:
+  Engine(const KernelConfig& config, SS& strategies,
+         strategy::ErrorPolicy policy = strategy::ErrorPolicy::HaltStrategy)
+      : k_{config}, ss_{&strategies}, policy_{policy}, calls_{config.strategies},
+        overflowing_{config.strategies} {}
+
+  Engine(const Engine&) = delete;
+  Engine& operator=(const Engine&) = delete;
+  Engine(Engine&&) = delete;
+  Engine& operator=(Engine&&) = delete;
+  ~Engine() = default;
+
+  [[nodiscard]] KernelServices& kernel() noexcept { return k_; }
+  [[nodiscard]] const KernelServices& kernel() const noexcept { return k_; }
+
+  // Processes one input event.
+  [[nodiscard]] core::Status step(const core::EventKey& key, const model::Event& event) {
+    k_.current = key;
+    return std::visit([this](const auto& e) { return dispatch(e); }, event);
+  }
+
+  [[nodiscard]] std::span<const model::Output> outputs() const noexcept {
+    return k_.outputs.span();
+  }
+  [[nodiscard]] std::span<const strategy::StrategyFailure> failures() const noexcept {
+    return k_.failures.span();
+  }
+  void clear_failures() noexcept { k_.failures.clear(); }
+
+  // Writes this step's outputs to `sink` keyed by the causing input, then clears them.
+  template <CommandSink C> [[nodiscard]] core::Status flush_outputs(C& sink) {
+    for (std::size_t i = 0; i < k_.outputs.size(); ++i) {
+      const core::EventKey key{k_.current.ts, static_cast<std::uint16_t>(i), k_.current.seq};
+      const core::Status s = sink.emit(key, k_.outputs[i]);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    k_.outputs.clear();
+    return core::Status::Ok;
+  }
+  void clear_outputs() noexcept { k_.outputs.clear(); }
+
+  // The next timer due, without firing it; the node turns it into a TimerFired input.
+  [[nodiscard]] bool next_timer(core::FiredTimer& out) noexcept { return k_.timers.peek(out); }
+
+  [[nodiscard]] bool halt_requested() const noexcept { return k_.halt_requested; }
+
+private:
+  // ---- dispatch -----------------------------------------------------------------------------
+
+  template <typename T> core::Status dispatch(const T& e) {
+    if constexpr (std::is_same_v<T, model::TradeTick>) {
+      return on_trade(e);
+    } else if constexpr (std::is_same_v<T, model::QuoteTick>) {
+      return on_quote(e);
+    } else if constexpr (std::is_same_v<T, model::OrderBookDeltas>) {
+      return on_deltas(e);
+    } else if constexpr (std::is_same_v<T, model::Bar>) {
+      if (const auto key = k_.find_bar_type(e.bar_type)) {
+        deliver(*key, data::DataKind::Bar, e, e.ts_init);
+      }
+      return core::Status::Ok;
+    } else if constexpr (std::is_same_v<T, model::MarkPriceUpdate>) {
+      return simple(e, data::DataKind::MarkPrice);
+    } else if constexpr (std::is_same_v<T, model::IndexPriceUpdate>) {
+      return simple(e, data::DataKind::IndexPrice);
+    } else if constexpr (std::is_same_v<T, model::FundingRateUpdate>) {
+      return simple(e, data::DataKind::FundingRate);
+    } else if constexpr (std::is_same_v<T, model::InstrumentStatus>) {
+      return simple(e, data::DataKind::Status);
+    } else if constexpr (std::is_same_v<T, model::InstrumentClose>) {
+      return simple(e, data::DataKind::Close);
+    } else if constexpr (std::is_same_v<T, model::LiquidationOrder>) {
+      return simple(e, data::DataKind::Liquidation);
+    } else if constexpr (std::is_same_v<T, model::NodeLifecycle>) {
+      return on_lifecycle(e);
+    } else if constexpr (std::is_same_v<T, model::TimerFired>) {
+      return on_timer_fired(e);
+    } else if constexpr (std::is_same_v<T, model::BatchEnd>) {
+      flush_batch();
+      return core::Status::Ok;
+    } else if constexpr (std::is_same_v<T, model::StrategyError>) {
+      return on_strategy_error(e);
+    } else {
+      return core::Status::Ok; // order and account events arrive with M3; Shutdown is the node's
+    }
+  }
+
+  [[nodiscard]] bool slot_of(const model::InstrumentId& id, std::uint32_t& slot) const noexcept {
+    model::InstrumentSlot s;
+    if (!core::ok(k_.instruments.find(id, s))) {
+      return false; // nobody declared interest in this instrument
+    }
+    slot = s.value;
+    return true;
+  }
+
+  template <typename T> core::Status simple(const T& e, data::DataKind kind) {
+    std::uint32_t slot = 0;
+    if (slot_of(e.instrument_id, slot)) {
+      deliver(slot, kind, e, e.ts_init);
+    }
+    return core::Status::Ok;
+  }
+
+  core::Status on_trade(const model::TradeTick& t) {
+    std::uint32_t slot = 0;
+    if (!slot_of(t.instrument_id, slot)) {
+      return core::Status::Ok;
+    }
+    deliver(slot, data::DataKind::Trade, t, t.ts_init);
+    for (std::size_t f = 0; f < k_.features.size(); ++f) {
+      data::Feature& feature = k_.features.at(static_cast<model::FeatureId>(f));
+      if (feature.slot().value != slot || !data::uses_trades(feature.spec().kind)) {
+        continue;
+      }
+      model::Decimal value;
+      bool produced = false;
+      const core::Status s = feature.on_trade(t, value, produced);
+      if (!core::ok(s)) {
+        return s;
+      }
+      if (produced) {
+        deliver_feature(static_cast<model::FeatureId>(f), value, t.ts_event, t.ts_init);
+      }
+    }
+    return feed_aggregators(slot, t);
+  }
+
+  core::Status on_quote(const model::QuoteTick& q) {
+    std::uint32_t slot = 0;
+    if (!slot_of(q.instrument_id, slot)) {
+      return core::Status::Ok;
+    }
+    data::OrderBook* book = k_.book_for_update(slot, q.bid_price, q.bid_size.precision());
+    const bool l1 = book != nullptr && book->type() == model::BookType::L1_MBP;
+    if (l1) {
+      const core::Status s = book->apply(q);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    deliver(slot, data::DataKind::Quote, q, q.ts_init);
+    if (l1) {
+      deliver(slot, data::DataKind::Book, data::BookView{q.instrument_id, book}, q.ts_init);
+    }
+    for (std::size_t f = 0; f < k_.features.size(); ++f) {
+      data::Feature& feature = k_.features.at(static_cast<model::FeatureId>(f));
+      if (feature.slot().value != slot || data::uses_trades(feature.spec().kind)) {
+        continue;
+      }
+      model::Decimal value;
+      bool produced = false;
+      const core::Status s = feature.on_quote(q, value, produced);
+      if (!core::ok(s)) {
+        return s;
+      }
+      if (produced) {
+        deliver_feature(static_cast<model::FeatureId>(f), value, q.ts_event, q.ts_init);
+      }
+    }
+    return feed_aggregators(slot, q);
+  }
+
+  core::Status on_deltas(const model::OrderBookDeltas& d) {
+    std::uint32_t slot = 0;
+    if (!slot_of(d.instrument_id, slot) || d.deltas.empty()) {
+      return core::Status::Ok;
+    }
+    const model::OrderBookDelta& first = d.deltas.front();
+    data::OrderBook* book =
+        k_.book_for_update(slot, first.order.price, first.order.size.precision());
+    if (book != nullptr && book->type() == model::BookType::L2_MBP) {
+      const core::Status s = book->apply(d);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    deliver(slot, data::DataKind::BookDeltas, d, d.ts_init);
+    if (book != nullptr) {
+      deliver(slot, data::DataKind::Book, data::BookView{d.instrument_id, book}, d.ts_init);
+    }
+    return core::Status::Ok;
+  }
+
+  template <typename T> core::Status feed_aggregators(std::uint32_t slot, const T& update) {
+    for (std::size_t i = 0; i < k_.aggregators.size(); ++i) {
+      strategy::AggregatorState& a = k_.aggregators[i];
+      if (a.slot != slot) {
+        continue;
+      }
+      if (!a.ready) {
+        const bool trades = a.bar_type.spec.price_type == model::PriceType::Last;
+        if constexpr (std::is_same_v<T, model::TradeTick>) {
+          if (!trades) {
+            continue;
+          }
+          const core::Status s = data::BarAggregator::create(a.bar_type, update.price.precision(),
+                                                             update.size.precision(), a.aggregator);
+          if (!core::ok(s)) {
+            return s;
+          }
+        } else {
+          if (trades) {
+            continue;
+          }
+          const core::Status s = data::BarAggregator::create(
+              a.bar_type, update.bid_price.precision(), update.bid_size.precision(), a.aggregator);
+          if (!core::ok(s)) {
+            return s;
+          }
+        }
+        a.ready = true;
+      }
+      std::array<model::Bar, 8> bars{};
+      std::size_t n = 0;
+      core::Status s = core::Status::Ok;
+      if constexpr (std::is_same_v<T, model::TradeTick>) {
+        s = a.aggregator.on_trade(update, bars, n);
+      } else {
+        s = a.aggregator.on_quote(update, bars, n);
+      }
+      if (!core::ok(s)) {
+        return s;
+      }
+      for (std::size_t b = 0; b < n; ++b) {
+        deliver(a.bar_key, data::DataKind::Bar, bars[b], bars[b].ts_init);
+      }
+      s = arm_close_timer(static_cast<std::uint32_t>(i));
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  core::Status arm_close_timer(std::uint32_t index) {
+    strategy::AggregatorState& a = k_.aggregators[index];
+    const std::optional<core::UnixNanos> close = a.aggregator.next_close();
+    if (!close || close->value() == a.armed_deadline) {
+      return core::Status::Ok;
+    }
+    if (a.armed_deadline != 0) {
+      static_cast<void>(k_.timers.cancel(a.timer));
+    }
+    a.armed_deadline = close->value();
+    return k_.timers.schedule(*close, core::DurationNanos{},
+                              core::TimerKey{strategy::kKernelTimerOwner, index}, a.timer);
+  }
+
+  // ---- delivery -----------------------------------------------------------------------------
+
+  static strategy::PendingValue pending_of(const data::BookView& v, std::uint32_t slot) {
+    static_cast<void>(v);
+    return strategy::BookMark{slot};
+  }
+  template <typename T>
+  static strategy::PendingValue pending_of(const T& v, std::uint32_t /*slot*/) {
+    if constexpr (std::is_same_v<T, model::OrderBookDeltas>) {
+      return std::monostate{}; // not conflatable (rejected at subscription)
+    } else {
+      return v;
+    }
+  }
+
+  template <typename T>
+  void deliver(std::uint32_t row, data::DataKind kind, const T& value, core::UnixNanos ts) {
+    calls_.clear();
+    overflowing_.clear();
+    for (data::Subscriber& sub : k_.matrix.subscribers(row, kind)) {
+      if (k_.is_disabled(sub.strategy)) {
+        continue;
+      }
+      switch (sub.cadence.mode) {
+      case data::Cadence::Mode::Every:
+        static_cast<void>(calls_.push_back(sub.strategy));
+        break;
+      case data::Cadence::Mode::Sampled: {
+        const std::uint64_t period = ts.value() / sub.cadence.period.value();
+        if (period != sub.last_period) {
+          sub.last_period = period;
+          static_cast<void>(calls_.push_back(sub.strategy));
+        }
+        break;
+      }
+      case data::Cadence::Mode::Conflated:
+        store_pending(sub.buffer, pending_of(value, row));
+        break;
+      case data::Cadence::Mode::OnBatch:
+        if constexpr (std::is_same_v<T, model::TradeTick> || std::is_same_v<T, model::QuoteTick>) {
+          if (!append_batch(sub.buffer, value)) {
+            static_cast<void>(overflowing_.push_back(sub.buffer));
+          }
+        }
+        break;
+      }
+    }
+    if constexpr (std::is_same_v<T, model::FeatureUpdate>) {
+      if (!calls_.empty()) {
+        static_cast<void>(k_.outputs.push_back(model::Output{value}));
+      }
+    }
+    const strategy::DataView view{&value};
+    for (std::size_t i = 0; i < calls_.size(); ++i) {
+      call_data(calls_[i], view);
+    }
+    if constexpr (std::is_same_v<T, model::TradeTick> || std::is_same_v<T, model::QuoteTick>) {
+      for (std::size_t i = 0; i < overflowing_.size(); ++i) {
+        flush_batch_buffer(overflowing_[i]); // a full buffer is delivered early, deterministically
+        static_cast<void>(append_batch(overflowing_[i], value));
+      }
+    }
+  }
+
+  void deliver_feature(model::FeatureId id, model::Decimal value, core::UnixNanos ts_event,
+                       core::UnixNanos ts_init) {
+    deliver(id, data::DataKind::Feature, model::FeatureUpdate{id, value, ts_event, ts_init},
+            ts_init);
+  }
+
+  void store_pending(std::uint32_t buffer, strategy::PendingValue value) {
+    strategy::Pending& p = k_.pending[buffer];
+    p.value = value;
+    if (!p.dirty) {
+      p.dirty = true;
+      static_cast<void>(k_.dirty_pending.push_back(buffer));
+    }
+  }
+
+  template <typename T> bool append_batch(std::uint32_t buffer, const T& value) {
+    strategy::BatchBuffer& b = k_.batches[buffer];
+    core::Status s = core::Status::Ok;
+    if constexpr (std::is_same_v<T, model::TradeTick>) {
+      s = b.trades.push_back(value);
+    } else {
+      s = b.quotes.push_back(value);
+    }
+    if (!core::ok(s)) {
+      return false;
+    }
+    if (!b.dirty) {
+      b.dirty = true;
+      static_cast<void>(k_.dirty_batches.push_back(buffer));
+    }
+    return true;
+  }
+
+  void flush_batch_buffer(std::uint32_t buffer) {
+    strategy::BatchBuffer& b = k_.batches[buffer];
+    if (!k_.is_disabled(b.strategy) && (!b.trades.empty() || !b.quotes.empty())) {
+      strategy::Context ctx{k_, b.strategy};
+      core::Status s = core::Status::Ok;
+      if (b.kind == data::DataKind::Trade) {
+        const strategy::TradeBatch batch{b.instrument_id, b.trades.span()};
+        s = ss_->on_batch(b.strategy, ctx, strategy::BatchView{&batch});
+      } else {
+        const strategy::QuoteBatch batch{b.instrument_id, b.quotes.span()};
+        s = ss_->on_batch(b.strategy, ctx, strategy::BatchView{&batch});
+      }
+      if (!core::ok(s)) {
+        k_.fail(b.strategy, s);
+      }
+    }
+    b.trades.clear();
+    b.quotes.clear();
+  }
+
+  // BatchEnd: conflated updates, then OnBatch buffers, each in the order they became pending.
+  void flush_batch() {
+    for (std::size_t i = 0; i < k_.dirty_pending.size(); ++i) {
+      strategy::Pending& p = k_.pending[k_.dirty_pending[i]];
+      p.dirty = false;
+      if (k_.is_disabled(p.strategy)) {
+        continue;
+      }
+      const strategy::PendingValue value = p.value;
+      std::visit(
+          [&](const auto& v) {
+            using V = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<V, strategy::BookMark>) {
+              const data::OrderBook* book = k_.books[v.slot] ? &*k_.books[v.slot] : nullptr;
+              if (book != nullptr) {
+                const data::BookView view{k_.instruments.id(model::InstrumentSlot{v.slot}), book};
+                call_data(p.strategy, strategy::DataView{&view});
+              }
+            } else if constexpr (!std::is_same_v<V, std::monostate>) {
+              if constexpr (std::is_same_v<V, model::FeatureUpdate>) {
+                static_cast<void>(k_.outputs.push_back(model::Output{v}));
+              }
+              call_data(p.strategy, strategy::DataView{&v});
+            }
+          },
+          value);
+    }
+    k_.dirty_pending.clear();
+    for (std::size_t i = 0; i < k_.dirty_batches.size(); ++i) {
+      const std::uint32_t buffer = k_.dirty_batches[i];
+      k_.batches[buffer].dirty = false;
+      flush_batch_buffer(buffer);
+    }
+    k_.dirty_batches.clear();
+  }
+
+  void call_data(StrategyIndex s, const strategy::DataView& view) {
+    strategy::Context ctx{k_, s};
+    const core::Status status = ss_->on_data(s, ctx, view);
+    if (!core::ok(status)) {
+      k_.fail(s, status);
+    }
+  }
+
+  // ---- lifecycle, timers, errors ------------------------------------------------------------
+
+  core::Status on_lifecycle(const model::NodeLifecycle& e) {
+    if (e.to == model::NodeState::Running && !started_) {
+      started_ = true;
+      for (std::size_t i = 0; i < ss_->size(); ++i) {
+        const auto s = static_cast<StrategyIndex>(i);
+        if (k_.is_disabled(s)) {
+          continue;
+        }
+        strategy::Context ctx{k_, s};
+        const core::Status status = ss_->on_start(s, ctx);
+        if (!core::ok(status)) {
+          k_.fail(s, status);
+        }
+      }
+    } else if (e.to == model::NodeState::Stopping && started_ && !stopped_) {
+      stopped_ = true;
+      flush_batch();
+      for (std::size_t i = 0; i < ss_->size(); ++i) {
+        const auto s = static_cast<StrategyIndex>(i);
+        if (k_.is_disabled(s)) {
+          continue;
+        }
+        strategy::Context ctx{k_, s};
+        const core::Status status = ss_->on_stop(s, ctx);
+        if (!core::ok(status)) {
+          k_.fail(s, status);
+        }
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  core::Status on_timer_fired(const model::TimerFired& e) {
+    core::FiredTimer fired;
+    if (!k_.timers.pop_due(e.deadline, fired) || !(fired.key == e.key) ||
+        !(fired.deadline == e.deadline)) {
+      return core::Status::InvalidState; // the recorded timer is not the one due: divergence
+    }
+    if (e.key.owner == strategy::kKernelTimerOwner) {
+      if (e.key.id >= k_.aggregators.size()) {
+        return core::Status::InvalidState;
+      }
+      strategy::AggregatorState& a = k_.aggregators[e.key.id];
+      a.armed_deadline = 0;
+      model::Bar bar;
+      if (a.aggregator.on_time(e.deadline, bar)) {
+        deliver(a.bar_key, data::DataKind::Bar, bar, bar.ts_init);
+      }
+      return core::Status::Ok;
+    }
+    for (std::size_t i = 0; i < k_.timer_entries.size(); ++i) {
+      if (k_.timer_entries[i].key == e.key) {
+        if (!k_.timer_entries[i].periodic) {
+          k_.remove_timer_entry(i);
+        }
+        break;
+      }
+    }
+    const auto s = static_cast<StrategyIndex>(e.key.owner);
+    if (s < ss_->size() && !k_.is_disabled(s)) {
+      strategy::Context ctx{k_, s};
+      const core::Status status = ss_->on_timer(s, ctx, e.key, e.deadline);
+      if (!core::ok(status)) {
+        k_.fail(s, status);
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  core::Status on_strategy_error(const model::StrategyError& e) {
+    if (e.strategy_index >= ss_->size()) {
+      return core::Status::InvalidArgument;
+    }
+    const auto s = static_cast<StrategyIndex>(e.strategy_index);
+    if (k_.is_disabled(s)) {
+      return core::Status::Ok;
+    }
+    strategy::Context ctx{k_, s};
+    static_cast<void>(ss_->on_error(s, ctx, e));
+    switch (policy_) {
+    case strategy::ErrorPolicy::HaltStrategy:
+      k_.disabled[s] = 1;
+      break;
+    case strategy::ErrorPolicy::HaltNode:
+      k_.disabled[s] = 1;
+      k_.halt_requested = true;
+      break;
+    case strategy::ErrorPolicy::Ignore:
+      break;
+    }
+    return core::Status::Ok;
+  }
+
+  KernelServices k_;
+  SS* ss_;
+  strategy::ErrorPolicy policy_;
+  core::FixedVector<StrategyIndex> calls_;
+  core::FixedVector<std::uint32_t> overflowing_;
+  bool started_ = false;
+  bool stopped_ = false;
+};
+
+} // namespace jarvis::engine

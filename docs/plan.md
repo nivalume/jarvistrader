@@ -62,14 +62,14 @@
 
 ## M2 Engine、data、策略宿主与回放（Python 回测端到端跑通，只有数据）
 
-- [ ] task: engine — `Engine<StrategySet>`、`EngineState`、`EventSource` 与 `CommandSink` concept（§3、§4.3）
-- [ ] task: data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription{ slot, kind, cadence }`（§7.2）
-- [ ] task: data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd` 记录事件（§7.5）
-- [ ] task: data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读的 `BookView`
-- [ ] task: data — bar 聚合（时间、笔数、成交量），产出 `...-INTERNAL` bar
-- [ ] task: data — `FeatureGraph` v0：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点实现
-- [ ] task: strategy — `Strategy` concept 与 `Context` 中与数据、时间、定时器相关的方法（§9.4）
-- [ ] task: strategy — `StaticStrategySet<S...>`、`DynamicStrategySet`、`StrategyVTable`、`JARVIS_REGISTER_STRATEGY`（§7.3）
+- [x] task: engine — `Engine<StrategySet>`、`EngineState`、`EventSource` 与 `CommandSink` concept（§3、§4.3）
+- [x] task: data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription{ slot, kind, cadence }`（§7.2）
+- [x] task: data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd` 记录事件（§7.5）
+- [x] task: data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读的 `BookView`
+- [x] task: data — bar 聚合（时间、笔数、成交量），产出 `...-INTERNAL` bar
+- [x] task: data — `FeatureGraph` v0：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点实现
+- [x] task: strategy — `Strategy` concept 与 `Context` 中与数据、时间、定时器相关的方法（§9.4）
+- [x] task: strategy — `StaticStrategySet<S...>`、`DynamicStrategySet`、`StrategyVTable`、`JARVIS_REGISTER_STRATEGY`（§7.3）
 - [ ] task: python — `PyStrategyHost`：按批获取 GIL、异常转为 `StrategyError`、回调计时与超限、`on_idle`（§7.4、§7.6）
 - [ ] task: python — `jarvis.Strategy` 基类、`jarvis.Node`、`jarvis.main()` 与命令行参数（§4.5）
 - [ ] task: python — `on_batch` 的列式只读 `nb::ndarray` 视图与 debug 代际检查

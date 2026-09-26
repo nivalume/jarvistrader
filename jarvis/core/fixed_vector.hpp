@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "jarvis/core/status.hpp"
@@ -15,11 +16,37 @@ template <typename T> class FixedVector {
 public:
   explicit FixedVector(std::size_t capacity) : capacity_{capacity} { items_.reserve(capacity); }
 
+  // Copies keep the full reservation, so a copy never reallocates later either.
+  FixedVector(const FixedVector& other) : capacity_{other.capacity_} {
+    items_.reserve(capacity_);
+    items_.assign(other.items_.begin(), other.items_.end());
+  }
+  FixedVector& operator=(const FixedVector& other) {
+    if (this != &other) {
+      std::vector<T> items;
+      items.reserve(other.capacity_);
+      items.assign(other.items_.begin(), other.items_.end());
+      items_ = std::move(items);
+      capacity_ = other.capacity_;
+    }
+    return *this;
+  }
+  FixedVector(FixedVector&&) noexcept = default;
+  FixedVector& operator=(FixedVector&&) noexcept = default;
+  ~FixedVector() = default;
+
   [[nodiscard]] Status push_back(const T& value) noexcept {
     if (items_.size() >= capacity_) {
       return Status::CapacityExceeded;
     }
     items_.push_back(value);
+    return Status::Ok;
+  }
+  [[nodiscard]] Status push_back(T&& value) noexcept {
+    if (items_.size() >= capacity_) {
+      return Status::CapacityExceeded;
+    }
+    items_.push_back(std::move(value));
     return Status::Ok;
   }
 

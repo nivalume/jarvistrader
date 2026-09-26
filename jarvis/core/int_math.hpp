@@ -133,4 +133,23 @@ struct U192 {
   return Status::Ok;
 }
 
+// floor(sqrt(v)), exact, by bitwise digit-by-digit extraction.
+[[nodiscard]] constexpr std::uint64_t isqrt(u128 v) noexcept {
+  u128 result = 0;
+  u128 bit = static_cast<u128>(1) << 126U;
+  while (bit > v) {
+    bit >>= 2U;
+  }
+  while (bit != 0) {
+    if (v >= result + bit) {
+      v -= result + bit;
+      result = (result >> 1U) + bit;
+    } else {
+      result >>= 1U;
+    }
+    bit >>= 2U;
+  }
+  return static_cast<std::uint64_t>(result);
+}
+
 } // namespace jarvis::core

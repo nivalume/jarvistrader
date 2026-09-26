@@ -130,6 +130,15 @@ Status EventLogWriter::append(const core::EventKey& key, const model::Event& eve
   return append_record(std::span<const std::byte>{scratch_.data(), written});
 }
 
+Status EventLogWriter::append_output(const core::EventKey& key, const model::Output& output) {
+  std::size_t written = 0;
+  const Status s = wire::encode_output_record(key, output, scratch_, written);
+  if (!core::ok(s)) {
+    return s;
+  }
+  return append_record(std::span<const std::byte>{scratch_.data(), written});
+}
+
 Status EventLogWriter::append_record(std::span<const std::byte> record) {
   if (fd_ < 0) {
     return Status::InvalidState;
@@ -249,6 +258,10 @@ Status EventLogReader::next(wire::RecordView& out) {
 
 Status EventLogReader::decode(const wire::RecordView& record, model::Event& out) {
   return wire::decode_event(record, scratch_, out);
+}
+
+Status EventLogReader::decode_output(const wire::RecordView& record, model::Output& out) {
+  return wire::decode_output(record, out);
 }
 
 } // namespace jarvis::node

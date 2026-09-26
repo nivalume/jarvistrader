@@ -208,6 +208,27 @@ std::string record_text(const wire::RecordHeader& header, const m::Event& event)
   return out;
 }
 
+void append_output_text(std::string& out, const m::Output& output) {
+  out += wire::kind_name(wire::kind_of(output));
+  std::visit(
+      [&out](const auto& o) {
+        auto copy = o;
+        m::fields(copy, FieldPrinter{&out});
+      },
+      output);
+}
+
+std::string record_text(const wire::RecordHeader& header, const m::Output& output) {
+  std::string out = std::to_string(header.seq);
+  out += ' ';
+  value(out, header.ts);
+  out += " out=";
+  out += std::to_string(header.source_id);
+  out += " => ";
+  append_output_text(out, output);
+  return out;
+}
+
 std::string header_text(const wire::LogHeader& header) {
   std::string out;
   const auto line = [&out](std::string_view key, std::string_view text) {

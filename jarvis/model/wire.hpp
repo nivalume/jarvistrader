@@ -24,6 +24,7 @@
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/outputs.hpp"
 #include "jarvis/model/schema.hpp"
 #include "jarvis/model/uuid.hpp"
 
@@ -84,6 +85,9 @@ enum class RecordKind : std::uint16_t {
   NodeLifecycle = 52,
   StrategyError = 53,
   Shutdown = 54,
+  // Kernel outputs.
+  FeatureUpdate = 0x8001,
+  StrategyRecord = 0x8002,
 };
 
 // Same order as the alternatives of model::Event.
@@ -126,6 +130,15 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 
 [[nodiscard]] constexpr RecordKind kind_of(const Event& event) noexcept {
   return kKindByAlternative[event.index()];
+}
+
+// Same order as the alternatives of model::Output.
+inline constexpr std::array<RecordKind, 2> kOutputKindByAlternative = {RecordKind::FeatureUpdate,
+                                                                       RecordKind::StrategyRecord};
+static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
+
+[[nodiscard]] constexpr RecordKind kind_of(const Output& output) noexcept {
+  return kOutputKindByAlternative[output.index()];
 }
 
 [[nodiscard]] constexpr std::string_view kind_name(RecordKind kind) noexcept {
@@ -196,6 +209,10 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
     return "StrategyError";
   case RecordKind::Shutdown:
     return "Shutdown";
+  case RecordKind::FeatureUpdate:
+    return "FeatureUpdate";
+  case RecordKind::StrategyRecord:
+    return "StrategyRecord";
   }
   return "";
 }
@@ -211,7 +228,18 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
   return false;
 }
 
-// True when `kind` is a record kind this build can decode.
+// The output RecordKind with wire code `code`, if this build knows it.
+[[nodiscard]] constexpr bool output_kind(std::uint16_t code, RecordKind& out) noexcept {
+  for (const RecordKind k : kOutputKindByAlternative) {
+    if (static_cast<std::uint16_t>(k) == code) {
+      out = k;
+      return true;
+    }
+  }
+  return false;
+}
+
+// True when `kind` is an input record kind this build can decode.
 [[nodiscard]] constexpr bool known_kind(std::uint16_t kind) noexcept {
   RecordKind k{RecordKind::TradeTick};
   return record_kind(kind, k);
@@ -789,6 +817,9 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::Shutdown:
     decode_as<Shutdown>(r, scratch, out);
     break;
+  case RecordKind::FeatureUpdate:
+  case RecordKind::StrategyRecord:
+    return core::Status::UnsupportedMessage; // outputs decode with decode_output
   }
   if (!r.ok()) {
     return r.status();
@@ -879,6 +910,52 @@ struct RecordView {
   }
   Reader r{record.payload};
   return get_event(kind, r, scratch, out);
+}
+
+// Encodes one kernel output as a record. `key` is that of the input that caused it, with
+// source_id set to the output's index within the step.
+[[nodiscard]] inline core::Status encode_output_record(const core::EventKey& key,
+                                                       const Output& output,
+                                                       std::span<std::byte> out,
+                                                       std::size_t& written) {
+  Writer w{out};
+  w.u64(key.seq);
+  w.u64(key.ts.value());
+  w.u16(key.source_id);
+  w.u16(static_cast<std::uint16_t>(kind_of(output)));
+  w.u32(0);
+  std::visit([&w](const auto& o) { put_fields(w, o); }, output);
+  if (!w.ok()) {
+    return core::Status::OutOfRange;
+  }
+  w.patch_u32(20, static_cast<std::uint32_t>(w.size() - kRecordHeaderSize));
+  w.u32(core::crc32c(w.written()));
+  if (!w.ok()) {
+    return core::Status::OutOfRange;
+  }
+  written = w.size();
+  return core::Status::Ok;
+}
+
+[[nodiscard]] inline core::Status decode_output(const RecordView& record, Output& out) {
+  RecordKind kind{RecordKind::FeatureUpdate};
+  if (!output_kind(record.header.kind, kind)) {
+    return core::Status::UnsupportedMessage;
+  }
+  Reader r{record.payload};
+  if (kind == RecordKind::FeatureUpdate) {
+    FeatureUpdate o{};
+    get_fields(r, o);
+    out = o;
+  } else {
+    StrategyRecord o{};
+    get_fields(r, o);
+    out = o;
+  }
+  if (!r.ok()) {
+    return r.status();
+  }
+  return r.remaining() == 0 ? core::Status::Ok : core::Status::InvalidArgument;
 }
 
 // ---- log header -----------------------------------------------------------------------------

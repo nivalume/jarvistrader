@@ -22,6 +22,7 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/outputs.hpp"
 #include "jarvis/model/position_events.hpp"
 #include "jarvis/node/event_text.hpp"
 
@@ -270,6 +271,28 @@ void bind_events(nb::module_& mod) {
   bind_struct<m::PositionAdjusted>(mod, "PositionAdjusted", "A position was adjusted.");
 
   bind_kernel(mod);
+
+  bind_struct<m::FeatureUpdate>(mod, "FeatureUpdate",
+                                "A kernel feature value (an output record keyed by its input).");
+  bind_struct<m::StrategyRecord>(mod, "StrategyRecord",
+                                 "A value a strategy recorded with ctx.record(tag, value).");
+}
+
+nb::object output_to_py(const m::Output& output) {
+  return std::visit([](const auto& o) -> nb::object { return nb::cast(o, nb::rv_policy::copy); },
+                    output);
+}
+
+bool output_from_py(nb::handle object, m::Output& out) {
+  if (nb::isinstance<m::FeatureUpdate>(object)) {
+    out = nb::cast<m::FeatureUpdate>(object);
+    return true;
+  }
+  if (nb::isinstance<m::StrategyRecord>(object)) {
+    out = nb::cast<m::StrategyRecord>(object);
+    return true;
+  }
+  return false;
 }
 
 nb::object event_to_py(const m::Event& event) {

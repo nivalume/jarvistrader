@@ -299,6 +299,17 @@ int cmd_dump(const Args& args) {
   jarvis::model::Event event;
   std::uint64_t count = 0;
   while (count < limit && jarvis::core::ok(s = reader.next(record))) {
+    if (record.header.kind >= wire::kFirstOutputKind) {
+      jarvis::model::Output output;
+      const Status o = node::EventLogReader::decode_output(record, output);
+      if (!jarvis::core::ok(o)) {
+        return failed("decode output seq=" + std::to_string(record.header.seq), o);
+      }
+      text += node::record_text(record.header, output);
+      text += '\n';
+      ++count;
+      continue;
+    }
     const Status d = reader.decode(record, event);
     if (!jarvis::core::ok(d)) {
       return failed("decode record seq=" + std::to_string(record.header.seq), d);

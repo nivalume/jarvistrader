@@ -31,6 +31,8 @@
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/fingerprint.hpp"
 #include "jarvis/node/model_text.hpp"
+#include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/strategy/context.hpp"
 #include "jarvis/testkit/property.hpp"
 
 namespace {
@@ -641,5 +643,113 @@ TEST_SUITE("property") {
         }
       }
     });
+  }
+}
+
+namespace {
+
+// Registered strategies for the registry tests: one built by S::create, one by constructor.
+struct SizedStrategy {
+  std::int64_t levels = 0;
+  m::Decimal size;
+  bool started = false;
+
+  static Status create(const node::StrategyParams& params, SizedStrategy& out) {
+    Status s = params.get_or<std::int64_t>("levels", 1, out.levels);
+    if (!jarvis::core::ok(s)) {
+      return s;
+    }
+    return params.get("size", out.size);
+  }
+  void on_start(jarvis::strategy::Context& /*ctx*/) { started = true; }
+};
+
+struct PlainStrategy {
+  std::string id;
+  explicit PlainStrategy(const node::StrategyParams& params) : id{params.id()} {}
+};
+
+JARVIS_REGISTER_STRATEGY(SizedStrategy, "test.Sized");
+JARVIS_REGISTER_STRATEGY(PlainStrategy, "test.Plain");
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("registered native strategies are created from their parameters") {
+    node::NodeConfig c;
+    REQUIRE(parse(R"toml(
+[node]
+id = "mm01"
+
+[[strategies]]
+id = "sized-001"
+impl = "cpp:test.Sized"
+params = { levels = 3, size = "0.010", flag = true }
+
+[[strategies]]
+id = "sized-002"
+impl = "cpp:test.Sized"
+params = { size = 2 }
+
+[[strategies]]
+id = "sized-003"
+impl = "cpp:test.Sized"
+params = { size = true }
+)toml",
+                  c)
+                .empty());
+    REQUIRE(c.strategies.size() == 3);
+    const auto& registry = node::StrategyRegistry::instance();
+    const auto names = registry.names();
+    CHECK(std::ranges::find(names, "test.Sized") != names.end());
+    CHECK(std::ranges::find(names, "test.Plain") != names.end());
+
+    node::NativeStrategy first;
+    REQUIRE(registry.create("test.Sized", node::StrategyParams{c.strategies[0]}, first) ==
+            Status::Ok);
+    REQUIRE(static_cast<bool>(first));
+    CHECK(first.name() == "test.Sized");
+    const auto* sized = static_cast<const SizedStrategy*>(first.self());
+    CHECK(sized->levels == 3);
+    CHECK(sized->size.raw() == 10'000'000);
+
+    node::NativeStrategy second;
+    REQUIRE(registry.create("test.Sized", node::StrategyParams{c.strategies[1]}, second) ==
+            Status::Ok);
+    CHECK(static_cast<const SizedStrategy*>(second.self())->levels == 1);
+    CHECK(static_cast<const SizedStrategy*>(second.self())->size.raw() == 2'000'000'000);
+
+    node::NativeStrategy third;
+    CHECK(registry.create("test.Sized", node::StrategyParams{c.strategies[2]}, third) ==
+          Status::InvalidArgument);
+    CHECK_FALSE(static_cast<bool>(third));
+
+    node::NativeStrategy plain;
+    REQUIRE(registry.create("test.Plain", node::StrategyParams{c.strategies[1]}, plain) ==
+            Status::Ok);
+    CHECK(static_cast<const PlainStrategy*>(plain.self())->id == "sized-002");
+
+    node::NativeStrategy missing;
+    CHECK(registry.create("test.Missing", node::StrategyParams{c.strategies[0]}, missing) ==
+          Status::NotFound);
+
+    // The function table drives the instance, as the engine does through DynamicStrategySet.
+    jarvis::strategy::DynamicStrategySet set{2};
+    REQUIRE(first.add_to(set) == Status::Ok);
+    jarvis::strategy::KernelServices services{jarvis::strategy::KernelConfig{}};
+    jarvis::strategy::Context ctx{services, 0};
+    CHECK(set.on_start(0, ctx) == Status::Ok);
+    CHECK(sized->started);
+  }
+
+  // Runs last in this binary: it leaves a duplicate registration behind.
+  TEST_CASE("duplicate strategy names are reported, not replaced") {
+    auto& registry = node::StrategyRegistry::instance();
+    std::string detail;
+    CHECK(registry.check(detail) == Status::Ok);
+    CHECK_FALSE(node::register_strategy<PlainStrategy>("test.Sized"));
+    CHECK(registry.check(detail) == Status::AlreadyExists);
+    CHECK(detail.find("test.Sized") != std::string::npos);
+    CHECK(registry.find("test.Sized") != nullptr);
   }
 }

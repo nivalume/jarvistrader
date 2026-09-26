@@ -7,6 +7,7 @@
 #include "jarvis/model/account.hpp"
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/outputs.hpp"
 
 namespace jarvis::py {
 
@@ -37,5 +38,10 @@ nanobind::object event_to_py(const model::Event& event);
 // The model event behind a Python event object; spans point into `holder`, which must outlive
 // the returned event. Raises TypeError for objects that are not events.
 model::Event event_from_py(nanobind::handle object, nanobind::object& holder);
+
+// Kernel outputs (FeatureUpdate, StrategyRecord) as Python objects and back.
+nanobind::object output_to_py(const model::Output& output);
+// True and sets `out` when `object` is a kernel output; false for anything else.
+bool output_from_py(nanobind::handle object, model::Output& out);
 
 } // namespace jarvis::py

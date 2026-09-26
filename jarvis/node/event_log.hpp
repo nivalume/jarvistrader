@@ -9,6 +9,7 @@
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
 
 namespace jarvis::node {
@@ -35,6 +36,8 @@ public:
                                   const model::wire::LogHeader& header,
                                   EventLogOptions options = {});
   [[nodiscard]] core::Status append(const core::EventKey& key, const model::Event& event);
+  // Appends a kernel output; `key` is the causing input's key with source_id = output index.
+  [[nodiscard]] core::Status append_output(const core::EventKey& key, const model::Output& output);
   // Appends an already encoded record (as produced by model::wire::encode_record).
   [[nodiscard]] core::Status append_record(std::span<const std::byte> record);
   [[nodiscard]] core::Status flush();
@@ -66,6 +69,9 @@ public:
   [[nodiscard]] core::Status next(model::wire::RecordView& out);
   // Decodes the record most recently returned by next().
   [[nodiscard]] core::Status decode(const model::wire::RecordView& record, model::Event& out);
+  // Decodes an output record (kind >= model::wire::kFirstOutputKind).
+  [[nodiscard]] static core::Status decode_output(const model::wire::RecordView& record,
+                                                  model::Output& out);
 
 private:
   [[nodiscard]] core::Status load_segment(std::size_t index);

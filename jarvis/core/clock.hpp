@@ -109,6 +109,21 @@ public:
     return false;
   }
 
+  // The next live timer (earliest deadline, then schedule order) without firing it.
+  [[nodiscard]] bool peek(FiredTimer& out) noexcept {
+    while (!heap_.empty()) {
+      const auto& top = heap_.top();
+      const Slot* slot = slots_.get(top.payload.handle);
+      if (slot != nullptr && slot->armed_seq == top.key.seq) {
+        out = FiredTimer{top.payload.handle, slot->key, top.key.ts};
+        return true;
+      }
+      PriorityQueue<Entry>::Entry discarded;
+      static_cast<void>(heap_.pop(discarded));
+    }
+    return false;
+  }
+
   [[nodiscard]] std::optional<UnixNanos> next_deadline() noexcept {
     while (!heap_.empty()) {
       const auto& top = heap_.top();

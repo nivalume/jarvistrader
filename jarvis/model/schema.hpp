@@ -10,6 +10,7 @@
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/outputs.hpp"
 #include "jarvis/model/position_events.hpp"
 
 // Field descriptors of the model structs: `fields(value, f)` calls `f(name, field)` for every
@@ -260,6 +261,17 @@ template <typename F> constexpr void fields(StrategyError& e, F&& f) {
 }
 template <typename F> constexpr void fields(Shutdown& e, F&& f) {
   f("mode", e.mode), f("ts_init", e.ts_init);
+}
+
+// ---- kernel outputs ------------------------------------------------------------------------
+
+template <typename F> constexpr void fields(FeatureUpdate& e, F&& f) {
+  f("feature_id", e.feature_id), f("value", e.value), f("ts_event", e.ts_event),
+      f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(StrategyRecord& e, F&& f) {
+  f("strategy_index", e.strategy_index), f("tag", e.tag), f("value", e.value),
+      f("ts_init", e.ts_init);
 }
 
 // NOLINTEND(readability-function-cognitive-complexity)

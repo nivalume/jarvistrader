@@ -163,6 +163,7 @@ add_library(
   jarvis/node/config.cpp
   jarvis/node/epoch_store.cpp
   jarvis/node/toml_impl.cpp
+  jarvis/node/strategy_registry.cpp
 )
 add_library(jarvis::shell ALIAS jarvis_shell)
 target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)

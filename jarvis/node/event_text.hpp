@@ -3,6 +3,7 @@
 #include <string>
 
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
 
 namespace jarvis::node {
@@ -17,6 +18,10 @@ namespace jarvis::node {
 void append_event_text(std::string& out, const model::Event& event);
 [[nodiscard]] std::string record_text(const model::wire::RecordHeader& header,
                                       const model::Event& event);
+void append_output_text(std::string& out, const model::Output& output);
+// Output lines are marked with "=>": "<seq> <ts> out=<index> => <Kind> ...".
+[[nodiscard]] std::string record_text(const model::wire::RecordHeader& header,
+                                      const model::Output& output);
 // One "# key: value" line per header field.
 [[nodiscard]] std::string header_text(const model::wire::LogHeader& header);
 

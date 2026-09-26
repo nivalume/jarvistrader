@@ -193,4 +193,18 @@ using Event =
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown>;
 
+// ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
+// may throw bad_variant_access, which cannot happen for these types.
+[[nodiscard]] constexpr core::UnixNanos ts_init_of(const Event& event) {
+  return std::visit(
+      [](const auto& e) -> core::UnixNanos {
+        if constexpr (requires { e.ts_init; }) {
+          return e.ts_init;
+        } else {
+          return e.header.ts_init;
+        }
+      },
+      event);
+}
+
 } // namespace jarvis::model

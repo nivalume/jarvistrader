@@ -43,6 +43,13 @@ Status next_selected(EventLogReader& reader, RecordFilter filter, wire::RecordVi
 }
 
 std::string describe(EventLogReader& reader, const wire::RecordView& record) {
+  if (record.header.kind >= wire::kFirstOutputKind) {
+    model::Output output;
+    const Status s = EventLogReader::decode_output(record, output);
+    if (core::ok(s)) {
+      return record_text(record.header, output);
+    }
+  }
   model::Event event;
   const Status s = reader.decode(record, event);
   if (!core::ok(s)) {

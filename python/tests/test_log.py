@@ -67,3 +67,32 @@ def test_errors(tmp_path: Path) -> None:
         log.EventLogReader(str(tmp_path))
     with pytest.raises(ValueError):
         log.fingerprint(str(directory), "everything")
+
+
+def test_output_records_round_trip(tmp_path: Path) -> None:
+    from decimal import Decimal
+
+    directory = tmp_path / "out"
+    trade = m.TradeTick(
+        instrument_id=m.InstrumentId.from_str("BTCUSDT-PERP.BINANCE"),
+        price=m.Price("65000.1"),
+        size=m.Quantity("0.010"),
+        aggressor_side=m.AggressorSide.BUY,
+        trade_id=m.TradeId("1"),
+        ts_event=100,
+        ts_init=100,
+    )
+    feature = m.FeatureUpdate(feature_id=3, value=Decimal("1.25"), ts_event=100, ts_init=100)
+    record = m.StrategyRecord(strategy_index=1, tag="mid", value=Decimal("-0.5"), ts_init=100)
+    with log.EventLogWriter(str(directory)) as writer:
+        writer.append(trade, seq=1, ts=100)
+        writer.append(feature, seq=1, ts=100, source_id=0)
+        writer.append(record, seq=1, ts=100, source_id=1)
+    records = list(log.read(str(directory)))
+    assert [r.kind for r in records] == ["TradeTick", "FeatureUpdate", "StrategyRecord"]
+    assert [r.is_output for r in records] == [False, True, True]
+    assert records[1].event == feature
+    assert records[2].event == record
+    assert records[2].event.tag == "mid"
+    assert log.fingerprint(str(directory), "inputs")[1] == 1
+    assert log.fingerprint(str(directory), "outputs")[1] == 2

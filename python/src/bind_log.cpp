@@ -42,6 +42,7 @@ struct PyRecord {
   std::uint16_t source_id = 0;
   std::string kind;
   nb::object event;
+  bool is_output = false;
 };
 
 template <std::size_t N> void set_text(core::FixedString<N>& out, std::string_view text) {
@@ -137,13 +138,20 @@ void bind_log(nb::module_& mod) {
           "append",
           [](PyLogWriter& self, nb::handle event, std::uint64_t seq, std::uint64_t ts,
              std::uint16_t source_id) {
+            const core::EventKey key{core::UnixNanos{ts}, source_id, seq};
+            m::Output output;
+            if (output_from_py(event, output)) {
+              check(self.writer.append_output(key, output), "EventLogWriter.append");
+              return;
+            }
             nb::object holder;
             const m::Event e = event_from_py(event, holder);
-            check(self.writer.append(core::EventKey{core::UnixNanos{ts}, source_id, seq}, e),
-                  "EventLogWriter.append");
+            check(self.writer.append(key, e), "EventLogWriter.append");
           },
           nb::arg("event"), nb::kw_only(), nb::arg("seq"), nb::arg("ts"), nb::arg("source_id") = 0,
-          "Appends `event` under the order key (ts, source_id, seq).")
+          "Appends an input event, or a kernel output (FeatureUpdate, StrategyRecord), under the "
+          "order key (ts, source_id, seq). An output's key is its causing input's seq and ts, "
+          "with source_id = the output's index within that step.")
       .def("flush", [](PyLogWriter& self) { check(self.writer.flush(), "EventLogWriter.flush"); })
       .def("close", [](PyLogWriter& self) { check(self.writer.close(), "EventLogWriter.close"); })
       .def_prop_ro("records", [](const PyLogWriter& self) { return self.writer.records(); })
@@ -162,6 +170,7 @@ void bind_log(nb::module_& mod) {
       .def_ro("source_id", &PyRecord::source_id)
       .def_ro("kind", &PyRecord::kind)
       .def_ro("event", &PyRecord::event)
+      .def_ro("is_output", &PyRecord::is_output)
       .def("__repr__", [](const PyRecord& r) {
         return "Record(seq=" + std::to_string(r.seq) + ", ts=" + std::to_string(r.ts) +
                ", source_id=" + std::to_string(r.source_id) + ", kind='" + r.kind + "')";
@@ -185,10 +194,19 @@ void bind_log(nb::module_& mod) {
           throw nb::stop_iteration();
         }
         check(s, "EventLogReader");
+        if (record.header.kind >= wire::kFirstOutputKind) {
+          m::Output output;
+          check(node::EventLogReader::decode_output(record, output), "EventLogReader.decode");
+          return PyRecord{
+              record.header.seq,       record.header.ts.value(),
+              record.header.source_id, std::string{wire::kind_name(wire::kind_of(output))},
+              output_to_py(output),    true};
+        }
         m::Event event;
         check(self.reader.decode(record, event), "EventLogReader.decode");
-        return PyRecord{record.header.seq, record.header.ts.value(), record.header.source_id,
-                        std::string{wire::kind_name(wire::kind_of(event))}, event_to_py(event)};
+        return PyRecord{record.header.seq,       record.header.ts.value(),
+                        record.header.source_id, std::string{wire::kind_name(wire::kind_of(event))},
+                        event_to_py(event),      false};
       });
 
   mod.def(

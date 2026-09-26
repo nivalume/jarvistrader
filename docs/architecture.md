@@ -586,20 +586,23 @@ jarvis 采用 nautilus 的 standard precision 模式。
 
 ### 7.2 路由
 
-`Router` 由封闭的 `Event` variant 与 `SubscriptionMatrix` 组成。`SubscriptionMatrix` 以 `(instrument_slot, EventKind)` 为下标，值是一个 `FixedVector<StrategyIdx>`。投递是一次数组访问加一次按固定顺序的遍历，没有字符串、哈希或内存分配，投递顺序在回放中不变。
+路由由封闭的 `Event` variant（`jarvis/data/router.hpp` 的 `route_of`）与 `SubscriptionMatrix`（`jarvis/data/subscription.hpp`）组成。矩阵的行是 instrument slot、bar 类型 slot 或 feature slot，列是 `DataKind`（12 种），每个单元是按订阅顺序排列的 `Subscriber{ strategy, cadence }`，单元容量为策略数。投递是一次数组访问加一次按固定顺序的遍历，没有字符串、哈希或内存分配，投递顺序在回放中不变。
 
-订阅是类型化的 `Subscription{ slot, kind, cadence }`，在 `on_start` 中声明，也可以在运行中增删；增删本身发生在 `step` 内，因此可回放。
+订阅在 `on_start` 中声明，也可以在运行中增删；增删本身发生在 `step` 内，因此可回放。同一策略对同一单元再次订阅只改变节奏，不产生第二个条目。
+
+一个 `step` 内的投递顺序固定：成交先投递给它的订阅者，再更新它驱动的特征并投递 `FeatureUpdate`，最后是它完成的 bar。同一单元的订阅者先全部收集再依次调用，所以回调里的订阅增删影响下一次投递，不影响当前这次。
 
 ### 7.3 StrategySet：静态与动态分发
 
-`Engine<SS>` 以 `StrategySet` concept 为参数，该 concept 只要求 `Status dispatch(Context&, const Event&)`。
+`Engine<SS>`（`jarvis/engine/engine.hpp`）以 `StrategySet` concept 为参数。该 concept 按 `StrategyIndex` 调用六个入口：`on_start`、`on_stop`、`on_data(DataView)`、`on_batch(BatchView)`、`on_timer`、`on_error`，都返回 `Status`。`DataView` 是指向已投递数据的 const 指针 variant，引擎不为投递拷贝数据。策略类型只需是可移动的类，每个回调都可选；缺失的回调在编译期解析为空操作。
 
 | 实现 | 用于 | 分发方式 |
 | --- | --- | --- |
 | `StaticStrategySet<S...>` | 纯 C++ 节点，`node_main<S>` | 编译期展开，完全内联 |
-| `DynamicStrategySet<PyStrategyHost>` | Python 启动的混合节点 | `FixedVector<std::variant<NativeBox, PyStrategyHost>>`；`NativeBox{ void* self; const StrategyVTable* vt; }` |
+| `DynamicStrategySet` | Python 启动的混合节点 | `FixedVector<Entry{ void* self; const StrategyVTable* vtable; }>`；Python 策略由 `PyStrategyHost` 提供自己的函数表 |
 
-- `StrategyVTable` 是由 `make_vtable<S>()` 生成的纯函数指针结构体。C++ 策略通过 `JARVIS_REGISTER_STRATEGY(Name, Type)` 在 `jarvis_shell` 中按名注册，Python 侧用 `node.add_native_strategy("Name", params)` 加入。
+- `StrategyVTable` 是由 `make_vtable<S>()` 生成的纯函数指针结构体，每个类型一份（`kVTable<S>`）。
+- C++ 策略在自己的翻译单元里用 `JARVIS_REGISTER_STRATEGY(Type, "Name")` 按名注册（`jarvis/node/strategy_registry.hpp`），配置写 `impl = "cpp:Name"`，Python 侧用 `node.add_native_strategy("Name", params)`。创建时依次尝试 `static Status Type::create(const StrategyParams&, Type&)`、构造函数 `Type(const StrategyParams&)`、默认构造。`StrategyParams` 是该 `[[strategies]]` 条目的只读视图，按键取类型化参数。重名注册不会覆盖，节点启动时报错。注册发生在静态初始化期，所以该翻译单元必须直接链接进可执行文件或共享库。
 - Python 节点的策略集合在编译期不可知，每次回调一次间接调用不可避免。它的代价约 1–2 ns，相对于至少 1 µs 的 Python 回调可以忽略。这是 C++ 子集规范中唯一被批准的间接分发，`docs/cpp-subset.md` 需要补一条例外说明（plan.md M0）。
 - 纯 C++ 节点不链接 Python，也不承担间接调用。
 - 两种策略集实例化同一个 `Engine<>` 模板，所以内核测试、基准与规约映射同时覆盖两者。
@@ -616,8 +619,8 @@ jarvis 采用 nautilus 的 standard precision 模式。
 
 | 机制 | 作用 |
 | --- | --- |
-| 订阅节奏 `Cadence` | `Every`（逐条）、`Conflated`（每批只投递最新状态）、`SampledNs(p)`（按周期采样）、`OnBatch`（每批一次）。批次边界是记录事件，回放按同样的边界合并 |
-| 内核特征图 `FeatureGraph` | EMA、VWAP、盘口失衡、microprice、实现波动率、bar 聚合等，在 `jarvis/data/features` 中以定点实现，满足 `Indicator` concept。策略在 `on_start` 中声明，声明进入配置 hash；在 `step` 内计算，以 `FeatureUpdate` 事件按所选节奏投递 |
+| 订阅节奏 `Cadence` | `Every`：逐条投递。`Conflated`：在 `BatchEnd` 只投递该单元本批最新的值（盘口投递最新的簿视图）。`Sampled(p)`：投递每个周期内的第一条更新，周期按 `ts_init / p` 对齐到 Unix 纪元，与启动时间无关。`OnBatch`：缓冲到 `BatchEnd`，经 `on_trade_batch`/`on_quote_batch` 一次交付；缓冲满时先交付已缓冲部分再继续，这一行为同样确定。批次边界是记录事件，回放按同样的边界合并 |
+| 内核特征图 `FeatureGraph` | EMA、VWAP（窗口）、盘口失衡、microprice、实现波动率，在 `jarvis/data/features.hpp` 中以定点实现；bar 聚合（tick、volume、时间 bar）在 `jarvis/data/bars.hpp`，时间 bar 由内核定时器收盘。策略在 `on_start` 中声明，相同声明共享一个特征。声明发生在 `step` 内并随输入回放，所以不进入配置 hash。特征在 `step` 内计算，以 `FeatureUpdate` 按所选节奏投递，投递的值同时写入日志作为输出记录 |
 | 批量回调 `on_batch` | 以列式（`ts`、`price_raw`、`size_raw`、`side`）只读 `nb::ndarray` 视图交付一批事件，视图只在回调期间有效，debug 构建用代际计数检查视图是否逃逸 |
 | 单事件拷贝 | 单个事件以 48–64 字节的 POD 按值拷贝给 Python，比创建视图加引用计数更便宜 |
 
@@ -626,6 +629,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 ### 7.6 异常与超时
 
 - `PyStrategyHost` 捕获 Python 异常，截断格式化到 4 KiB，产生记录事件 `StrategyError{ strategy_id, kind = Exception, hash }`。`risk.on_strategy_error` 决定后果：撤掉该策略的订单并停用该策略（默认）、停止整个节点，或忽略。
+- C++ 回调返回非 `Ok` 的 `Status` 走同一路径：引擎在 `step` 内记下 `StrategyFailure`（每个策略只记第一次，`hash` 为 Status 名的 FNV-1a），节点把它转成下一条输入 `StrategyError` 并写入日志，处置在该输入的 `step` 中执行。
 - 回放时 `StrategyError` 从日志读取，不重新抛出。回放中如果 Python 在该 `seq` 没有抛异常，视为偏差。
 - 超时不抢占。Node 在 `step` 之外测量回调耗时，超过 `callback_budget_us` 记为遥测；连续 `overrun_limit` 次超限产生 `StrategyError{ kind = Overrun }`，按同一策略处置。测量本身不确定，但它的后果是事件，`step` 仍然是纯函数。
 
@@ -1178,7 +1182,8 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - `payload` 按 `kind` 有固定布局；变长类型（如 `OrderBookDeltas`）为定长头加定长元素数组。
 - 每个模型结构体的字段顺序与名称只在一处定义：`jarvis/model/schema.hpp` 中的 `fields(value, f)`。日志编码与解码（`jarvis/model/wire.hpp`）、`jarvis dump` 的文本、Python 绑定的属性名都由它生成，所以三者不会分叉。记录 `kind` 码一经发布不再改变；输入使用 1 到 0x7FFF，内核输出（命令）使用 0x8000 以上。
 - `jarvis fingerprint <dir>` 对选中记录的完整字节（含头与 CRC，不含日志头）求 SHA-256；`--compare A B` 逐条比较并打印第一处差异。CI 的 determinism job 与 `just fp` 用它比较 Release 与 `-O0` 构建写出的语料日志（`tools/fingerprint_gate.sh`）。
-- 输入事件与内核输出的命令都写入日志，输出记录携带引起它的输入的 `seq`。回放以输入重算，以输出比对。
+- 输入事件与内核输出都写入日志。M2 的输出是 `FeatureUpdate`（0x8001，投递给至少一个订阅者的特征值）与 `StrategyRecord`（0x8002，策略用 `ctx.record(tag, value)` 记下的值，是不交易策略的可回放输出）；命令从 M3 起加入。输出记录的键取自引起它的输入：`seq` 与 `ts` 等于该输入，`source_id` 是这次 `step` 内的输出序号，所以输出紧跟在它的输入之后。回放以输入重算，以输出比对。
+- 定时器触发与批次边界也是输入。节点在喂下一条输入前查看引擎最早的定时器（`next_timer`），到期则先合成 `TimerFired` 并记录；`step` 弹出定时器时核对键与期限，不一致即为偏差（`InvalidState`）。回放直接读取这些记录，不再合成。
 - 原始帧文件另存（第 13.4 节）。
 
 提议（Proposed）：用 SBE XML 定义日志记录 schema，其他语言的读取器由代码生成而不是手写。
