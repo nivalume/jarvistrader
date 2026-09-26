@@ -308,3 +308,64 @@ def test_unknown_native_strategies_are_reported(tmp_path: Path) -> None:
     node = Node(_config(tmp_path), out=tmp_path / "run").add_native_strategy("NoSuchThing")
     with pytest.raises(ValueError, match="no C\\+\\+ strategy named 'NoSuchThing'"):
         node.run()
+
+
+class Nondeterministic(Strategy):
+    """Calls one forbidden function (chosen by params['call']) on the first trade."""
+
+    def on_start(self, ctx: jarvis.Context) -> None:
+        ctx.subscribe_trades(IID)
+
+    def on_trade(self, ctx: jarvis.Context, trade: m.TradeTick) -> None:
+        import datetime
+        import random
+        import uuid
+
+        {
+            "random": random.random,
+            "uuid4": uuid.uuid4,
+            "datetime.now": datetime.datetime.now,
+            "monotonic": time.monotonic,
+        }[self.params["call"]]()
+
+
+@pytest.mark.parametrize("call", ["random", "uuid4", "datetime.now", "monotonic"])
+def test_the_guard_refuses_nondeterministic_calls(
+    tmp_path: Path, call: str, capfd: pytest.CaptureFixture[str]
+) -> None:
+    strategy = Nondeterministic({"call": call})
+    result = Node(_config(tmp_path), out=tmp_path / "run").add_strategy(strategy).run()
+    assert result.strategy_errors == 1
+    assert "NondeterminismError" in capfd.readouterr().err
+
+
+def test_strict_determinism_off_lets_the_calls_through(tmp_path: Path) -> None:
+    config = _config(tmp_path, extra="")
+    text = config.read_text().replace('seed = 11', 'seed = 11\nstrict_determinism = false')
+    config.write_text(text)
+    result = Node(config, out=tmp_path / "run").add_strategy(Nondeterministic({"call": "random"})).run()
+    assert result.strategy_errors == 0
+
+
+def test_replaying_twice_gives_the_same_report(tmp_path: Path) -> None:
+    result = Node(_config(tmp_path, ENTRY), out=tmp_path / "run").add_strategy(Recorder({"timer_s": 4})).run()
+    reports = [
+        Node.from_run(result.directory).add_strategy(Recorder({"timer_s": 4})).replay(dump_state=True)
+        for _ in range(2)
+    ]
+    assert reports[0] == reports[1]
+    assert reports[0].divergence is None
+    assert "features 1" in reports[0].state
+
+
+def test_rng_draws_depend_only_on_the_inputs(tmp_path: Path) -> None:
+    config = _config(tmp_path, ENTRY)
+    runs = [
+        Node(config, out=tmp_path / f"r{i}").add_strategy(Recorder({"timer_s": 4})).run()
+        for i in range(2)
+    ]
+    draws = [
+        [r.event.value for r in log.read(run.directory) if r.kind == "StrategyRecord" and r.event.tag == "rng"]
+        for run in runs
+    ]
+    assert draws[0] == draws[1] and len(draws[0]) == runs[0].timers

@@ -1,0 +1,33 @@
+# Backtest of the trade logger examples over a data catalog written by
+#   python -m jarvis.data binance-vision aggTrades --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+#   python -m jarvis.data binance-vision bookTicker --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+# Point data.catalog and data.range elsewhere with --set.
+
+[node]
+id = "tlog01"
+env = "backtest"
+seed = 1
+
+[data]
+catalog = "catalog"
+range = { start = "2024-03-30T00:00:00Z", end = "2024-03-31T00:00:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+# node_main<TradeLogger> builds the C++ twin from the same entry, so both examples share one
+# configuration (and one config hash).
+[[strategies]]
+id = "tlog-001"
+impl = "py:TradeLogger"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+params = { instrument = "BTCUSDT-PERP.BINANCE", sample_ms = 1000, window_s = 60 }
+
+[persistence]
+dir = "runs/{node_id}/{run_id}"

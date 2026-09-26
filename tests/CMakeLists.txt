@@ -61,6 +61,15 @@ if(NOT TARGET jarvis_cli)
   message(FATAL_ERROR "JARVIS_BUILD_TESTS needs JARVIS_BUILD_CLI for the golden cases")
 endif()
 add_dependencies(jarvis_tests jarvis_cli)
+
+# The node the golden replay cases run (tests/golden/replay_*).
+add_executable(golden_node cpp/golden_node.cpp)
+target_link_libraries(golden_node PRIVATE jarvis::shell)
+set_target_properties(golden_node PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_dependencies(jarvis_tests golden_node)
+if(TARGET trade_logger)
+  add_dependencies(jarvis_tests trade_logger)
+endif()
 add_test(
   NAME golden.all
   COMMAND "${Python_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/golden.py"

@@ -1,0 +1,22 @@
+# Golden replay case "book": L2 deltas as received and the book sampled every 10 s (best bid and ask).
+[node]
+id = "golden"
+seed = 3
+
+[data]
+catalog = "catalog"  # replaced with --set by case.toml
+range = { start = "2026-09-01T00:00:00Z", end = "2026-09-01T00:10:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker", "depth", "kline_1m"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[[strategies]]
+id = "golden-001"
+impl = "cpp:GoldenStrategy"
+params = { plan = "book" }

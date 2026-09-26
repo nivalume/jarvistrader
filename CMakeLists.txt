@@ -34,6 +34,7 @@ option(JARVIS_BUILD_TESTS "Configure the C++ test scaffold" ${PROJECT_IS_TOP_LEV
 option(JARVIS_BUILD_BENCHMARKS "Configure the benchmark scaffold" OFF)
 option(JARVIS_BUILD_CLI "Build the jarvis command-line tool" ${PROJECT_IS_TOP_LEVEL})
 option(JARVIS_BUILD_LIVE "Build live-trading shell components (network stack, venue adapters)" OFF)
+option(JARVIS_BUILD_EXAMPLES "Build the example strategies" ${PROJECT_IS_TOP_LEVEL})
 option(JARVIS_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(JARVIS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(JARVIS_ENABLE_FUZZ "Build libFuzzer targets (Clang only)" OFF)
@@ -194,8 +195,11 @@ target_link_libraries(jarvis_testkit INTERFACE jarvis::strict)
 if(JARVIS_BUILD_PYTHON)
   find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
   jarvis_add_nanobind()
+  # NOMINSIZE: nanobind builds with -Os by default; the kernel templates instantiated here (the
+  # engine and the backtest driver behind jarvis.Node) run at -O3 like the rest of the build.
   nanobind_add_module(
     _core
+    NOMINSIZE
     python/src/bindings.cpp
     python/src/bind_values.cpp
     python/src/bind_events.cpp
@@ -211,6 +215,10 @@ if(JARVIS_BUILD_PYTHON)
   )
   target_link_libraries(_core PRIVATE jarvis::shell)
   install(TARGETS _core LIBRARY DESTINATION jarvis RUNTIME DESTINATION jarvis)
+endif()
+
+if(JARVIS_BUILD_EXAMPLES)
+  add_subdirectory(examples)
 endif()
 
 if(JARVIS_BUILD_TESTS)

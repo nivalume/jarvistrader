@@ -1,0 +1,14 @@
+# Trades per batch (Cadence.ON_BATCH): the size of each delivered batch.
+# The run log (every input with its outputs) must match byte for byte, and replaying it must
+# reproduce every output (golden_node --replay exits 3 on a divergence).
+commands = [
+  ["{bin}/bin/golden_node", "catalog", "--seed", "7", "--out", "{out}/catalog"],
+  ["{bin}/bin/golden_node", "--config", "{case}/node.toml", "--set", "data.catalog={out}/catalog",
+   "--out", "{out}/run"],
+  ["{bin}/bin/jarvis", "dump", "{out}/run", "--no-header", "--out", "{out}/run.txt"],
+  ["{bin}/bin/golden_node", "--replay", "{out}/run"],
+]
+
+[[compare]]
+produced = "run.txt"
+expected = "expected.run.txt"

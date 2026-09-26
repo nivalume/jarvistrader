@@ -77,12 +77,14 @@
 - [x] task: python — 数据转换器：data.binance.vision 的 aggTrades、bookTicker、klines、markPrice 转为解码事件日志
 - [x] task: python — 数据转换器：nautilus Parquet 目录与解码事件日志双向转换（pyarrow，§16.5）
 - [x] task: tools — `jarvis replay`（`--until`、`--dump-state`）与回放偏差检测 `ReplayDivergence`
-- [ ] task: examples — `examples/py/trade_logger.py` 与 `examples/cpp/trade_logger.cpp`：订阅 trade 与 quote，只记录不下单
-- [ ] task: harness — golden 回放一致性用例：trade、quote、book、bar、feature
-- [ ] task: harness — 零分配门覆盖 `step` 全路径
-- [ ] task: harness — 热基准 `step/trade_to_strategy`、`book/apply_l2_delta`、`py/callback_on_quote`，并用实测值更新 architecture §7.8
-- [ ] task: harness — Python 确定性测试：同一日志回放两次，命令流与策略输出逐字节一致；确定性守卫拦截墙钟与随机数调用
-- [ ] task: 验收 — `python examples/py/trade_logger.py --env backtest` 在一天的 BTCUSDT-PERP 数据上跑通，rel 与 det-o0 指纹一致
+- [x] task: examples — `examples/py/trade_logger.py` 与 `examples/cpp/trade_logger.cpp`：订阅 trade 与 quote，只记录不下单；两者对同一数据写出逐字节相同的运行日志（`python/tests/test_examples.py`）
+- [x] task: harness — golden 回放一致性用例：trade、quote、book、bar、feature（另有 batch 与 C++ 示例；`tests/golden/replay_*`、`tests/golden/example_trade_logger`）
+- [x] task: harness — 零分配门覆盖 `step` 全路径
+- [x] task: harness — 热基准 `step/trade_to_strategy`、`book/apply_l2_delta`、`py/callback_on_quote`，并用实测值更新 architecture §7.8（`py/*` 为只报告基准：A/B 门禁作业不构建 Python）
+- [x] task: harness — Python 确定性测试：同一日志回放两次，命令流与策略输出逐字节一致；确定性守卫拦截墙钟与随机数调用
+- [x] task: 验收 — `python examples/py/trade_logger.py --env backtest` 在一天的 BTCUSDT-PERP 数据上跑通，rel 与 det-o0 指纹一致
+
+M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（data.binance.vision 的 aggTrades 57 万条、bookTicker 740 万条；该站的 USDⓈ-M bookTicker 归档只发布到 2024 年春季）经 `jarvis.data` 转换后，由 Python 与 C++ 两个 trade logger 示例分别在 Release 与 `-O0` 构建下回测。四份运行日志逐字节相同（12,658,983 条记录，1257 万条输入、8.9 万条输出），Python 运行回放无偏差。
 
 ## M3 执行、模拟撮合、风控、组合与成本，规约 a/c/d（回测完整可用）
 

@@ -655,15 +655,21 @@ Python 代码运行在 `step` 之内，所以 ADR 0001 的纯函数约束同样�
 
 ### 7.8 性能预算与何时改用 C++
 
-| 项目 | 估计值 |
-| --- | --- |
-| C++ 到 Python 的一次回调（POD 参数）的开销 | 0.5–1 µs |
-| 最简单的 `on_quote` | 1–3 µs |
-| 计算并提交或修改订单的回调 | 5–20 µs，每次 `ctx.*` 调用约 0.3 µs |
-| 单核 50% 占用下可持续的 Python 回调速率 | 约 3–6 万次/秒 |
-| Binance USDⓈ-M 单个活跃合约的 `bookTicker + aggTrade` 峰值 | 约 1000–5000 条/秒 |
+M2 的实测值（本仓库的云端开发容器，单核，Release 构建；`benchmarks/hot/bench_engine.cpp` 与 `benchmarks/report/bench_py_callback.py`）：
 
-这些是设计阶段的估计值，M2 的 `py/callback_on_quote` 基准会给出实测值并替换本表。按估计，逐条节奏的 Python 策略能覆盖 1–5 个合约；更多合约应使用 `Conflated` 或内核特征。出现下列任一情况时，策略应改用 C++：要求 tick 到命令的延迟低于 20 µs；需要响应每一条 L2 增量；Python 路由的事件持续超过每秒 2 万条。
+| 项目 | 实测值 |
+| --- | --- |
+| `step/trade_to_strategy`：一条成交经路由投递给一个 C++ 策略 | 30 ns |
+| `step/trade_with_feature`：同上，并更新一个 EMA 特征、投递并输出 `FeatureUpdate` | 53 ns |
+| `book/apply_l2_delta`：每侧 200 档的簿上一次 L2 更新 | 50 ns |
+| `py/node_event_no_callback`：Python 启动的节点每条报价的开销（读日志、合并、两次 `step`，不调用 Python） | 0.25 µs |
+| `py/callback_on_quote`：C++ 到 Python 的一次 `on_quote`（按值拷贝事件，立即返回） | 0.21 µs |
+| `py/callback_on_quote_record`：`on_quote` 内调用一次 `ctx.record`（含 `Decimal` 转换） | 0.63 µs |
+| M2 验收：一天 BTCUSDT-PERP（57 万成交、740 万报价、共 1257 万条输入），Python 示例策略 | 12 s（含写运行日志），回放 3 s |
+
+按这些数字，一个 Python 回调本身约 0.2 µs，每次 `ctx.*` 调用在 0.1–0.4 µs 之间；策略逻辑通常比调用本身贵。单核 50% 占用下，简单的 Python 回调可持续数十万次每秒，Binance USDⓈ-M 单个活跃合约的 `bookTicker + aggTrade` 峰值约为每秒 1000–5000 条，所以逐条节奏的 Python 策略可以覆盖多个合约。订单相关调用的成本在 M3 测量。出现下列任一情况时，策略应改用 C++：要求 tick 到命令的延迟低于 20 µs；需要响应每一条 L2 增量并做非平凡计算；Python 路由的事件持续超过每秒数万条。
+
+`py/*` 三项是只报告的基准：它们需要已安装的 wheel 和 Python 解释器，而 A/B 门禁作业只构建 C++（`JARVIS_BUILD_PYTHON=OFF`）。`step/*` 与 `book/*` 进入 `bench_hot` 门禁。
 
 ---
 
@@ -1249,9 +1255,9 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 
 - **C++ 单元与性质测试**：doctest，每层一个测试二进制（`tests/cpp/test_<layer>.cpp`）以控制编译时间；ctest 标签 `unit`、`property`、`conformance`、`golden`。性质测试使用 `jarvis::testkit::Gen`（splitmix64），由 `JARVIS_PROP_SEED` 与 `JARVIS_PROP_ITERS` 控制，CI 用三个固定种子。
 - **pytest**（`python/tests`）：nautilus 字符串格式往返、`Node` 与 `Strategy` API、Python 策略回放、确定性守卫。
-- **golden trace**：`tests/golden/<case>/{input.jlog, expected.commands.jlog, expected.sha256}`，`jarvis replay` 的输出与期望逐字节比较；`just golden-update` 重新生成，变更在 review 中可见。
+- **golden trace**：每个 `tests/golden/<case>/case.toml` 是一组命令加上要逐字节比较的产物，`expected.sha256` 防止期望文件被手工改动；`just golden-update` 重新生成，变更在 review 中可见。M2 的回放用例（`replay_trade`、`replay_batch`、`replay_quote`、`replay_book`、`replay_bar`、`replay_feature`、`example_trade_logger`）由测试专用程序 `golden_node`（`tests/cpp/golden_node.cpp`）生成确定的数据目录，运行一个按 `plan` 参数订阅的策略，比较运行日志的文本转储，并用 `--replay` 核对输出可重算。数据生成对编译器无关：每条语句只取一次随机数，避免函数实参求值顺序在 GCC 与 Clang 之间不同。
 - **环境等价测试**：sandbox 录制 → 同一策略文件的 backtest 回放，命令流逐字节相同（第 4.6 节）。
-- **确定性指纹**：现有 CI 的 determinism job 从占位变为真实检查，比较 `rel` 与 `det-o0` 两个构建在 golden 用例上的输出。
+- **确定性指纹**：CI 的 determinism job 比较 `rel` 与 `det-o0` 两个构建写出的语料日志（`tools/fingerprint_gate.sh`）；golden 用例在 dev（GCC、Clang）、rel 与 det-o0 构建上产出相同的文本。里程碑验收在真实数据上重复这项比较（`tools/m2_acceptance.sh`）。
 - **sanitizer**：现有 `dev` preset（ASan + UBSan）× gcc-13 / clang-18 / AppleClang 矩阵；新增 `tsan` preset 覆盖 shell 中的环与 IO 线程；新增 `fuzz` preset（`-fsanitize=fuzzer`）覆盖 Codec、WebSocket 帧层、HTTP 解析，语料入库，PR 中每个目标 60 秒，nightly 10 分钟。
 - **零分配门**：debug 构建替换 `operator new` 计数，`step` 内发生任何分配即测试失败。
 - **分层门**：`tools/check-layering.py`。

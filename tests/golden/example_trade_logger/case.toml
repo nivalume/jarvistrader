@@ -1,0 +1,17 @@
+# The C++ trade logger example (examples/cpp/trade_logger.cpp) on the golden catalog, with the
+# example's own configuration: the run log must match, and replay must reproduce it.
+commands = [
+  ["{bin}/bin/golden_node", "catalog", "--seed", "7", "--out", "{out}/catalog"],
+  ["{bin}/bin/trade_logger", "--config", "{root}/examples/config/trade_logger.toml",
+   "--set", "data.catalog={out}/catalog",
+   "--set", "data.range.start=2026-09-01T00:00:00Z", "--set", "data.range.end=2026-09-01T00:10:00Z",
+   "--set", "data.streams.0.streams=[\"aggTrade\", \"bookTicker\"]",
+   "--set", "strategies.tlog-001.params.sample_ms=20000",
+   "--out", "{out}/run"],
+  ["{bin}/bin/jarvis", "dump", "{out}/run", "--no-header", "--out", "{out}/run.txt"],
+  ["{bin}/bin/trade_logger", "--replay", "{out}/run"],
+]
+
+[[compare]]
+produced = "run.txt"
+expected = "expected.run.txt"

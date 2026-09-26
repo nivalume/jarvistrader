@@ -214,14 +214,20 @@ Status EventLogReader::open(const std::string& directory) {
 }
 
 Status EventLogReader::load_segment(std::size_t index) {
-  std::ifstream file(segments_[index], std::ios::binary);
+  std::ifstream file(segments_[index], std::ios::binary | std::ios::ate);
   if (!file) {
     return Status::IoError;
   }
-  std::vector<char> raw{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
-  data_.resize(raw.size());
-  std::transform(raw.begin(), raw.end(), data_.begin(),
-                 [](char c) { return static_cast<std::byte>(c); });
+  const std::streamoff size = file.tellg();
+  if (size < 0) {
+    return Status::IoError;
+  }
+  data_.resize(static_cast<std::size_t>(size));
+  file.seekg(0);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): std::byte storage read as chars
+  if (!file.read(reinterpret_cast<char*>(data_.data()), size)) {
+    return Status::IoError;
+  }
   wire::LogHeader header;
   std::size_t consumed = 0;
   const Status s = wire::decode_header(data_, header, consumed);

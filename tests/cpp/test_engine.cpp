@@ -574,11 +574,127 @@ struct Counter {
     return Status::Ok;
   }
 };
+
+// Every other delivery path: L2 book deltas and conflated book views, time bars closed by kernel
+// timers, OnBatch trade buffers, a feature delivered on every quote, and records as outputs.
+struct Full {
+  std::uint64_t* calls = nullptr;
+  static Status on_start(st::Context& ctx) {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    Status s = ctx.subscribe_book_deltas(btc);
+    if (jarvis::core::ok(s)) {
+      s = ctx.subscribe_book(btc, dt::Cadence::conflated(), md::BookType::L2_MBP);
+    }
+    if (jarvis::core::ok(s)) {
+      s = ctx.subscribe_trades(btc, dt::Cadence::on_batch());
+    }
+    md::FeatureId id = 0;
+    if (jarvis::core::ok(s)) {
+      s = ctx.feature(dt::FeatureSpec{dt::FeatureKind::Imbalance, btc, 0}, dt::Cadence::every(),
+                      id);
+    }
+    md::BarType type;
+    if (jarvis::core::ok(s) &&
+        jarvis::core::ok(md::BarType::parse("BTCUSDT-PERP.BINANCE-1-SECOND-LAST-INTERNAL", type))) {
+      s = ctx.subscribe_bars(type);
+    }
+    return s;
+  }
+  void on_book_deltas(st::Context& /*ctx*/, const md::OrderBookDeltas& d) {
+    *calls += d.deltas.size();
+  }
+  static void on_book(st::Context& ctx, const dt::BookView& book) {
+    dt::BookLevel best;
+    if (book.best_bid(best)) {
+      md::Decimal v;
+      static_cast<void>(md::Decimal::from_raw(best.price.raw(), best.price.precision(), v));
+      static_cast<void>(ctx.record("bid", v));
+    }
+  }
+  void on_trade_batch(st::Context& /*ctx*/, const st::TradeBatch& b) { *calls += b.trades.size(); }
+  void on_feature(st::Context& /*ctx*/, md::FeatureId /*id*/, md::Decimal /*v*/, UnixNanos /*ts*/) {
+    ++*calls;
+  }
+  void on_bar(st::Context& /*ctx*/, const md::Bar& /*bar*/) { ++*calls; }
+};
 // NOLINTEND(readability-make-member-function-const)
+
+md::OrderBookDelta book_delta(std::uint64_t ts, md::BookAction action, md::OrderSide side,
+                              std::string_view px, std::string_view size, std::uint8_t flags) {
+  md::OrderBookDelta d;
+  d.instrument_id = iid("BTCUSDT-PERP.BINANCE");
+  d.action = action;
+  d.order.side = side;
+  d.order.price = price(px);
+  d.order.size = quantity(size);
+  d.flags = flags;
+  d.sequence = ts;
+  d.ts_event = UnixNanos{ts};
+  d.ts_init = UnixNanos{ts};
+  return d;
+}
 
 } // namespace
 
 TEST_SUITE("zero-alloc") {
+  TEST_CASE("every delivery path runs without allocating once warmed up") {
+    std::uint64_t calls = 0;
+    st::StaticStrategySet<Full> set{Full{&calls}};
+    jarvis::engine::Engine engine{small_config(), set};
+    // Storage for the deltas the OrderBookDeltas events point into.
+    std::vector<std::array<md::OrderBookDelta, 2>> storage;
+    storage.reserve(3000);
+    std::vector<md::Event> events{running(1)};
+    std::uint64_t ts = 1'000'000;
+    for (std::uint64_t i = 0; i < 3000; ++i) {
+      ts += 50'000'000; // 20 events per second: time bars close every 20 events
+      const std::string bid = std::to_string(100 + i % 3) + "." + std::to_string(i % 10);
+      const std::string ask = std::to_string(103 + i % 3) + "." + std::to_string(i % 10);
+      switch (i % 5) {
+      case 0: {
+        storage.push_back(
+            {book_delta(ts, md::BookAction::Update, md::OrderSide::Buy, bid, "1.000", 0),
+             book_delta(ts, md::BookAction::Update, md::OrderSide::Sell, ask, "2.000", 128)});
+        md::OrderBookDeltas deltas;
+        REQUIRE(md::OrderBookDeltas::create(storage.back(), deltas) == Status::Ok);
+        events.push_back(md::Event{deltas});
+        break;
+      }
+      case 1:
+      case 2:
+        events.push_back(trade_at(ts, bid));
+        break;
+      case 3:
+        events.push_back(quote_at(ts, bid, ask));
+        break;
+      default:
+        events.push_back(batch_end(ts));
+        break;
+      }
+    }
+    std::uint64_t seq = 0;
+    const std::vector<md::Event> warmup(events.begin(), events.begin() + 200);
+    REQUIRE(drive(engine, warmup, seq) == Status::Ok);
+    engine.clear_outputs();
+    const std::vector<md::Event> rest(events.begin() + 200, events.end());
+    const AllocationScope scope;
+    for (const md::Event& e : rest) {
+      const UnixNanos at = md::ts_init_of(e);
+      jarvis::core::FiredTimer due;
+      while (engine.next_timer(due) && due.deadline <= at) {
+        static_cast<void>(
+            engine.step(EventKey{due.deadline, 9, ++seq},
+                        md::Event{md::TimerFired{due.key, due.deadline, due.deadline}}));
+        engine.clear_outputs();
+      }
+      static_cast<void>(engine.step(EventKey{at, 0, ++seq}, e));
+      engine.clear_outputs();
+    }
+    CHECK(scope.allocations() == 0);
+    CHECK(engine.failures().empty());
+    CHECK(calls > 3000);
+  }
+
   TEST_CASE("steady-state steps do not allocate") {
     std::uint64_t trades = 0;
     st::StaticStrategySet<Counter> set{Counter{&trades}};

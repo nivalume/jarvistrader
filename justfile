@@ -56,6 +56,11 @@ bench: (build "bench")
       "$exe" --benchmark_out="benchmark-results/$(basename "$exe").json" --benchmark_out_format=json; \
     done
 
+# Report-only Python callback benchmark (docs/architecture.md 7.8); needs `just install` first.
+bench-py:
+    mkdir -p benchmark-results
+    {{python}} benchmarks/report/bench_py_callback.py --out benchmark-results/bench_py.json
+
 # A/B benchmark comparison of the working tree against the merge-base with `base`.
 bench-compare base="main" rounds="3":
     tools/bench_ab.sh {{base}} {{rounds}}

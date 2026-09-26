@@ -4,35 +4,61 @@
 layer (nanobind). The design is in [`docs/architecture.md`](docs/architecture.md) and the
 milestones in [`docs/plan.md`](docs/plan.md).
 
-Status: milestones M0 (engineering gates and test harness) and M1 (core, the nautilus-compatible
+Status: milestones M0 (engineering gates and test harness), M1 (core, the nautilus-compatible
 model, the event log, typed node configuration, the lifecycle state machine and the Python
-bindings) are complete. The engine, strategy hosting and replay arrive in M2.
+bindings) and M2 (the engine, the data layer, Python and C++ strategy hosting, backtest runs,
+replay and data converters) are complete. Order execution, the simulated exchange and risk
+arrive in M3.
+
+A strategy is one file that runs as a node:
 
 ```python
-from jarvis import log, model
+import jarvis
+from jarvis import Cadence
 
-tick = model.TradeTick(
-    instrument_id=model.InstrumentId.from_str("BTCUSDT-PERP.BINANCE"),
-    price=model.Price("65000.1"),
-    size=model.Quantity("0.010"),
-    aggressor_side=model.AggressorSide.BUY,
-    trade_id=model.TradeId("1"),
-    ts_event=1_767_225_600_000_000_000,
-    ts_init=1_767_225_600_000_000_000,
-)
-with log.EventLogWriter("runs/demo") as writer:
-    writer.append(tick, seq=1, ts=tick.ts_init)
-print(log.fingerprint("runs/demo"))
+
+class MidLogger(jarvis.Strategy):
+    def on_start(self, ctx):
+        ctx.subscribe_quotes("BTCUSDT-PERP.BINANCE", Cadence.sampled_ms(1000))
+
+    def on_quote(self, ctx, quote):
+        ctx.record("bid", quote.bid_price.as_decimal())
+
+
+if __name__ == "__main__":
+    jarvis.main(MidLogger)
+```
+
+```sh
+# one day of Binance data into a catalog of event logs
+python -m jarvis.data binance-vision aggTrades --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+python -m jarvis.data binance-vision bookTicker --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+# a backtest writes a run directory; replay recomputes every output and reports a divergence
+python examples/py/trade_logger.py --config examples/config/trade_logger.toml --out runs/tlog
+python examples/py/trade_logger.py --replay runs/tlog
+```
+
+The C++ twin, `examples/cpp/trade_logger.cpp`, is the same strategy behind
+`jarvis::node_main<TradeLogger>` and writes a byte-identical run log (`build/rel/bin/trade_logger`
+takes the same arguments). Event logs remain readable from Python:
+
+```python
+from jarvis import log
+
+for record in log.read("runs/tlog"):
+    print(record.seq, record.kind, record.event)
+print(log.fingerprint("runs/tlog", "all"))
 ```
 
 The `jarvis` command-line tool (built with the `dev`, `rel` and `det-o0` presets under
 `build/<preset>/bin/`) writes the deterministic corpus, fingerprints and compares logs, dumps them
-as text, round-trips model strings and checks node configurations:
+as text, round-trips model strings, checks node configurations and replays runs of registered
+C++ strategies:
 
 ```sh
 build/rel/bin/jarvis corpus --seed 7 --events 200000 --out runs/corpus
 build/rel/bin/jarvis fingerprint runs/corpus
-build/rel/bin/jarvis dump runs/corpus --limit 20
+build/rel/bin/jarvis dump runs/tlog --limit 20
 build/rel/bin/jarvis config examples/config/node.toml --env sandbox --set node.seed=7
 ```
 
@@ -58,8 +84,10 @@ just check        # lint, functional tests, golden, fingerprints, benchmark A/B,
 ```
 
 Individual tiers: `just test`, `just golden`, `just fp` (Release and `-O0` must write identical
-event logs), `just zero-alloc`, `just layering`, `just bench`, `just bench-compare base=main`,
-`just tla`, `just tla-changed`, `just fuzz target=decimal|wire|config|smoke`, `just tsan`.
+event logs), `just zero-alloc`, `just layering`, `just bench`, `just bench-py`,
+`just bench-compare base=main`, `just tla`, `just tla-changed`,
+`just fuzz target=decimal|wire|config|smoke`, `just tsan`. `tools/m2_acceptance.sh` repeats the
+M2 acceptance run on one day of Binance data.
 Recipes whose feature has not landed yet print `SKIPPED` and name the milestone in
 `docs/plan.md` that adds it. The gate order and what each tier checks are described in
 `docs/architecture.md` section 17.
@@ -75,16 +103,18 @@ uv pip install --python .venv/bin/python --reinstall .
 ## Layout
 
 - `jarvis/`: header-only kernel layers (`core`, `model`, `engine`, ...) and the `jarvis_shell` layers
-  (`node`, `network`, `adapter`, `live`); empty modules are retained with `.gitkeep`
-- `python/`: the `jarvis` package (`jarvis.model`, `jarvis.log`, `jarvis.determinism`) and its
-  nanobind sources
-- `examples/`: example configuration (strategies arrive with M2)
+  (`node`, `network`, `adapter`, `live`); modules that have not landed yet keep a `.gitkeep`
+- `python/`: the `jarvis` package (`jarvis.model`, `jarvis.log`, `jarvis.determinism`,
+  `jarvis.strategy`, `jarvis.features`, `jarvis.node`, `jarvis.data`) and its nanobind sources
+- `examples/`: example strategies in Python and C++ with their configurations (for tests and
+  soak runs; not part of the wheel)
 - `testkit/`: property-test generator, zero-allocation counter, doctest entry point, freestanding guard
 - `tests/`: C++ tests per layer, golden cases, fuzz targets with seed corpora, the nautilus
   conformance snapshot, and pytest for the tools
 - `benchmarks/`: gating (`hot/`) and report-only (`report/`) benchmarks with `thresholds.toml`
 - `specs/`: TLA+ specs and `specs/tla/MAP.toml`
-- `tools/`: layering checker, golden runner, benchmark A/B, TLA+ runner and spec selector
+- `tools/`: layering checker, golden runner, benchmark A/B, TLA+ runner and spec selector,
+  milestone acceptance scripts
 - `docs/`: deterministic-kernel constraints and C++ subset; the system design is in
   [`docs/architecture.md`](docs/architecture.md) and the milestone plan in [`docs/plan.md`](docs/plan.md)
 - `cmake/`: vendored CPM.cmake and pinned dependency declarations
