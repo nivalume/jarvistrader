@@ -18,6 +18,14 @@ backward = false
 budget_min = 2
 tlc_args = ["-deadlock"]
 
+[specs.OrderLifecycle]
+paths = ["jarvis/execution/order_fsm.hpp", "jarvis/execution/order.hpp",
+         "jarvis/execution/oms.hpp", "specs/map/order_lifecycle_actions.hpp"]
+forward = false
+backward = false
+budget_min = 5
+tlc_args = []
+
 [global]
 # Touching any of these runs every spec.
 always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"]

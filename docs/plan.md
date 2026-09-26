@@ -88,8 +88,8 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 
 ## M3 执行、模拟撮合、风控、组合与成本，规约 a/c/d（回测完整可用）
 
-- [ ] task: specs — `OrderLifecycle.tla`（含 jarvis 新增的 `Submitted → Expired`）与 `specs/map/order_lifecycle_actions.hpp`（§8.1、§18）
-- [ ] task: execution — `OrderCore` 与订单状态转移表，转移表由规约核对，含 `apply` 阶段的 `previous_status` 规则
+- [x] task: specs — `OrderLifecycle.tla`（含 jarvis 新增的 `Submitted → Expired`）与 `specs/map/order_lifecycle_actions.hpp`（§8.1、§18）
+- [x] task: execution — `OrderCore` 与订单状态转移表，转移表由规约核对，含 `apply` 阶段的 `previous_status` 规则
 - [ ] task: execution — OMS：Netting、成交按 `(symbol, orderId, tradeId)` 去重、in-flight 集合、`open_exposure()`、按策略的归因账本
 - [ ] task: execution — `ExecutionEngine`：命令路由、事件推进状态机、`OrderDenied` 回送策略
 - [ ] task: execution — `ExecAlgorithm` concept、`AlgoState` 竞技场、`AlgoContext`（子单经 Gate B、生成前查询令牌）与直通模式

@@ -6,5 +6,9 @@ jarvis/core/priority_queue.hpp
 jarvis/data/book/**
 jarvis/engine/**
 jarvis/execution/**
+jarvis/execution/oms.hpp
+jarvis/execution/order.hpp
+jarvis/execution/order_fsm.hpp
 jarvis/risk/**
 specs/**
+specs/map/order_lifecycle_actions.hpp
