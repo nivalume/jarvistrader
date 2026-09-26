@@ -122,12 +122,13 @@ public:
       return core::Status::Ok;
     }
     produced = core::ok(s);
+    remember(produced, value);
     return s;
   }
 
   // Updates from a quote.
   [[nodiscard]] core::Status on_quote(const model::QuoteTick& q, model::Decimal& value,
-                                      bool& produced) const noexcept {
+                                      bool& produced) noexcept {
     produced = false;
     const core::u128 bs = q.bid_size.raw();
     const core::u128 as = q.ask_size.raw();
@@ -159,10 +160,24 @@ public:
       return core::Status::Ok;
     }
     produced = core::ok(s);
+    remember(produced, value);
     return s;
   }
 
+  // The last value produced, if any (for state dumps; delivery does not read it).
+  [[nodiscard]] bool last(model::Decimal& out) const noexcept {
+    out = last_;
+    return has_last_;
+  }
+
 private:
+  void remember(bool produced, model::Decimal value) noexcept {
+    if (produced) {
+      last_ = value;
+      has_last_ = true;
+    }
+  }
+
   struct Sample {
     std::int64_t price = 0;
     std::uint64_t size = 0;
@@ -234,6 +249,8 @@ private:
   std::size_t head_ = 0;
   core::i128 sum_contribution_ = 0;
   core::u128 sum_size_ = 0;
+  model::Decimal last_;
+  bool has_last_ = false;
 };
 
 // The declared features. Identical specs share one feature (and one id).

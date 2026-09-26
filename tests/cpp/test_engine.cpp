@@ -598,13 +598,11 @@ TEST_SUITE("zero-alloc") {
     REQUIRE(drive(engine, warmup, seq) == Status::Ok);
     engine.clear_outputs();
     const std::vector<md::Event> rest(events.begin() + 20, events.end());
-    std::size_t index = 0;
     const AllocationScope scope;
     for (const md::Event& e : rest) {
       const UnixNanos ts = md::ts_init_of(e);
       static_cast<void>(engine.step(EventKey{ts, 0, ++seq}, e));
       engine.clear_outputs();
-      ++index;
     }
     CHECK(scope.allocations() == 0);
     CHECK(trades > 600);

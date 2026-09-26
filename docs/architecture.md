@@ -327,10 +327,13 @@ if __name__ == "__main__":
 ```
 
 ```sh
-python my_mm.py --env backtest --config node.toml
-python my_mm.py --env sandbox  --config node.toml
-python my_mm.py --env live     --config node.toml --set venues.0.endpoint=testnet
+python my_mm.py --config node.toml --env backtest [--out runs/x]
+python my_mm.py --config node.toml --env sandbox
+python my_mm.py --config node.toml --env live --set venues.0.endpoint=testnet
+python my_mm.py --replay runs/x [--until SEQ] [--dump-state]
 ```
+
+`--replay` 读取运行目录（第 16.1 节）中保存的配置与覆盖项，核对配置 hash 后以同一策略文件重算全部输出，报告第一处偏差（退出码 3）。C++ 的 `node_main<S...>` 与 Python 的 `jarvis.main` 共用这套参数（`jarvis/node/node_cli.hpp`）。
 
 `jarvis.main(cls)` 等价于 `Node(NodeConfig.load(argv)).add_strategy(cls, ...).run()`。显式写法 `node.add_native_strategy("PeggedMM", ...)` 可以把注册过的 C++ 策略加入同一个 Python 启动的节点。
 
@@ -338,7 +341,10 @@ C++：
 
 ```cpp
 struct MyMM {                                     // 满足 jarvis::Strategy concept，无基类
-    struct Params { std::int32_t spread_bps; Quantity size; };
+    std::int64_t spread_bps = 2;
+    Decimal size;
+    // 可选：从 [[strategies]] 条目的 params 构造；也可以写构造函数 MyMM(const StrategyParams&)
+    static Status create(const StrategyParams& p, MyMM& out);
     Status on_start(Context& ctx);
     Status on_trade(Context& ctx, const TradeTick& t);
     Status on_quote(Context& ctx, const QuoteTick& q);
@@ -350,6 +356,8 @@ static_assert(jarvis::Strategy<MyMM>);
 
 int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); }   // 同一套命令行参数
 ```
+
+`node_main<S...>` 的第 i 个策略类型由第 i 个 `[[strategies]]` 条目构造；配置文件不列策略时以空参数构造。
 
 ### 4.6 "三环境一套代码"如何保证
 
@@ -378,7 +386,8 @@ int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); } 
 
 每个输入事件携带键 `(ts, source_id, seq)`，内核按此严格全序处理，不存在并列。
 
-- **backtest，历史数据**：`ReplaySource` 合并多个数据源，`ts` 为事件的 `ts_init`（由延迟模型合成，第 12 节），`source_id` 为数据源编号，`seq` 为源内行号。延迟模型产生的事件插入同一个优先队列。
+- **backtest，历史数据**：`MergeSource`（`jarvis/backtest/merge_source.hpp`）按数据源各自的键合并多个数据源，`ts` 为事件的 `ts_init`（M3 起由延迟模型合成，第 12 节），`source_id` 为数据源编号，`seq` 为源内行号。延迟模型产生的事件插入同一个优先队列。Node 把合并后的每条输入连同自己合成的输入（生命周期、定时器、批次边界、策略错误）写入运行日志时，用自己的摄取计数重新编号 `seq`（从 1 开始），保留数据源的 `source_id`，合成输入的 `source_id` 为 0。这与 sandbox、live 的记录方式相同，所以任何环境的运行日志都按同一方式回放。
+- **backtest 的批次**：批次是 `ts` 相同的一段连续输入，由 `BatchEnd` 结束。每条数据输入之前，截止时间不晚于其 `ts` 的定时器先以 `TimerFired` 触发；设置了 `data.range` 时，范围结束前到期的定时器在数据耗尽后继续触发（`jarvis/backtest/driver.hpp`）。
 - **backtest，回放已录制的日志**（环境等价测试、实盘问题复现）：`ReplaySource` 按日志中的 `seq` 顺序投递，`ts_init`、定时器触发与批次边界全部取自日志，不再由延迟模型合成。
 - **sandbox 与 live**：全序就是 core 线程的**摄取顺序**。core 在从入站环取出事件时分配单调递增的 `seq`，并把事件连同 `seq` 写入日志。IO 线程打上的 `ts_init` 是元数据，不是排序键，因为多个 IO 线程之间不存在全局单调的时间戳。
 
@@ -1185,6 +1194,8 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - 输入事件与内核输出都写入日志。M2 的输出是 `FeatureUpdate`（0x8001，投递给至少一个订阅者的特征值）与 `StrategyRecord`（0x8002，策略用 `ctx.record(tag, value)` 记下的值，是不交易策略的可回放输出）；命令从 M3 起加入。输出记录的键取自引起它的输入：`seq` 与 `ts` 等于该输入，`source_id` 是这次 `step` 内的输出序号，所以输出紧跟在它的输入之后。回放以输入重算，以输出比对。
 - 定时器触发与批次边界也是输入。节点在喂下一条输入前查看引擎最早的定时器（`next_timer`），到期则先合成 `TimerFired` 并记录；`step` 弹出定时器时核对键与期限，不一致即为偏差（`InvalidState`）。回放直接读取这些记录，不再合成。
 - 原始帧文件另存（第 13.4 节）。
+- 运行目录包含 `config.toml`（节点加载的配置原文）、`run.toml`（`--env`、`--set` 覆盖项与得到的配置 hash）与运行日志；回放据此重建配置并与日志头的 hash 核对。目录名默认由 `persistence.dir` 的 `{node_id}`、`{run_id}` 展开，`{run_id}` 是启动时的 UTC 时间，这是墙钟唯一影响的地方。
+- 回测数据目录（`data.catalog`）按 instrument、流与 UTC 日期存放解码日志：`{catalog}/{instrument_id}/{stream}/{YYYY-MM-DD}/events-*.jlog`，由 `jarvis.data` 的转换器写出。回测按 `[data]` 选出与 `data.range` 重叠的日期，每个流按日期顺序串接，各流再按键合并。
 
 提议（Proposed）：用 SBE XML 定义日志记录 schema，其他语言的读取器由代码生成而不是手写。
 
@@ -1207,7 +1218,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 
 | 命令 | 作用 |
 | --- | --- |
-| `jarvis replay <log> [--until seq] [--dump-state]` | 回放日志，可停在某个 `seq` 输出状态 |
+| `jarvis replay <run-dir> [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
 | `jarvis trace-export <log> --spec <X>` | 按规约变量投影日志，生成 `Trace.tla`（第 18 节） |

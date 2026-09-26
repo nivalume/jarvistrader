@@ -141,6 +141,15 @@ public:
     return std::span<Subscriber>{cell(row, kind), counts_[index(row, kind)]};
   }
 
+  [[nodiscard]] std::span<const Subscriber> subscribers(std::uint32_t row,
+                                                        DataKind kind) const noexcept {
+    if (row >= rows_) {
+      return {};
+    }
+    return std::span<const Subscriber>{&cells_[index(row, kind) * per_cell_],
+                                       counts_[index(row, kind)]};
+  }
+
   // The subscription of `strategy` to (row, kind), or nullptr.
   [[nodiscard]] Subscriber* find(std::uint32_t row, DataKind kind,
                                  StrategyIndex strategy) noexcept {

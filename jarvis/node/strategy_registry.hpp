@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -124,26 +125,45 @@ concept CreatableFromParams = requires(const StrategyParams& p, S& out) {
   { S::create(p, out) } -> std::same_as<core::Status>;
 };
 
-// Construction, most specific first: `static Status S::create(const StrategyParams&, S&)`, a
-// constructor taking `const StrategyParams&`, or the default constructor.
+} // namespace detail
+
+// Builds S from one [[strategies]] entry, most specific first:
+// `static Status S::create(const StrategyParams&, S&)`, a constructor taking
+// `const StrategyParams&`, or the default constructor.
 template <strategy::Strategy S>
-core::Status create_native(const StrategyParams& params, NativeStrategy& out) {
-  std::unique_ptr<S> instance;
-  if constexpr (CreatableFromParams<S>) {
+core::Status construct_strategy(const StrategyParams& params, std::optional<S>& out) {
+  if constexpr (detail::CreatableFromParams<S>) {
     static_assert(std::is_default_constructible_v<S>,
                   "S::create(params, out) needs S to be default constructible");
-    instance = std::make_unique<S>();
-    const core::Status s = S::create(params, *instance);
+    out.emplace();
+    const core::Status s = S::create(params, *out);
     if (!core::ok(s)) {
-      return s;
+      out.reset();
     }
+    return s;
   } else if constexpr (std::is_constructible_v<S, const StrategyParams&>) {
-    instance = std::make_unique<S>(params);
+    out.emplace(params);
   } else {
     static_assert(std::is_default_constructible_v<S>,
-                  "a registered strategy needs S::create, S(const StrategyParams&) or S()");
-    instance = std::make_unique<S>();
+                  "a strategy needs S::create, S(const StrategyParams&) or S()");
+    out.emplace();
   }
+  return core::Status::Ok;
+}
+
+namespace detail {
+
+template <strategy::Strategy S>
+core::Status create_native(const StrategyParams& params, NativeStrategy& out) {
+  std::optional<S> built;
+  const core::Status s = construct_strategy(params, built);
+  if (!core::ok(s)) {
+    return s;
+  }
+  if (!built.has_value()) {
+    return core::Status::InvalidState;
+  }
+  auto instance = std::make_unique<S>(std::move(*built));
   out = NativeStrategy{instance.release(), [](void* p) { delete static_cast<S*>(p); },
                        &strategy::kVTable<S>, std::string{}};
   return core::Status::Ok;

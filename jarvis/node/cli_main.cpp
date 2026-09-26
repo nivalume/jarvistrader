@@ -7,8 +7,9 @@
 //   jarvis dump DIR [--out FILE] [--no-header] [--limit N]
 //   jarvis roundtrip INPUT --out FILE
 //   jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]
+//   jarvis replay RUN_DIR [--until SEQ] [--dump-state]
 //
-// Exit status: 0 success, 1 failure or difference, 2 usage error.
+// Exit status: 0 success, 1 failure or difference, 2 usage error, 3 replay divergence.
 
 #include <algorithm>
 #include <array>
@@ -37,6 +38,11 @@
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/fingerprint.hpp"
 #include "jarvis/node/model_text.hpp"
+#include "jarvis/node/node_cli.hpp"
+#include "jarvis/node/replay.hpp"
+#include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/strategy/strategy_set.hpp"
 
 namespace {
 
@@ -56,6 +62,7 @@ constexpr std::string_view kUsageText =
     "  jarvis fingerprint --compare A B [--records inputs|outputs|all]\n"
     "  jarvis dump DIR [--out FILE] [--no-header] [--limit N]\n"
     "  jarvis roundtrip INPUT --out FILE\n"
+    "  jarvis replay RUN_DIR [--until SEQ] [--dump-state]\n"
     "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
@@ -347,6 +354,64 @@ int cmd_roundtrip(const Args& args) {
   return kOk;
 }
 
+// Replays a run whose strategies are registered native strategies (impl = "cpp:<name>").
+// Python strategies replay through their own file: python strategy.py --replay RUN_DIR.
+int cmd_replay(const Args& args) {
+  if (args.positional.size() != 1) {
+    return usage("replay needs one run directory");
+  }
+  const std::string directory{args.positional[0]};
+  node::ReplayOptions options;
+  options.dump_state = args.flag("--dump-state");
+  if (const auto until = args.option("--until")) {
+    std::uint64_t seq = 0;
+    if (!parse_u64(*until, seq)) {
+      return usage("--until needs a sequence number");
+    }
+    options.until = seq;
+  }
+  node::NodeConfig config;
+  std::string error;
+  if (!jarvis::core::ok(node::load_run_config(directory, config, error))) {
+    std::cerr << "jarvis: " << error << "\n";
+    return kFailed;
+  }
+  const auto& registry = node::StrategyRegistry::instance();
+  if (!jarvis::core::ok(registry.check(error))) {
+    std::cerr << "jarvis: " << error << "\n";
+    return kFailed;
+  }
+  std::vector<node::NativeStrategy> strategies(config.strategies.size());
+  jarvis::strategy::DynamicStrategySet set{config.strategies.size()};
+  for (std::size_t i = 0; i < config.strategies.size(); ++i) {
+    const node::StrategyConfig& entry = config.strategies[i];
+    if (!entry.impl.starts_with("cpp:")) {
+      std::cerr << "jarvis: strategy " << entry.id << " is " << entry.impl
+                << "; replay a Python node with its own file: python FILE --replay " << directory
+                << "\n";
+      return kFailed;
+    }
+    const std::string name = entry.impl.substr(4);
+    const Status s = registry.create(name, node::StrategyParams{entry}, strategies[i]);
+    if (!jarvis::core::ok(s)) {
+      std::cerr << "jarvis: strategy " << entry.id << " (" << name << "): "
+                << (s == Status::NotFound ? std::string{"not registered in this program"}
+                                          : std::string{jarvis::core::to_string(s)})
+                << "\n";
+      return kFailed;
+    }
+    if (!jarvis::core::ok(strategies[i].add_to(set))) {
+      return failed("replay", Status::CapacityExceeded);
+    }
+  }
+  node::ReplayReport report;
+  if (!jarvis::core::ok(node::replay_run(directory, config, set, options, report, error))) {
+    std::cerr << "jarvis: " << error << "\n";
+    return kFailed;
+  }
+  return node::print_replay(std::cout, directory, report);
+}
+
 int cmd_config(const Args& args) {
   if (args.positional.size() != 1) {
     return usage("config needs one TOML file");
@@ -412,6 +477,11 @@ int main(int argc, char** argv) {
   if (command == "config") {
     constexpr std::array<std::string_view, 3> kValues = {"--env", "--set", "--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_config(args) : kUsage;
+  }
+  if (command == "replay") {
+    constexpr std::array<std::string_view, 1> kValues = {"--until"};
+    constexpr std::array<std::string_view, 1> kFlags = {"--dump-state"};
+    return parse_args(rest, kValues, kFlags, args) ? cmd_replay(args) : kUsage;
   }
   if (command == "--help" || command == "help") {
     std::cout << kUsageText;

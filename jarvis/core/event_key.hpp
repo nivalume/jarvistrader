@@ -8,8 +8,9 @@
 namespace jarvis::core {
 
 // Strict total order of kernel input events (docs/architecture.md section 5.2, amending
-// ADR 0001 decision 2). In backtest `seq` is the row within a source; in sandbox and live it is
-// the core thread's ingestion counter, so no two events ever compare equal.
+// ADR 0001 decision 2). In a data source (a catalog log) `seq` is the row within the source; the
+// node's run log renumbers every input it steps with its own ingestion counter, in backtest as
+// in sandbox and live, so no two inputs ever compare equal.
 struct EventKey {
   UnixNanos ts;
   std::uint16_t source_id = 0;

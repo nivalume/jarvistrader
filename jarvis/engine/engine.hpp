@@ -68,7 +68,7 @@ public:
   // Processes one input event.
   [[nodiscard]] core::Status step(const core::EventKey& key, const model::Event& event) {
     k_.current = key;
-    return std::visit([this](const auto& e) { return dispatch(e); }, event);
+    return std::visit([this](const auto& e) { return this->dispatch(e); }, event);
   }
 
   [[nodiscard]] std::span<const model::Output> outputs() const noexcept {
@@ -239,52 +239,56 @@ private:
   template <typename T> core::Status feed_aggregators(std::uint32_t slot, const T& update) {
     for (std::size_t i = 0; i < k_.aggregators.size(); ++i) {
       strategy::AggregatorState& a = k_.aggregators[i];
-      if (a.slot != slot) {
+      if (a.slot != slot || !takes(a, update)) {
         continue;
       }
-      if (!a.ready) {
-        const bool trades = a.bar_type.spec.price_type == model::PriceType::Last;
-        if constexpr (std::is_same_v<T, model::TradeTick>) {
-          if (!trades) {
-            continue;
-          }
-          const core::Status s = data::BarAggregator::create(a.bar_type, update.price.precision(),
-                                                             update.size.precision(), a.aggregator);
-          if (!core::ok(s)) {
-            return s;
-          }
-        } else {
-          if (trades) {
-            continue;
-          }
-          const core::Status s = data::BarAggregator::create(
-              a.bar_type, update.bid_price.precision(), update.bid_size.precision(), a.aggregator);
-          if (!core::ok(s)) {
-            return s;
-          }
-        }
-        a.ready = true;
-      }
-      std::array<model::Bar, 8> bars{};
-      std::size_t n = 0;
-      core::Status s = core::Status::Ok;
-      if constexpr (std::is_same_v<T, model::TradeTick>) {
-        s = a.aggregator.on_trade(update, bars, n);
-      } else {
-        s = a.aggregator.on_quote(update, bars, n);
-      }
-      if (!core::ok(s)) {
-        return s;
-      }
-      for (std::size_t b = 0; b < n; ++b) {
-        deliver(a.bar_key, data::DataKind::Bar, bars[b], bars[b].ts_init);
-      }
-      s = arm_close_timer(static_cast<std::uint32_t>(i));
+      const core::Status s = aggregate(static_cast<std::uint32_t>(i), update);
       if (!core::ok(s)) {
         return s;
       }
     }
     return core::Status::Ok;
+  }
+
+  // Last-price bars aggregate trades; bid, ask and mid bars aggregate quotes.
+  template <typename T>
+  [[nodiscard]] static bool takes(const strategy::AggregatorState& a, const T& /*update*/) {
+    const bool trades = a.bar_type.spec.price_type == model::PriceType::Last;
+    return std::is_same_v<T, model::TradeTick> == trades;
+  }
+
+  // Creates the aggregator on its first update (precisions come from the data), feeds it, and
+  // delivers the bars it completes.
+  template <typename T> core::Status aggregate(std::uint32_t index, const T& update) {
+    strategy::AggregatorState& a = k_.aggregators[index];
+    core::Status s = core::Status::Ok;
+    if (!a.ready) {
+      if constexpr (std::is_same_v<T, model::TradeTick>) {
+        s = data::BarAggregator::create(a.bar_type, update.price.precision(),
+                                        update.size.precision(), a.aggregator);
+      } else {
+        s = data::BarAggregator::create(a.bar_type, update.bid_price.precision(),
+                                        update.bid_size.precision(), a.aggregator);
+      }
+      if (!core::ok(s)) {
+        return s;
+      }
+      a.ready = true;
+    }
+    std::array<model::Bar, 8> bars{};
+    std::size_t n = 0;
+    if constexpr (std::is_same_v<T, model::TradeTick>) {
+      s = a.aggregator.on_trade(update, bars, n);
+    } else {
+      s = a.aggregator.on_quote(update, bars, n);
+    }
+    if (!core::ok(s)) {
+      return s;
+    }
+    for (std::size_t b = 0; b < n; ++b) {
+      deliver(a.bar_key, data::DataKind::Bar, bars[b], bars[b].ts_init);
+    }
+    return arm_close_timer(index);
   }
 
   core::Status arm_close_timer(std::uint32_t index) {

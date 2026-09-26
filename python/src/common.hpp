@@ -107,16 +107,16 @@ inline std::string decimal_text(nb::handle h, std::string_view field) {
 
 // ---- parsing from text (lets Python pass "BTCUSDT-PERP.BINANCE" where an id is expected) -----
 
-template <typename T> constexpr bool kParsesFromText = false;
-template <typename Rule> constexpr bool kParsesFromText<m::Identifier<Rule>> = true;
-template <> constexpr bool kParsesFromText<m::InstrumentId> = true;
-template <> constexpr bool kParsesFromText<m::Price> = true;
-template <> constexpr bool kParsesFromText<m::Quantity> = true;
-template <> constexpr bool kParsesFromText<m::Money> = true;
-template <> constexpr bool kParsesFromText<m::Currency> = true;
-template <> constexpr bool kParsesFromText<m::Uuid4> = true;
-template <> constexpr bool kParsesFromText<m::BarType> = true;
-template <> constexpr bool kParsesFromText<m::BarSpecification> = true;
+template <typename T> inline constexpr bool kParsesFromText = false;
+template <typename Rule> inline constexpr bool kParsesFromText<m::Identifier<Rule>> = true;
+template <> inline constexpr bool kParsesFromText<m::InstrumentId> = true;
+template <> inline constexpr bool kParsesFromText<m::Price> = true;
+template <> inline constexpr bool kParsesFromText<m::Quantity> = true;
+template <> inline constexpr bool kParsesFromText<m::Money> = true;
+template <> inline constexpr bool kParsesFromText<m::Currency> = true;
+template <> inline constexpr bool kParsesFromText<m::Uuid4> = true;
+template <> inline constexpr bool kParsesFromText<m::BarType> = true;
+template <> inline constexpr bool kParsesFromText<m::BarSpecification> = true;
 
 template <typename T> core::Status parse_text(std::string_view text, T& out) {
   if constexpr (std::is_same_v<T, m::Currency>) {
