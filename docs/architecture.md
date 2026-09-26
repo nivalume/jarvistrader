@@ -566,6 +566,8 @@ jarvis 采用 nautilus 的 standard precision 模式。
 | `BarType` 内部表示 | 运行期解析的字符串 | 保留字符串用于互操作，内部为 `BarKey(uint32)` | 热路径不做字符串解析 |
 | 虚拟仓位 | NETTING venue 上可按策略拆分 | v1 不做，改为按 `strategy_id` 的归因账本 | 保持"Portfolio 仓位 == venue 仓位"这一对账不变量 |
 | `OrderStatus` 转移 | 见第 8 节 | 在 nautilus 转移表上增加一条边 | Binance 的两条独立连接使该边成为常态 |
+| 自由字典与变长列表 | instrument 的 `info`、`tick_scheme`；`AccountState.info`；`OrderInitialized` 的 `linked_order_ids`、`exec_algorithm_params`；成交事件的 `info` | 不进内核模型；成交事件以 `info_flags` 位域承载强平、ADL、TRADE_LITE 标记 | 内核记录是定长的，自由字典无法做确定性编码；`python/tests/test_nautilus_conformance.py` 逐项列出这些省略 |
+| 浮点转定点 | `(value * 10^p).round()`，对二进制乘积四舍五入 | 先取浮点数的最短十进制表示（`repr`），再按 round half to even 量化 | 结果只取决于十进制文本，与平台无关；代价是像 `2.675` 这种二进制上不精确的平局会与 nautilus 相差一个最小单位 |
 
 ---
 
@@ -632,8 +634,8 @@ jarvis 采用 nautilus 的 standard precision 模式。
 Python 代码运行在 `step` 之内，所以 ADR 0001 的纯函数约束同样适用于它。
 
 1. **哈希种子。** `jarvis.main` 在 `PYTHONHASHSEED` 未设置时以 `seed` 派生值重新执行自身，并把该值写入日志头，使 `set` 与字符串哈希的迭代顺序可复现。
-2. **禁止的调用。** 回调执行期间，`time.time`、`time.monotonic`、`datetime.now`、`random.*`、`uuid.uuid4`、`os.urandom` 抛出 `NondeterminismError`。由 `jarvis.determinism.guard()` 实现，宿主在回调前后开关；backtest 与 `strict_determinism = true` 的实盘默认开启。合法来源是 `ctx.now()` 与 `ctx.rng(key)`（counter-based splitmix64）。
-3. **浮点。** Python 中允许浮点，但进入命令的数值必须经 `Price.from_float(x, precision)` 等方法量化（round half to even）。同一平台上比特级可复现；跨平台比特级可复现只对 C++ 策略承诺，因为 numpy 的 SIMD 归约在不同平台上可能不同。日志头记录平台与 numpy 版本。
+2. **禁止的调用。** 回调执行期间，`time.time`、`time.monotonic`、`datetime.now`、`random.*`、`uuid.uuid4`、`os.urandom` 抛出 `NondeterminismError`。由 `jarvis.determinism.guard()` 实现，宿主在回调前后开关；backtest 与 `strict_determinism = true` 的实盘默认开启。合法来源是 `ctx.now()` 与 `ctx.rng(key)`（counter-based splitmix64）。`import jarvis` 时替换这些模块属性以及 `datetime.datetime`、`datetime.date` 类；在 jarvis 之前已经绑定原函数的名字（`from time import time`）由 `scrub_module()` 重新绑定，宿主对策略模块调用它。守卫之外这些函数行为不变，每次调用只多一次标志检查。
+3. **浮点。** Python 中允许浮点，但进入命令的数值必须经 `Price.from_float(x, precision)` 等方法量化：先取 `repr(x)` 的最短十进制文本，再 round half to even（与 nautilus 的差异见 6.8 节）。不带精度的 `Price(0.1)` 直接报 `TypeError`。同一平台上比特级可复现；跨平台比特级可复现只对 C++ 策略承诺，因为 numpy 的 SIMD 归约在不同平台上可能不同。日志头记录平台与 numpy 版本。
 4. **并发。** 策略状态只能在 core 线程的回调中修改，不允许线程或 asyncio 修改策略状态。
 5. **偏差检测。** 回放时逐步比较重新产生的命令流与日志中记录的命令流，第一处不一致产生 `ReplayDivergence{ seq }`。
 6. **快照。** 策略可实现 `__getstate__`；快照时保存其哈希用于偏差检测，不可 pickle 的策略从日志开头回放。
@@ -1174,6 +1176,8 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 ```
 
 - `payload` 按 `kind` 有固定布局；变长类型（如 `OrderBookDeltas`）为定长头加定长元素数组。
+- 每个模型结构体的字段顺序与名称只在一处定义：`jarvis/model/schema.hpp` 中的 `fields(value, f)`。日志编码与解码（`jarvis/model/wire.hpp`）、`jarvis dump` 的文本、Python 绑定的属性名都由它生成，所以三者不会分叉。记录 `kind` 码一经发布不再改变；输入使用 1 到 0x7FFF，内核输出（命令）使用 0x8000 以上。
+- `jarvis fingerprint <dir>` 对选中记录的完整字节（含头与 CRC，不含日志头）求 SHA-256；`--compare A B` 逐条比较并打印第一处差异。CI 的 determinism job 与 `just fp` 用它比较 Release 与 `-O0` 构建写出的语料日志（`tools/fingerprint_gate.sh`）。
 - 输入事件与内核输出的命令都写入日志，输出记录携带引起它的输入的 `seq`。回放以输入重算，以输出比对。
 - 原始帧文件另存（第 13.4 节）。
 

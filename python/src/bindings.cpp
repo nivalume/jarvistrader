@@ -3,12 +3,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
+#include "common.hpp"
 #include "jarvis/node/build_info.hpp"
 
-namespace nb = nanobind;
-
 NB_MODULE(_core, module) {
-  module.doc() = "jarvis native extension scaffold";
+  namespace nb = nanobind;
+  module.doc() = "jarvis native extension: model types and event logs";
 
   module.def(
       "build_info",
@@ -23,4 +23,13 @@ NB_MODULE(_core, module) {
         return result;
       },
       "Identity of the native build: version, git commit, compiler, platform, live components.");
+
+  nb::module_ model = module.def_submodule(
+      "model", "nautilus-compatible model types (docs/architecture.md section 6)");
+  jarvis::py::bind_generated_enums(model);
+  jarvis::py::bind_values(model);
+  jarvis::py::bind_events(model);
+
+  nb::module_ log = module.def_submodule("log", "Event logs (docs/architecture.md section 16)");
+  jarvis::py::bind_log(log);
 }

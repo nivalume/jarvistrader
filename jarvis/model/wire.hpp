@@ -25,6 +25,7 @@
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/schema.hpp"
 #include "jarvis/model/uuid.hpp"
 
 // Event log wire format (docs/architecture.md section 16.1, ADR 0001 decision 6).
@@ -523,168 +524,27 @@ template <typename T> constexpr void get(Reader& r, std::optional<T>& v) noexcep
   }
 }
 
-template <typename F> constexpr void fields(OrderEventHeader& h, F&& f) {
-  f("trader_id", h.trader_id), f("strategy_id", h.strategy_id), f("instrument_id", h.instrument_id),
-      f("client_order_id", h.client_order_id), f("event_id", h.event_id), f("ts_event", h.ts_event),
-      f("ts_init", h.ts_init), f("causation_id", h.causation_id),
-      f("reconciliation", h.reconciliation);
-}
-constexpr void put(Writer& w, const OrderEventHeader& h) noexcept {
-  OrderEventHeader copy = h;
+// Structs with a field descriptor (model/schema.hpp) encode as their fields in order.
+template <Described T>
+  requires(!std::is_enum_v<T>)
+constexpr void put(Writer& w, const T& value) {
+  T copy = value;
   fields(copy, [&w](std::string_view /*name*/, const auto& field) { put(w, field); });
 }
-constexpr void get(Reader& r, OrderEventHeader& h) noexcept {
-  fields(h, [&r](std::string_view /*name*/, auto& field) { get(r, field); });
+template <Described T>
+  requires(!std::is_enum_v<T>)
+constexpr void get(Reader& r, T& value) {
+  fields(value, [&r](std::string_view /*name*/, auto& field) { get(r, field); });
 }
-
-// Applies `f(name, field)` to every encoded field of an event in wire order. One function describes
-// each type for both directions, so encoder and decoder cannot disagree.
-template <typename F> constexpr void fields(TradeTick& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("price", e.price), f("size", e.size),
-      f("aggressor_side", e.aggressor_side), f("trade_id", e.trade_id), f("ts_event", e.ts_event),
-      f("ts_init", e.ts_init);
+template <typename T, std::size_t N> constexpr void put(Writer& w, const std::array<T, N>& items) {
+  for (const T& item : items) {
+    put(w, item);
+  }
 }
-template <typename F> constexpr void fields(QuoteTick& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("bid_price", e.bid_price), f("ask_price", e.ask_price),
-      f("bid_size", e.bid_size), f("ask_size", e.ask_size), f("ts_event", e.ts_event),
-      f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(BookOrder& e, F&& f) {
-  f("side", e.side), f("price", e.price), f("size", e.size), f("order_id", e.order_id);
-}
-template <typename F> constexpr void fields(BarSpecification& e, F&& f) {
-  f("step", e.step), f("aggregation", e.aggregation), f("price_type", e.price_type);
-}
-template <typename F> constexpr void fields(BarType& e, F&& f) {
-  f("instrument_id", e.instrument_id), fields(e.spec, f),
-      f("aggregation_source", e.aggregation_source), f("composite", e.composite),
-      f("composite_step", e.composite_step), f("composite_aggregation", e.composite_aggregation),
-      f("composite_aggregation_source", e.composite_aggregation_source);
-}
-template <typename F> constexpr void fields(Bar& e, F&& f) {
-  fields(e.bar_type, f), f("open", e.open), f("high", e.high), f("low", e.low), f("close", e.close),
-      f("volume", e.volume), f("ts_event", e.ts_event), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(MarkPriceUpdate& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("value", e.value), f("ts_event", e.ts_event),
-      f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(IndexPriceUpdate& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("value", e.value), f("ts_event", e.ts_event),
-      f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(FundingRateUpdate& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("rate", e.rate), f("interval", e.interval),
-      f("next_funding_ns", e.next_funding_ns), f("ts_event", e.ts_event), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(InstrumentStatus& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("action", e.action), f("ts_event", e.ts_event),
-      f("ts_init", e.ts_init), f("reason", e.reason), f("trading_event", e.trading_event),
-      f("is_trading", e.is_trading), f("is_quoting", e.is_quoting),
-      f("is_short_sell_restricted", e.is_short_sell_restricted);
-}
-template <typename F> constexpr void fields(InstrumentClose& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("close_price", e.close_price),
-      f("close_type", e.close_type), f("ts_event", e.ts_event), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(LiquidationOrder& e, F&& f) {
-  f("instrument_id", e.instrument_id), f("side", e.side), f("price", e.price),
-      f("quantity", e.quantity), f("average_price", e.average_price),
-      f("filled_quantity", e.filled_quantity), f("ts_event", e.ts_event), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(OrderInitialized& e, F&& f) {
-  f("header", e.header), f("order_side", e.order_side), f("order_type", e.order_type),
-      f("quantity", e.quantity), f("time_in_force", e.time_in_force), f("post_only", e.post_only),
-      f("reduce_only", e.reduce_only), f("quote_quantity", e.quote_quantity), f("price", e.price),
-      f("activation_price", e.activation_price), f("trigger_price", e.trigger_price),
-      f("trigger_type", e.trigger_type), f("limit_offset", e.limit_offset),
-      f("trailing_offset", e.trailing_offset), f("trailing_offset_type", e.trailing_offset_type),
-      f("expire_time", e.expire_time), f("display_qty", e.display_qty),
-      f("emulation_trigger", e.emulation_trigger),
-      f("trigger_instrument_id", e.trigger_instrument_id),
-      f("contingency_type", e.contingency_type), f("order_list_id", e.order_list_id),
-      f("parent_order_id", e.parent_order_id), f("exec_algorithm_id", e.exec_algorithm_id),
-      f("exec_spawn_id", e.exec_spawn_id), f("tags", e.tags);
-}
-template <typename F> constexpr void fields(OrderDenied& e, F&& f) {
-  f("header", e.header), f("reason", e.reason);
-}
-template <typename F> constexpr void fields(OrderEmulated& e, F&& f) { f("header", e.header); }
-template <typename F> constexpr void fields(OrderReleased& e, F&& f) {
-  f("header", e.header), f("released_price", e.released_price);
-}
-template <typename F> constexpr void fields(OrderSubmitted& e, F&& f) {
-  f("header", e.header), f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderAccepted& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderRejected& e, F&& f) {
-  f("header", e.header), f("account_id", e.account_id), f("reason", e.reason),
-      f("due_post_only", e.due_post_only);
-}
-template <typename F> constexpr void fields(OrderCanceled& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id),
-      f("reason", e.reason);
-}
-template <typename F> constexpr void fields(OrderExpired& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderTriggered& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderPendingUpdate& e, F&& f) {
-  f("header", e.header), f("account_id", e.account_id), f("venue_order_id", e.venue_order_id);
-}
-template <typename F> constexpr void fields(OrderPendingCancel& e, F&& f) {
-  f("header", e.header), f("account_id", e.account_id), f("venue_order_id", e.venue_order_id);
-}
-template <typename F> constexpr void fields(OrderModifyRejected& e, F&& f) {
-  f("header", e.header), f("reason", e.reason), f("venue_order_id", e.venue_order_id),
-      f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderCancelRejected& e, F&& f) {
-  f("header", e.header), f("reason", e.reason), f("venue_order_id", e.venue_order_id),
-      f("account_id", e.account_id);
-}
-template <typename F> constexpr void fields(OrderUpdated& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id),
-      f("quantity", e.quantity), f("price", e.price), f("trigger_price", e.trigger_price),
-      f("protection_price", e.protection_price), f("is_quote_quantity", e.is_quote_quantity);
-}
-template <typename F> constexpr void fields(OrderFilled& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id),
-      f("trade_id", e.trade_id), f("order_side", e.order_side), f("order_type", e.order_type),
-      f("last_qty", e.last_qty), f("last_px", e.last_px), f("currency", e.currency),
-      f("liquidity_side", e.liquidity_side), f("position_id", e.position_id),
-      f("commission", e.commission), f("info_flags", e.info_flags);
-}
-template <typename F> constexpr void fields(OrderFillVoided& e, F&& f) {
-  f("header", e.header), f("venue_order_id", e.venue_order_id), f("account_id", e.account_id),
-      f("correction_id", e.correction_id), f("trade_id", e.trade_id), f("voided_qty", e.voided_qty),
-      f("commission_voided", e.commission_voided), f("order_side", e.order_side),
-      f("order_type", e.order_type), f("last_px", e.last_px), f("currency", e.currency),
-      f("liquidity_side", e.liquidity_side), f("position_id", e.position_id), f("reason", e.reason),
-      f("is_reopened", e.is_reopened), f("info_flags", e.info_flags);
-}
-template <typename F> constexpr void fields(core::TimerKey& e, F&& f) {
-  f("owner", e.owner), f("id", e.id);
-}
-template <typename F> constexpr void fields(TimerFired& e, F&& f) {
-  fields(e.key, f), f("deadline", e.deadline), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(BatchEnd& e, F&& f) {
-  f("batch", e.batch), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(NodeLifecycle& e, F&& f) {
-  f("from", e.from), f("to", e.to), f("reason", e.reason), f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(StrategyError& e, F&& f) {
-  f("strategy_index", e.strategy_index), f("kind", e.kind), f("message_hash", e.message_hash),
-      f("ts_init", e.ts_init);
-}
-template <typename F> constexpr void fields(Shutdown& e, F&& f) {
-  f("mode", e.mode), f("ts_init", e.ts_init);
+template <typename T, std::size_t N> constexpr void get(Reader& r, std::array<T, N>& items) {
+  for (T& item : items) {
+    get(r, item);
+  }
 }
 
 template <typename T> constexpr void put_fields(Writer& w, const T& value) {
@@ -710,8 +570,7 @@ constexpr void put_payload(Writer& w, const OrderBookDeltas& e) {
   w.u32(static_cast<std::uint32_t>(e.deltas.size()));
   for (const OrderBookDelta& d : e.deltas) {
     put(w, d.action);
-    BookOrder order = d.order;
-    fields(order, [&w](std::string_view /*name*/, const auto& field) { put(w, field); });
+    put(w, d.order);
     put(w, d.flags);
     put(w, d.sequence);
     put(w, d.ts_event);
@@ -727,7 +586,7 @@ inline void get_payload(Reader& r, DecodeScratch& scratch, OrderBookDeltas& e) {
     OrderBookDelta d;
     d.instrument_id = id;
     get(r, d.action);
-    fields(d.order, [&r](std::string_view /*name*/, auto& field) { get(r, field); });
+    get(r, d.order);
     get(r, d.flags);
     get(r, d.sequence);
     get(r, d.ts_event);

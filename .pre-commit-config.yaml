@@ -6,7 +6,7 @@ repos:
         entry: bash tools/run-clang-format.sh --dry-run --Werror
         language: system
         files: '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$'
-        exclude: '^jarvis/model/generated/'
+        exclude: '^(jarvis/model/generated/|python/src/generated/)'
       - id: clang-tidy
         name: clang-tidy
         entry: bash tools/run-clang-tidy.sh
@@ -35,7 +35,7 @@ repos:
         name: enum and currency tables match the nautilus snapshot
         entry: python3 tools/gen_model_tables.py --check
         language: system
-        files: '^(tests/conformance/.*\.json|tools/gen_model_tables\.py|jarvis/model/generated/.*)$'
+        files: '^(tests/conformance/.*\.json|tools/gen_model_tables\.py|jarvis/model/generated/.*|python/src/generated/.*)$'
         pass_filenames: false
       - id: actionlint
         name: actionlint

@@ -188,7 +188,14 @@ target_link_libraries(jarvis_testkit INTERFACE jarvis::strict)
 if(JARVIS_BUILD_PYTHON)
   find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
   jarvis_add_nanobind()
-  nanobind_add_module(_core python/src/bindings.cpp)
+  nanobind_add_module(
+    _core
+    python/src/bindings.cpp
+    python/src/bind_values.cpp
+    python/src/bind_events.cpp
+    python/src/bind_log.cpp
+    python/src/generated/enums.cpp
+  )
   target_include_directories(
     _core
     SYSTEM PRIVATE

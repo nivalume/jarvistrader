@@ -13,12 +13,14 @@
 #include "jarvis/core/fixed_string.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/model/account.hpp"
+#include "jarvis/model/bar.hpp"
 #include "jarvis/model/currency.hpp"
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/fixed_point.hpp"
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/schema.hpp"
 #include "jarvis/model/uuid.hpp"
 
 namespace jarvis::node {
@@ -78,6 +80,7 @@ void value(std::string& out, const m::Uuid4& v) {
   const m::Uuid4::Text text = v.text();
   out.append(text.data(), text.size());
 }
+void value(std::string& out, const m::BarType& v) { out += v.text().view(); }
 void value(std::string& out, bool v) { out += v ? "true" : "false"; }
 template <typename T>
   requires std::is_integral_v<T>
@@ -101,15 +104,10 @@ struct FieldPrinter {
   std::string* out;
 
   template <typename T> void operator()(std::string_view name, const T& field) const {
-    if constexpr (std::is_same_v<T, m::OrderEventHeader>) {
-      m::OrderEventHeader copy = field;
-      wire::fields(copy, *this);
-    } else {
-      *out += ' ';
-      *out += name;
-      *out += '=';
-      value(*out, field);
-    }
+    *out += ' ';
+    *out += name;
+    *out += '=';
+    value(*out, field);
   }
 };
 
@@ -122,7 +120,7 @@ void append_deltas(std::string& out, const m::OrderBookDeltas& e) {
     out += " [action=";
     value(out, d.action);
     m::BookOrder order = d.order;
-    wire::fields(order, FieldPrinter{&out});
+    m::fields(order, FieldPrinter{&out});
     out += " flags=";
     value(out, d.flags);
     out += " sequence=";
@@ -193,7 +191,7 @@ void append_event_text(std::string& out, const m::Event& event) {
           append_account(out, e);
         } else {
           T copy = e;
-          wire::fields(copy, FieldPrinter{&out});
+          m::fields(copy, FieldPrinter{&out});
         }
       },
       event);
