@@ -15,3 +15,6 @@ endfunction()
 # Pipeline check: exercises the testkit generator so the fuzz build, driver and corpus handling
 # are proven before real decoders exist.
 jarvis_add_fuzz_target(smoke SOURCES fuzz_smoke.cpp LIBS jarvis::testkit)
+jarvis_add_fuzz_target(decimal SOURCES fuzz_decimal.cpp)
+jarvis_add_fuzz_target(wire SOURCES fuzz_wire.cpp)
+jarvis_add_fuzz_target(config SOURCES fuzz_config.cpp LIBS jarvis::shell)

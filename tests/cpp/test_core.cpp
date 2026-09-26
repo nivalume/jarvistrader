@@ -357,6 +357,17 @@ TEST_SUITE("property") {
       CHECK(fires == expected_fires);
     });
   }
+  TEST_CASE("hardware and table CRC-32C agree") {
+    jarvis::testkit::for_all([](Gen& gen) {
+      std::vector<std::byte> data(gen.below(300));
+      for (std::byte& b : data) {
+        b = static_cast<std::byte>(gen.below(256));
+      }
+      const std::uint32_t seed = static_cast<std::uint32_t>(gen.next());
+      CHECK(jarvis::core::detail::crc32c_instruction(seed, data) ==
+            jarvis::core::detail::crc32c_table(seed, data));
+    });
+  }
 }
 
 TEST_SUITE("zero-alloc") {

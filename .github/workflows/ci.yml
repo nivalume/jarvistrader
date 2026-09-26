@@ -115,6 +115,33 @@ jobs:
       - name: Fingerprint comparison (Release vs O0 event logs must be byte-identical)
         run: tools/fingerprint_gate.sh build/rel build/det-o0 7 200000
 
+  fuzz:
+    needs: functional
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18 libclang-rt-18-dev
+      - name: Build fuzz targets
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake --preset fuzz -DCMAKE_CXX_COMPILER=clang++-18
+          cmake --build --preset fuzz
+      - name: Fuzz each target for 60 seconds from its seed corpus
+        run: |
+          for exe in build/fuzz/tests/fuzz/fuzz_*; do
+            target="$(basename "$exe")"
+            target="${target#fuzz_}"
+            mkdir -p "build/fuzz/corpus-scratch/$target"
+            "$exe" -max_total_time=60 "build/fuzz/corpus-scratch/$target" "tests/fuzz/corpus/$target"
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes-${{ github.sha }}
+          path: crash-*
+
   bench-compare:
     needs: functional
     if: github.event_name == 'pull_request'
@@ -187,7 +214,7 @@ jobs:
 
   gate:
     if: always()
-    needs: [lint, functional, determinism, bench-compare, formal]
+    needs: [lint, functional, determinism, fuzz, bench-compare, formal]
     runs-on: ubuntu-24.04
     steps:
       - name: Check tier results
@@ -197,9 +224,10 @@ jobs:
           DETERMINISM: ${{ needs.determinism.result }}
           BENCH: ${{ needs.bench-compare.result }}
           FORMAL: ${{ needs.formal.result }}
+          FUZZ: ${{ needs.fuzz.result }}
         run: |
           ok=1
-          for pair in "lint:$LINT" "functional:$FUNCTIONAL" "determinism:$DETERMINISM" "formal:$FORMAL"; do
+          for pair in "lint:$LINT" "functional:$FUNCTIONAL" "determinism:$DETERMINISM" "fuzz:$FUZZ" "formal:$FORMAL"; do
             if [[ "${pair#*:}" != success ]]; then echo "${pair%%:*}: ${pair#*:}"; ok=0; fi
           done
           case "$BENCH" in

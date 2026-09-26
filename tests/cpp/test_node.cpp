@@ -487,6 +487,14 @@ params = { spread = 0.5 }
           std::string::npos);
   }
 
+  TEST_CASE("non-ASCII text in the wrong place is a syntax error, CJK comments are fine") {
+    node::NodeConfig c;
+    CHECK(parse("[node]\nid = \"mm01\" # \xE8\x8A\x82\xE7\x82\xB9\xE3\x80\x82\n", c).empty());
+    std::vector<node::ConfigError> errors;
+    CHECK(node::parse_config("[node]\nid = \"mm01\"\xE3\x80\x82\n", "x.toml", {}, c, errors) ==
+          Status::ParseError);
+  }
+
   TEST_CASE("missing [node] and TOML syntax errors are reported") {
     node::NodeConfig c;
     CHECK(has_error(parse("[risk]\n", c), "node", "missing"));

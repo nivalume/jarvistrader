@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -201,10 +200,21 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
   return "";
 }
 
+// The RecordKind with wire code `code`, if this build knows it.
+[[nodiscard]] constexpr bool record_kind(std::uint16_t code, RecordKind& out) noexcept {
+  for (const RecordKind k : kKindByAlternative) {
+    if (static_cast<std::uint16_t>(k) == code) {
+      out = k;
+      return true;
+    }
+  }
+  return false;
+}
+
 // True when `kind` is a record kind this build can decode.
 [[nodiscard]] constexpr bool known_kind(std::uint16_t kind) noexcept {
-  return std::ranges::any_of(
-      kKindByAlternative, [kind](RecordKind k) { return static_cast<std::uint16_t>(k) == kind; });
+  RecordKind k{RecordKind::TradeTick};
+  return record_kind(kind, k);
 }
 
 // Input records (market data, venue events, kernel inputs) use kinds below 0x8000; kernel outputs
@@ -863,11 +873,12 @@ struct RecordView {
 
 [[nodiscard]] inline core::Status decode_event(const RecordView& record, DecodeScratch& scratch,
                                                Event& out) {
-  if (!known_kind(record.header.kind)) {
+  RecordKind kind{RecordKind::TradeTick};
+  if (!record_kind(record.header.kind, kind)) {
     return core::Status::UnsupportedMessage;
   }
   Reader r{record.payload};
-  return get_event(static_cast<RecordKind>(record.header.kind), r, scratch, out);
+  return get_event(kind, r, scratch, out);
 }
 
 // ---- log header -----------------------------------------------------------------------------

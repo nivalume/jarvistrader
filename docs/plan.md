@@ -32,31 +32,33 @@
 
 ## M1 core 与 model（兼容契约落地，确定性门变成真实检查）
 
-- [ ] task: core — `Status`、`FixedVector`（超容返回 `Status::CapacityExceeded`）、slab 竞技场与带代际的 32 位句柄
-- [ ] task: core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop)`，不依赖调用顺序
-- [ ] task: core — `UnixNanos`、`DurationNanos` 与 RFC 3339 格式化
-- [ ] task: core — 事件键 `(ts, source_id, seq)` 与确定性优先队列
-- [ ] task: core — `Clock` concept、`ReplayClock` 与定时器轮
-- [ ] task: model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、字符串解析与格式化、`__int128` 乘法与向零截断（§6.1）
-- [ ] task: model — 全部标识符及其字符串约束，`InstrumentId` intern 为 `uint32` 槽位的侧表（§6.2）
-- [ ] task: model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）
-- [ ] task: model — 行情数据类型：`TradeTick`、`QuoteTick`、`Bar`、`BarType`、`BarSpecification`、`BookOrder`、`OrderBookDelta`、`OrderBookDeltas`、`OrderBookDepth`、`InstrumentStatus`、`MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate`、`InstrumentClose`，以及扩展类型 `LiquidationOrder`（§6.4）
-- [ ] task: model — Instrument：`CurrencyPair`、`CryptoPerpetual`、`CryptoFuture` 与校验规则（§6.5）
-- [ ] task: model — 17 种订单事件、仓位事件、`AccountState`、`AccountBalance`、`MarginBalance`（§6.7）
-- [ ] task: model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码，epoch 持久化计数器（§8.4）
-- [ ] task: model — 封闭的 `Event` variant 与事件分类（§5.1）
-- [ ] task: log — 定宽显式编码的事件日志：日志头、记录布局、crc32c、按段滚动（§5.6、§16.1）
-- [ ] task: tools — `jarvis fingerprint`，替换 CI determinism job 与 `just fp` 中的占位输出
-- [ ] task: build — 钉定 toml++ 的提交，供 shell 解析配置使用
-- [ ] task: config — 类型化 `NodeConfig`：TOML 解析（位于 shell）、未知键报错、`--env` 与 `--set` 覆盖、规范化后计算 hash（§4.2）
-- [ ] task: node — Node 生命周期状态机与 `NodeLifecycle` 记录事件，先实现 backtest 路径用到的状态（§4.4）
-- [ ] task: python — nanobind 绑定全部模型类型，跨边界一律按值拷贝
-- [ ] task: python — `jarvis.determinism.guard()` 与 `PYTHONHASHSEED` 自动设置（§7.7）
-- [ ] task: harness — 定点算术性质测试：字符串往返、比较只看 raw、乘法截断方向、溢出检测
-- [ ] task: harness — nautilus 字符串格式往返 golden：标识符、`Price`、`Quantity`、`Money`、`BarType`、枚举
-- [ ] task: harness — 与 nautilus `cd417b80` 源码逐项核对字段、枚举值、常量的核对测试
-- [ ] task: harness — 热基准 `model/parse_decimal`、`log/append_record`
-- [ ] task: 验收 — rel 与 det-o0 在生成的模型与事件语料上逐字节一致；Python 能构造全部模型类型并读写事件日志
+> 2026-09-26 完成。验收结果：GCC 13 Release、GCC 13 `-O0`（det-o0）与 Clang 18 Release 各自生成 seed 7 的 20 万条语料（覆盖全部 33 种记录类型），事件日志逐字节一致；Python 把语料读入后原样写出，指纹不变，说明每个字段在 C++ 与 Python 之间无损往返；`just check` 通过（lint、24 组 ctest、155 个 pytest、golden、指纹门、A/B 基准、TLC）。模糊测试（每个目标 60–90 秒）：decimal 约 1000 万次、wire 约 2300 万次无失败，wire 目标同时证明编码是规范的（能解码的记录重新编码后逐字节相同）；config 目标发现 toml++ v3.4.0 在值后出现 U+3002 等字符时执行到 `TOML_UNREACHABLE`（未定义行为），已改钉上游修复后的 master 提交并把输入加入回归语料。实现中的修正：与 nautilus 测试向量对照后，`Money` 与指定精度的解析改为 round half to even（原先报 PrecisionLoss）；CRC32C 使用硬件指令后，`log/append_record` 从 289 ns 降到 89 ns，`log/decode_record` 从 274 ns 降到 75 ns。计划外补充：`jarvis` 命令行（corpus、fingerprint、dump、roundtrip、config）、模型字段描述符 `jarvis/model/schema.hpp`（日志编码、文本输出与 Python 绑定共用）、PR 级 fuzz CI job。
+
+- [x] task: core — `Status`、`FixedVector`（超容返回 `Status::CapacityExceeded`）、slab 竞技场与带代际的 32 位句柄
+- [x] task: core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop)`，不依赖调用顺序
+- [x] task: core — `UnixNanos`、`DurationNanos` 与 RFC 3339 格式化
+- [x] task: core — 事件键 `(ts, source_id, seq)` 与确定性优先队列
+- [x] task: core — `Clock` concept、`ReplayClock` 与定时器轮
+- [x] task: model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、字符串解析与格式化、`__int128` 乘法与向零截断（§6.1）
+- [x] task: model — 全部标识符及其字符串约束，`InstrumentId` intern 为 `uint32` 槽位的侧表（§6.2）
+- [x] task: model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）
+- [x] task: model — 行情数据类型：`TradeTick`、`QuoteTick`、`Bar`、`BarType`、`BarSpecification`、`BookOrder`、`OrderBookDelta`、`OrderBookDeltas`、`OrderBookDepth`、`InstrumentStatus`、`MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate`、`InstrumentClose`，以及扩展类型 `LiquidationOrder`（§6.4）
+- [x] task: model — Instrument：`CurrencyPair`、`CryptoPerpetual`、`CryptoFuture` 与校验规则（§6.5）
+- [x] task: model — 17 种订单事件、仓位事件、`AccountState`、`AccountBalance`、`MarginBalance`（§6.7）
+- [x] task: model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码，epoch 持久化计数器（§8.4）
+- [x] task: model — 封闭的 `Event` variant 与事件分类（§5.1）
+- [x] task: log — 定宽显式编码的事件日志：日志头、记录布局、crc32c、按段滚动（§5.6、§16.1）
+- [x] task: tools — `jarvis fingerprint`，替换 CI determinism job 与 `just fp` 中的占位输出
+- [x] task: build — 钉定 toml++ 的提交，供 shell 解析配置使用
+- [x] task: config — 类型化 `NodeConfig`：TOML 解析（位于 shell）、未知键报错、`--env` 与 `--set` 覆盖、规范化后计算 hash（§4.2）
+- [x] task: node — Node 生命周期状态机与 `NodeLifecycle` 记录事件，先实现 backtest 路径用到的状态（§4.4）
+- [x] task: python — nanobind 绑定全部模型类型，跨边界一律按值拷贝
+- [x] task: python — `jarvis.determinism.guard()` 与 `PYTHONHASHSEED` 自动设置（§7.7）
+- [x] task: harness — 定点算术性质测试：字符串往返、比较只看 raw、乘法截断方向、溢出检测
+- [x] task: harness — nautilus 字符串格式往返 golden：标识符、`Price`、`Quantity`、`Money`、`BarType`、枚举
+- [x] task: harness — 与 nautilus `cd417b80` 源码逐项核对字段、枚举值、常量的核对测试
+- [x] task: harness — 热基准 `model/parse_decimal`、`log/append_record`
+- [x] task: 验收 — rel 与 det-o0 在生成的模型与事件语料上逐字节一致；Python 能构造全部模型类型并读写事件日志
 
 ## M2 Engine、data、策略宿主与回放（Python 回测端到端跑通，只有数据）
 

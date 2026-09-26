@@ -53,11 +53,13 @@ function(jarvis_add_tomlplusplus)
     return()
   endif()
 
-  # toml++ v3.4.0 (header-only; compiled once in jarvis/node/toml_impl.cpp)
+  # toml++ master after v3.4.0 (header-only; compiled once in jarvis/node/toml_impl.cpp).
+  # v3.4.0 reaches TOML_UNREACHABLE in is_non_ascii_horizontal_whitespace for characters such
+  # as U+3002 after a value (found by tests/fuzz/fuzz_config); master returns false instead.
   CPMAddPackage(
     NAME tomlplusplus
     GITHUB_REPOSITORY marzer/tomlplusplus
-    GIT_TAG 30172438cee64926dc41fdd9c11fb3ba5b2ba9de
+    GIT_TAG 1e8829b793b66ad17011732a146b8077d379b011
     EXCLUDE_FROM_ALL YES
     SYSTEM YES
   )
