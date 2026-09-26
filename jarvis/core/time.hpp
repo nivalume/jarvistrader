@@ -105,8 +105,8 @@ constexpr void put_digits(std::span<char> out, std::size_t& pos, std::uint64_t v
   pos += width;
 }
 
-[[nodiscard]] constexpr bool read_digits(std::string_view text, std::size_t& pos,
-                                         std::size_t width, std::uint64_t& value) noexcept {
+[[nodiscard]] constexpr bool read_digits(std::string_view text, std::size_t& pos, std::size_t width,
+                                         std::uint64_t& value) noexcept {
   if (pos + width > text.size()) {
     return false;
   }
@@ -174,81 +174,120 @@ constexpr void put_digits(std::span<char> out, std::size_t& pos, std::uint64_t v
   return Status::Ok;
 }
 
-// Parses "YYYY-MM-DDTHH:MM:SS[.f{1,9}](Z|+HH:MM|-HH:MM)". Instants before the epoch or past the
-// range of UnixNanos are OutOfRange.
-[[nodiscard]] constexpr Status parse_rfc3339(std::string_view text, UnixNanos& out) noexcept {
-  std::size_t pos = 0;
+namespace detail {
+
+// "YYYY-MM-DD(T|t| )HH:MM:SS" at `pos`: days since the epoch and seconds of the day.
+[[nodiscard]] constexpr Status parse_date_time(std::string_view text, std::size_t& pos,
+                                               std::int64_t& days,
+                                               std::uint64_t& secs_of_day) noexcept {
   std::uint64_t year = 0;
   std::uint64_t month = 0;
   std::uint64_t day = 0;
-  std::uint64_t hour = 0;
-  std::uint64_t minute = 0;
-  std::uint64_t second = 0;
-  if (!detail::read_digits(text, pos, 4, year) || !detail::expect(text, pos, '-') ||
-      !detail::read_digits(text, pos, 2, month) || !detail::expect(text, pos, '-') ||
-      !detail::read_digits(text, pos, 2, day)) {
+  if (!read_digits(text, pos, 4, year) || !expect(text, pos, '-') ||
+      !read_digits(text, pos, 2, month) || !expect(text, pos, '-') ||
+      !read_digits(text, pos, 2, day)) {
     return Status::ParseError;
   }
   if (pos >= text.size() || (text[pos] != 'T' && text[pos] != 't' && text[pos] != ' ')) {
     return Status::ParseError;
   }
   ++pos;
-  if (!detail::read_digits(text, pos, 2, hour) || !detail::expect(text, pos, ':') ||
-      !detail::read_digits(text, pos, 2, minute) || !detail::expect(text, pos, ':') ||
-      !detail::read_digits(text, pos, 2, second)) {
+  std::uint64_t hour = 0;
+  std::uint64_t minute = 0;
+  std::uint64_t second = 0;
+  if (!read_digits(text, pos, 2, hour) || !expect(text, pos, ':') ||
+      !read_digits(text, pos, 2, minute) || !expect(text, pos, ':') ||
+      !read_digits(text, pos, 2, second)) {
     return Status::ParseError;
   }
   if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
     return Status::OutOfRange;
   }
-  const std::int64_t check_days = days_from_civil(static_cast<std::int64_t>(year),
-                                                  static_cast<unsigned>(month),
-                                                  static_cast<unsigned>(day));
-  const CivilDate roundtrip = civil_from_days(check_days);
+  days = days_from_civil(static_cast<std::int64_t>(year), static_cast<unsigned>(month),
+                         static_cast<unsigned>(day));
+  const CivilDate roundtrip = civil_from_days(days);
   if (roundtrip.month != month || roundtrip.day != day) {
     return Status::OutOfRange; // e.g. February 30
   }
-  std::uint64_t nanos = 0;
-  if (pos < text.size() && text[pos] == '.') {
-    ++pos;
-    std::size_t digits = 0;
-    while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
-      if (digits == 9) {
-        return Status::PrecisionLoss;
-      }
-      nanos = nanos * 10U + static_cast<std::uint64_t>(text[pos] - '0');
-      ++digits;
-      ++pos;
-    }
-    if (digits == 0) {
-      return Status::ParseError;
-    }
-    for (std::size_t i = digits; i < 9; ++i) {
-      nanos *= 10U;
-    }
+  secs_of_day = hour * 3600U + minute * 60U + second;
+  return Status::Ok;
+}
+
+// Optional ".f{1,9}" at `pos`, as nanoseconds.
+[[nodiscard]] constexpr Status parse_fraction(std::string_view text, std::size_t& pos,
+                                              std::uint64_t& nanos) noexcept {
+  nanos = 0;
+  if (pos >= text.size() || text[pos] != '.') {
+    return Status::Ok;
   }
-  std::int64_t offset_seconds = 0;
+  ++pos;
+  std::size_t digits = 0;
+  while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+    if (digits == 9) {
+      return Status::PrecisionLoss;
+    }
+    nanos = nanos * 10U + static_cast<std::uint64_t>(text[pos] - '0');
+    ++digits;
+    ++pos;
+  }
+  if (digits == 0) {
+    return Status::ParseError;
+  }
+  for (std::size_t i = digits; i < 9; ++i) {
+    nanos *= 10U;
+  }
+  return Status::Ok;
+}
+
+// "Z", "z", "+HH:MM" or "-HH:MM" at `pos`, as seconds east of UTC.
+[[nodiscard]] constexpr Status parse_offset(std::string_view text, std::size_t& pos,
+                                            std::int64_t& offset_seconds) noexcept {
+  offset_seconds = 0;
   if (pos < text.size() && (text[pos] == 'Z' || text[pos] == 'z')) {
     ++pos;
-  } else if (pos < text.size() && (text[pos] == '+' || text[pos] == '-')) {
-    const bool negative = text[pos] == '-';
-    ++pos;
-    std::uint64_t oh = 0;
-    std::uint64_t om = 0;
-    if (!detail::read_digits(text, pos, 2, oh) || !detail::expect(text, pos, ':') ||
-        !detail::read_digits(text, pos, 2, om) || oh > 23 || om > 59) {
-      return Status::ParseError;
-    }
-    offset_seconds = static_cast<std::int64_t>(oh * 3600U + om * 60U) * (negative ? -1 : 1);
-  } else {
+    return Status::Ok;
+  }
+  if (pos >= text.size() || (text[pos] != '+' && text[pos] != '-')) {
     return Status::ParseError;
+  }
+  const bool negative = text[pos] == '-';
+  ++pos;
+  std::uint64_t oh = 0;
+  std::uint64_t om = 0;
+  if (!read_digits(text, pos, 2, oh) || !expect(text, pos, ':') || !read_digits(text, pos, 2, om) ||
+      oh > 23 || om > 59) {
+    return Status::ParseError;
+  }
+  offset_seconds = static_cast<std::int64_t>(oh * 3600U + om * 60U) * (negative ? -1 : 1);
+  return Status::Ok;
+}
+
+} // namespace detail
+
+// Parses "YYYY-MM-DDTHH:MM:SS[.f{1,9}](Z|+HH:MM|-HH:MM)"; the separator may also be 't' or a
+// space, as RFC 3339 section 5.6 allows. Instants before the epoch or past the range of
+// UnixNanos are OutOfRange.
+[[nodiscard]] constexpr Status parse_rfc3339(std::string_view text, UnixNanos& out) noexcept {
+  std::size_t pos = 0;
+  std::int64_t days = 0;
+  std::uint64_t secs_of_day = 0;
+  std::uint64_t nanos = 0;
+  std::int64_t offset_seconds = 0;
+  Status s = detail::parse_date_time(text, pos, days, secs_of_day);
+  if (ok(s)) {
+    s = detail::parse_fraction(text, pos, nanos);
+  }
+  if (ok(s)) {
+    s = detail::parse_offset(text, pos, offset_seconds);
+  }
+  if (!ok(s)) {
+    return s;
   }
   if (pos != text.size()) {
     return Status::ParseError;
   }
-  const std::int64_t total_seconds = check_days * static_cast<std::int64_t>(kSecondsPerDay) +
-                                     static_cast<std::int64_t>(hour * 3600U + minute * 60U) +
-                                     static_cast<std::int64_t>(second) - offset_seconds;
+  const std::int64_t total_seconds = days * static_cast<std::int64_t>(kSecondsPerDay) +
+                                     static_cast<std::int64_t>(secs_of_day) - offset_seconds;
   if (total_seconds < 0) {
     return Status::OutOfRange;
   }

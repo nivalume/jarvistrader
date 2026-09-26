@@ -52,10 +52,10 @@ public:
 
   [[nodiscard]] constexpr std::uint64_t draw(std::uint64_t identity, std::uint32_t hop,
                                              std::uint32_t index = 0) const noexcept {
-    const PhiloxCounter out = philox4x32_10(
-        PhiloxCounter{static_cast<std::uint32_t>(identity),
-                      static_cast<std::uint32_t>(identity >> 32U), hop, index},
-        key_);
+    const PhiloxCounter out =
+        philox4x32_10(PhiloxCounter{static_cast<std::uint32_t>(identity),
+                                    static_cast<std::uint32_t>(identity >> 32U), hop, index},
+                      key_);
     return (static_cast<std::uint64_t>(out[1]) << 32U) | out[0];
   }
 

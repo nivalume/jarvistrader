@@ -57,8 +57,7 @@ public:
   friend constexpr bool operator==(const Currency& a, const Currency& b) noexcept {
     return a.code_ == b.code_;
   }
-  friend constexpr std::strong_ordering operator<=>(const Currency& a,
-                                                    const Currency& b) noexcept {
+  friend constexpr std::strong_ordering operator<=>(const Currency& a, const Currency& b) noexcept {
     return a.code_ <=> b.code_;
   }
 

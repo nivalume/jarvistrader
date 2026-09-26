@@ -45,7 +45,8 @@ private:
   std::size_t size_ = 0;
 };
 
-[[nodiscard]] constexpr core::Status parse_step(std::string_view text, std::uint64_t& out) noexcept {
+[[nodiscard]] constexpr core::Status parse_step(std::string_view text,
+                                                std::uint64_t& out) noexcept {
   if (text.empty()) {
     return core::Status::ParseError;
   }
@@ -106,8 +107,8 @@ struct BarSpecification {
     b.put(to_string(price_type));
   }
 
-  friend constexpr bool operator==(const BarSpecification&, const BarSpecification&) noexcept =
-      default;
+  friend constexpr bool operator==(const BarSpecification&,
+                                   const BarSpecification&) noexcept = default;
 };
 
 // "{instrument_id}-{step}-{AGG}-{PRICE_TYPE}-{SOURCE}", optionally followed by

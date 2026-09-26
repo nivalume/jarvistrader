@@ -112,10 +112,9 @@ using Instrument = std::variant<CurrencyPair, CryptoPerpetual, CryptoFuture>;
 
 [[nodiscard]] constexpr AssetClass asset_class(const Instrument& instrument) noexcept {
   if (const auto* pair = std::get_if<CurrencyPair>(&instrument)) {
-    const bool crypto =
-        pair->common.quote_currency.currency_type() == CurrencyType::Crypto ||
-        (pair->common.base_currency &&
-         pair->common.base_currency->currency_type() == CurrencyType::Crypto);
+    const bool crypto = pair->common.quote_currency.currency_type() == CurrencyType::Crypto ||
+                        (pair->common.base_currency &&
+                         pair->common.base_currency->currency_type() == CurrencyType::Crypto);
     return crypto ? AssetClass::Cryptocurrency : AssetClass::FX;
   }
   return AssetClass::Cryptocurrency;

@@ -9,6 +9,7 @@ namespace jarvis::node::build_config {
 inline constexpr std::string_view kVersion = "@PROJECT_VERSION@";
 inline constexpr std::string_view kGitCommit = "@JARVIS_GIT_COMMIT@";
 inline constexpr std::string_view kCompiler = "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@";
+inline constexpr std::string_view kPlatform = "@JARVIS_PLATFORM@";
 inline constexpr bool kLiveEnabled = @JARVIS_LIVE_BOOL@;
 
 } // namespace jarvis::node::build_config

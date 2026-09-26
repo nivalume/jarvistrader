@@ -30,6 +30,7 @@ wheel.packages = ["python/jarvis"]
 cmake.args = [
   "-DJARVIS_BUILD_TESTS=OFF",
   "-DJARVIS_BUILD_BENCHMARKS=OFF",
+  "-DJARVIS_BUILD_CLI=OFF",
 ]
 sdist.include = [
   "CMakeLists.txt",

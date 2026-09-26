@@ -1,0 +1,158 @@
+# Model text round trips. Inputs come from the nautilus_trader test suite at cd417b80
+# (crates/model/src/types, identifiers, data/bar.rs and crates/core/src/nanos.rs) unless marked
+# "jarvis". Each line is "<type> <text>"; `jarvis roundtrip` appends "=> <result>".
+
+# Price: inferred precision, trailing zeros kept, scientific notation, underscores.
+price 1.0 => 1.0 raw=1000000000 precision=1
+price 1.00 => 1.00 raw=1000000000 precision=2
+price 1.000 => 1.000 raw=1000000000 precision=3
+price 100.00 => 100.00 raw=100000000000 precision=2
+price 0.10 => 0.10 raw=100000000 precision=2
+price 0.100 => 0.100 raw=100000000 precision=3
+price 123.456 => 123.456 raw=123456000000 precision=3
+price -10.5 => -10.5 raw=-10500000000 precision=1
+price 15.75 => 15.75 raw=15750000000 precision=2
+price 1e7 => 10000000 raw=10000000000000000 precision=0
+price 1.5e3 => 1500 raw=1500000000000 precision=0
+price 1.234e-2 => 0.01234 raw=12340000 precision=5
+price 5E-3 => 0.005 raw=5000000 precision=3
+price 1_234.56 => 1234.56 raw=1234560000000 precision=2
+price 1000000 => 1000000 raw=1000000000000000 precision=0
+price 99_999.999_99 => 99999.99999 raw=99999999990000 precision=5
+price 1.123456789 => 1.123456789 raw=1123456789 precision=9
+# jarvis: out of range and malformed inputs.
+price 9223372037 => ERROR OutOfRange
+price 1.1234567891 => ERROR PrecisionLoss
+price abc => ERROR ParseError
+price 1.2.3 => ERROR ParseError
+
+# Quantity
+quantity 0 => 0 raw=0 precision=0
+quantity 1.1 => 1.1 raw=1100000000 precision=1
+quantity 1.123456789 => 1.123456789 raw=1123456789 precision=9
+quantity 1e7 => 10000000 raw=10000000000000000 precision=0
+quantity 2.5e3 => 2500 raw=2500000000000 precision=0
+quantity 1.234e-2 => 0.01234 raw=12340000 precision=5
+quantity 5E-3 => 0.005 raw=5000000 precision=3
+quantity 1.0e6 => 1000000 raw=1000000000000000 precision=0
+quantity 1_234.56 => 1234.56 raw=1234560000000 precision=2
+quantity 99_999.999_99 => 99999.99999 raw=99999999990000 precision=5
+quantity 0.100 => 0.100 raw=100000000 precision=3
+# jarvis: quantities are non-negative.
+quantity -1 => ERROR OutOfRange
+
+# Money: rounds half to even at the currency precision.
+money 0 USD => 0.00 USD raw=0
+money 1.1 AUD => 1.10 AUD raw=1100000000
+money 1.12345678 BTC => 1.12345678 BTC raw=1123456780
+money 10_000.10 USD => 10000.10 USD raw=10000100000000
+money 1.005 USD => 1.00 USD raw=1000000000
+money 1.015 USD => 1.02 USD raw=1020000000
+money -1.005 USD => -1.00 USD raw=-1000000000
+money -1.015 USD => -1.02 USD raw=-1020000000
+money 1e7 USD => 10000000.00 USD raw=10000000000000000
+money 2.5e3 EUR => 2500.00 EUR raw=2500000000000
+money 1.234e-2 GBP => 0.01 GBP raw=10000000
+money 5E-3 JPY => 0 JPY raw=0
+money 1_234.56 USD => 1234.56 USD raw=1234560000000
+money 1_000_000 EUR => 1000000.00 EUR raw=1000000000000000
+money 99_999.99 GBP => 99999.99 GBP raw=99999990000000
+money -123.45 USD => -123.45 USD raw=-123450000000
+money 0USD => ERROR ParseError
+money 0x00 USD => ERROR ParseError
+money 0 US => ERROR NotFound
+money 0 USD USD => ERROR ParseError
+
+# Currency
+currency USD => USD precision=2 iso4217=840 name="United States dollar" type=FIAT
+currency USDT => USDT precision=8 iso4217=0 name="Tether" type=CRYPTO
+currency BTC => BTC precision=8 iso4217=0 name="Bitcoin" type=CRYPTO
+currency JPY => JPY precision=0 iso4217=392 name="Japanese yen" type=FIAT
+currency XYZ => ERROR NotFound
+
+# Identifiers
+instrument_id BTCUSDT-PERP.BINANCE => BTCUSDT-PERP.BINANCE symbol=BTCUSDT-PERP venue=BINANCE
+instrument_id AUDUSD.SIM => AUDUSD.SIM symbol=AUDUSD venue=SIM
+instrument_id ES.FUT.XCME => ES.FUT.XCME symbol=ES.FUT venue=XCME
+instrument_id 1.211334112-31570229.BETFAIR => 1.211334112-31570229.BETFAIR symbol=1.211334112-31570229 venue=BETFAIR
+instrument_id NODOT => ERROR ParseError
+trader_id TRADER-001 => TRADER-001 tag=001
+trader_id -001 => ERROR InvalidArgument
+trader_id TRADER- => ERROR InvalidArgument
+strategy_id EMACross-001 => EMACross-001 tag=001
+strategy_id -001 => ERROR InvalidArgument
+strategy_id EMACross- => ERROR InvalidArgument
+account_id IB-1234567890 => IB-1234567890 issuer=IB
+account_id BINANCE-USDM-001 => BINANCE-USDM-001 issuer=BINANCE
+account_id -123456 => ERROR InvalidArgument
+account_id IB- => ERROR InvalidArgument
+client_order_id O-20210410-022422-001-001-1 => O-20210410-022422-001-001-1
+venue_order_id 001 => 001
+trade_id 1000000001 => 1000000001
+position_id P-123456789 => P-123456789
+symbol BTCUSDT-PERP => BTCUSDT-PERP
+venue BINANCE => BINANCE
+
+# Bars
+bar_spec 1-MINUTE-LAST => 1-MINUTE-LAST
+bar_spec 100-TICK-MID => 100-TICK-MID
+bar_spec 1-MINUTE => ERROR ParseError
+bar_type BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL => BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL
+bar_type BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-INTERNAL => BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-INTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-EXTERNAL => BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-EXTERNAL composite=true
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-EXTERNAL@1-MINUTE-INTERNAL => BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-EXTERNAL@1-MINUTE-INTERNAL composite=true
+bar_type BTCUSDT-PERP.BINANCE-30500-WEEK-LAST-INTERNAL => BTCUSDT-PERP.BINANCE-30500-WEEK-LAST-INTERNAL
+bar_type ESM4.XCME-1-MINUTE-LAST-EXTERNAL => ESM4.XCME-1-MINUTE-LAST-EXTERNAL
+bar_type AAPL.XNAS-1-MINUTE-LAST-INTERNAL => AAPL.XNAS-1-MINUTE-LAST-INTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@INVALID-MINUTE-EXTERNAL => ERROR ParseError
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-INVALID-EXTERNAL => ERROR ParseError
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-INVALID => ERROR ParseError
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-EXTERNAL@1-HOUR-EXTERNAL => ERROR ParseError
+
+# Timestamps: to_rfc3339 and RFC 3339 parsing.
+unix_nanos 0 => 1970-01-01T00:00:00+00:00
+unix_nanos 1000000000 => 1970-01-01T00:00:01+00:00
+unix_nanos 1000000000000000000 => 2001-09-09T01:46:40+00:00
+unix_nanos 1500000000000000000 => 2017-07-14T02:40:00+00:00
+unix_nanos 1500000000500000000 => 2017-07-14T02:40:00.500+00:00
+unix_nanos 1500000000123456000 => 2017-07-14T02:40:00.123456+00:00
+unix_nanos 1500000000123456789 => 2017-07-14T02:40:00.123456789+00:00
+unix_nanos 1707577123456789000 => 2024-02-10T14:58:43.456789+00:00
+rfc3339 2024-02-10T14:58:43Z => 2024-02-10T14:58:43+00:00 nanos=1707577123000000000
+rfc3339 2024-02-10t14:58:43Z => 2024-02-10T14:58:43+00:00 nanos=1707577123000000000
+rfc3339 2024-02-10 14:58:43Z => 2024-02-10T14:58:43+00:00 nanos=1707577123000000000
+rfc3339 2024-02-10T14:58:43.456789Z => 2024-02-10T14:58:43.456789+00:00 nanos=1707577123456789000
+rfc3339 2024-02-10 14:58:43 => ERROR ParseError
+rfc3339 2024-02-10T14:58:43Z[UTC] => ERROR ParseError
+# jarvis: offsets and fraction lengths.
+rfc3339 2024-02-10T22:58:43.1+08:00 => 2024-02-10T14:58:43.100+00:00 nanos=1707577123100000000
+rfc3339 1970-01-01T00:00:00+00:00 => 1970-01-01T00:00:00+00:00 nanos=0
+rfc3339 1969-12-31T23:59:59Z => ERROR OutOfRange
+
+# UUID
+uuid 2d89666b-1a1e-4a75-b193-4eb3b454c757 => 2d89666b-1a1e-4a75-b193-4eb3b454c757
+uuid 2D89666B-1A1E-4A75-B193-4EB3B454C757 => 2d89666b-1a1e-4a75-b193-4eb3b454c757
+uuid 2d89666b1a1e4a75b1934eb3b454c757 => ERROR ParseError
+
+# Enums: case-insensitive parsing, aliases, unknown values.
+enum:OrderSide BUY => BUY value=1
+enum:OrderSide sell => SELL value=2
+enum:OrderSide NO_ORDER_SIDE => ERROR ParseError
+enum:AggressorSide BUYER => BUY value=1
+enum:AggressorSide seller => SELL value=2
+enum:AggressorSide NO_AGGRESSOR => NO_AGGRESSOR value=0
+enum:OrderType STOP_LIMIT => STOP_LIMIT value=4
+enum:OrderType TRAILING_STOP_MARKET => TRAILING_STOP_MARKET value=8
+enum:TimeInForce GTC => GTC value=1
+enum:TimeInForce AT_THE_CLOSE => AT_THE_CLOSE value=7
+enum:OrderStatus PARTIALLY_FILLED => PARTIALLY_FILLED value=13
+enum:OrderStatus VOIDED => VOIDED value=15
+enum:BookAction CLEAR => CLEAR value=4
+enum:BarAggregation MINUTE => MINUTE value=12
+enum:BarAggregation RENKO => RENKO value=18
+enum:PriceType MARK => MARK value=5
+enum:TrailingOffsetType PRICE => PRICE value=1
+enum:RecordFlag F_LAST => F_LAST value=128
+enum:TradingState REDUCING => REDUCING value=2
+enum:OmsType NETTING => NETTING value=1
+enum:NoSuchEnum X => ERROR UnknownEnum

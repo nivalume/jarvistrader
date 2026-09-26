@@ -61,3 +61,57 @@ def test_hand_edited_expectation_is_caught(tmp_path: Path, capsys) -> None:
 def test_unknown_case_name_is_an_error(tmp_path: Path) -> None:
     make_case(tmp_path, "present", "x")
     assert golden.main(["--root", str(tmp_path), "--case", "absent"]) == 2
+
+
+def test_commands_run_in_order(tmp_path: Path) -> None:
+    case = tmp_path / "steps"
+    case.mkdir()
+    copy = "import sys, shutil; shutil.copyfile(sys.argv[1], sys.argv[2])"
+    (case / "case.toml").write_text(
+        textwrap.dedent(
+            f"""
+            commands = [
+              ["{{python}}", "-c", "{WRITER}", "{{out}}/first.txt", "step"],
+              ["{{python}}", "-c", "{copy}", "{{out}}/first.txt", "{{out}}/second.txt"],
+            ]
+
+            [[compare]]
+            produced = "second.txt"
+            expected = "expected.second.txt"
+            """
+        )
+    )
+    assert golden.main(["--root", str(tmp_path), "--bin", str(tmp_path), "--update"]) == 0
+    assert (case / "expected.second.txt").read_text() == "step"
+    assert golden.main(["--root", str(tmp_path), "--bin", str(tmp_path)]) == 0
+
+
+def test_failing_step_stops_the_case(tmp_path: Path, capsys) -> None:
+    case = tmp_path / "broken"
+    case.mkdir()
+    (case / "case.toml").write_text(
+        textwrap.dedent(
+            f"""
+            commands = [
+              ["{{python}}", "-c", "import sys; sys.exit(3)"],
+              ["{{python}}", "-c", "{WRITER}", "{{out}}/result.txt", "never"],
+            ]
+
+            [[compare]]
+            produced = "result.txt"
+            expected = "expected.result.txt"
+            """
+        )
+    )
+    assert golden.main(["--root", str(tmp_path), "--bin", str(tmp_path), "--update"]) == 1
+    assert "command exited with 3" in capsys.readouterr().out
+    assert not (case / "expected.result.txt").exists()
+
+
+def test_command_and_commands_are_exclusive(tmp_path: Path) -> None:
+    case = tmp_path / "both"
+    case.mkdir()
+    (case / "case.toml").write_text(
+        'command = ["a"]\ncommands = [["b"]]\n[[compare]]\nproduced = "x"\nexpected = "y"\n'
+    )
+    assert golden.main(["--root", str(tmp_path), "--bin", str(tmp_path)]) == 2

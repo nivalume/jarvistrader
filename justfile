@@ -46,8 +46,9 @@ zero-alloc: (build "dev")
 layering:
     {{python}} tools/check-layering.py
 
-fp: (build "rel") (build "det-o0")
-    @echo "fp: SKIPPED - byte-for-byte fingerprints need the event log and 'jarvis fingerprint' (plan.md M1)"
+# Determinism gate: Release and -O0 builds must write byte-identical event logs.
+fp seed="7" events="200000": (build "rel") (build "det-o0")
+    tools/fingerprint_gate.sh build/rel build/det-o0 {{seed}} {{events}}
 
 bench: (build "bench")
     mkdir -p benchmark-results

@@ -19,6 +19,14 @@ inline constexpr std::int64_t kMoneyRawMin = kPriceRawMin;
 // Longest Money text: amount, space, currency code.
 inline constexpr std::size_t kMaxMoneyText = kMaxDecimalText + 1 + 16;
 
+namespace detail {
+
+[[nodiscard]] constexpr bool is_space(char c) noexcept {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+} // namespace detail
+
 // An amount of a currency (nautilus `Money`): raw int64 at 10^9 scale on the currency's
 // precision grid. Text form is "{amount} {code}".
 class Money {
@@ -38,26 +46,43 @@ public:
   }
 
   // Truncates toward zero onto the currency's precision grid; never credits a sub-unit.
-  [[nodiscard]] static constexpr core::Status from_raw_truncated(std::int64_t raw,
-                                                                 const Currency& currency,
-                                                                 Money& out) noexcept {
-    const auto unit = static_cast<std::int64_t>(core::kPow10[kFixedPrecision - currency.precision()]);
+  [[nodiscard]] static constexpr core::Status
+  from_raw_truncated(std::int64_t raw, const Currency& currency, Money& out) noexcept {
+    const auto unit =
+        static_cast<std::int64_t>(core::kPow10[kFixedPrecision - currency.precision()]);
     return from_raw(raw / unit * unit, currency, out);
   }
 
-  // "{amount} {code}" with a built-in currency code. The amount must be exact at the currency's
-  // precision (extra zeros are fine).
+  // "{amount} {code}" with a built-in currency code, split on whitespace like nautilus
+  // Money::from_str. The amount is rounded half to even at the currency's precision.
   [[nodiscard]] static constexpr core::Status parse(std::string_view text, Money& out) noexcept {
-    const std::size_t space = text.find(' ');
-    if (space == std::string_view::npos || text.find(' ', space + 1) != std::string_view::npos) {
+    std::string_view parts[2];
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+      while (pos < text.size() && detail::is_space(text[pos])) {
+        ++pos;
+      }
+      const std::size_t start = pos;
+      while (pos < text.size() && !detail::is_space(text[pos])) {
+        ++pos;
+      }
+      if (pos > start) {
+        if (count == 2) {
+          return core::Status::ParseError;
+        }
+        parts[count++] = text.substr(start, pos - start);
+      }
+    }
+    if (count != 2) {
       return core::Status::ParseError;
     }
     Currency currency;
-    core::Status s = Currency::builtin(text.substr(space + 1), currency);
+    core::Status s = Currency::builtin(parts[1], currency);
     if (!core::ok(s)) {
       return s;
     }
-    return parse_amount(text.substr(0, space), currency, out);
+    return parse_amount(parts[0], currency, out);
   }
 
   [[nodiscard]] static constexpr core::Status
@@ -136,9 +161,8 @@ struct AccountBalance {
   Money locked;
   Money free;
 
-  [[nodiscard]] static constexpr core::Status create(const Money& total, const Money& locked,
-                                                     const Money& free,
-                                                     AccountBalance& out) noexcept {
+  [[nodiscard]] static constexpr core::Status
+  create(const Money& total, const Money& locked, const Money& free, AccountBalance& out) noexcept {
     Money sum;
     const core::Status s = Money::add(locked, free, sum);
     if (!core::ok(s)) {

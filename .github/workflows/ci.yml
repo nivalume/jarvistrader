@@ -112,9 +112,8 @@ jobs:
             cmake --build --preset "$preset"
             ctest --preset "$preset"
           done
-      - name: Fingerprint comparison
-        # Becomes a byte-for-byte comparison of golden replays with `jarvis fingerprint` (plan.md M1).
-        run: echo 'SKIPPED - no event log exists yet; the fingerprint gate lands in M1.'
+      - name: Fingerprint comparison (Release vs O0 event logs must be byte-identical)
+        run: tools/fingerprint_gate.sh build/rel build/det-o0 7 200000
 
   bench-compare:
     needs: functional

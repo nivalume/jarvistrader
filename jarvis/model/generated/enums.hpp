@@ -2485,4 +2485,76 @@ inline constexpr std::array<TriggerType, 9> kTriggerTypeValues = {TriggerType::D
   return status;
 }
 
+// Name-based access for tools and bindings: parse a value of the enum called `enum_name`.
+struct EnumValueText {
+  std::string_view string;
+  std::uint8_t value = 0;
+};
+
+namespace detail {
+
+template <typename E>
+[[nodiscard]] constexpr core::Status parse_as(std::string_view text, EnumValueText& out) noexcept {
+  E value{};
+  const core::Status status = parse(text, value);
+  if (core::ok(status)) {
+    out = EnumValueText{to_string(value), static_cast<std::uint8_t>(value)};
+  }
+  return status;
+}
+
+} // namespace detail
+
+struct EnumParser {
+  std::string_view name;
+  core::Status (*parse)(std::string_view text, EnumValueText& out) noexcept;
+};
+
+inline constexpr std::array<EnumParser, 32> kEnumParsers = {{
+    {"AccountType", &detail::parse_as<AccountType>},
+    {"AggregationSource", &detail::parse_as<AggregationSource>},
+    {"AggressorSide", &detail::parse_as<AggressorSide>},
+    {"AssetClass", &detail::parse_as<AssetClass>},
+    {"BarAggregation", &detail::parse_as<BarAggregation>},
+    {"BarIntervalType", &detail::parse_as<BarIntervalType>},
+    {"BetSide", &detail::parse_as<BetSide>},
+    {"BookAction", &detail::parse_as<BookAction>},
+    {"BookType", &detail::parse_as<BookType>},
+    {"ContingencyType", &detail::parse_as<ContingencyType>},
+    {"ContinuousFutureAdjustmentType", &detail::parse_as<ContinuousFutureAdjustmentType>},
+    {"CurrencyType", &detail::parse_as<CurrencyType>},
+    {"InstrumentClass", &detail::parse_as<InstrumentClass>},
+    {"InstrumentCloseType", &detail::parse_as<InstrumentCloseType>},
+    {"LiquiditySide", &detail::parse_as<LiquiditySide>},
+    {"MarketStatus", &detail::parse_as<MarketStatus>},
+    {"MarketStatusAction", &detail::parse_as<MarketStatusAction>},
+    {"OmsType", &detail::parse_as<OmsType>},
+    {"OptionKind", &detail::parse_as<OptionKind>},
+    {"GreeksConvention", &detail::parse_as<GreeksConvention>},
+    {"OtoTriggerMode", &detail::parse_as<OtoTriggerMode>},
+    {"OrderSide", &detail::parse_as<OrderSide>},
+    {"OrderStatus", &detail::parse_as<OrderStatus>},
+    {"OrderType", &detail::parse_as<OrderType>},
+    {"PositionAdjustmentType", &detail::parse_as<PositionAdjustmentType>},
+    {"PositionSide", &detail::parse_as<PositionSide>},
+    {"PriceType", &detail::parse_as<PriceType>},
+    {"RecordFlag", &detail::parse_as<RecordFlag>},
+    {"TimeInForce", &detail::parse_as<TimeInForce>},
+    {"TradingState", &detail::parse_as<TradingState>},
+    {"TrailingOffsetType", &detail::parse_as<TrailingOffsetType>},
+    {"TriggerType", &detail::parse_as<TriggerType>},
+}};
+
+// NotFound when no enum has that name; ParseError when the text is not one of its values.
+[[nodiscard]] constexpr core::Status parse_enum_by_name(std::string_view enum_name,
+                                                        std::string_view text,
+                                                        EnumValueText& out) noexcept {
+  for (const EnumParser& parser : kEnumParsers) {
+    if (parser.name == enum_name) {
+      return parser.parse(text, out);
+    }
+  }
+  return core::Status::NotFound;
+}
+
 } // namespace jarvis::model

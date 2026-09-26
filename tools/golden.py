@@ -3,11 +3,14 @@
 
 Every directory under the golden root that contains a ``case.toml`` is one case:
 
-    command = ["{bin}/jarvis", "replay", "{case}/input.jlog", "--out", "{out}/commands.jlog"]
+    command = ["{bin}/bin/jarvis", "replay", "{case}/input.jlog", "--out", "{out}/commands.jlog"]
 
     [[compare]]
     produced = "commands.jlog"             # relative to the scratch output directory {out}
     expected = "expected.commands.jlog"    # relative to the case directory
+
+A case that needs several steps lists them as ``commands = [[...], [...]]`` instead of
+``command``; they run in order and the first failure fails the case.
 
 Placeholders: {bin} build directory, {case} case directory, {out} scratch output directory,
 {root} repository root, {python} the running interpreter. ``expected.sha256`` records the
@@ -44,7 +47,7 @@ class Compare:
 class Case:
     name: str
     directory: Path
-    command: list[str]
+    commands: list[list[str]]
     compares: list[Compare]
 
 
@@ -56,9 +59,18 @@ def load_case(directory: Path, root: Path) -> Case:
     config_path = directory / "case.toml"
     with config_path.open("rb") as handle:
         config = tomllib.load(handle)
-    command = config.get("command")
-    if not isinstance(command, list) or not command or not all(isinstance(a, str) for a in command):
-        raise CaseError(f"{config_path}: 'command' must be a non-empty list of strings")
+    if ("command" in config) == ("commands" in config):
+        raise CaseError(f"{config_path}: give exactly one of 'command' and 'commands'")
+    commands = [config["command"]] if "command" in config else config["commands"]
+    if not isinstance(commands, list) or not commands:
+        raise CaseError(f"{config_path}: 'commands' must be a non-empty list of commands")
+    for command in commands:
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(a, str) for a in command)
+        ):
+            raise CaseError(f"{config_path}: each command must be a non-empty list of strings")
     compares_raw = config.get("compare", [])
     if not isinstance(compares_raw, list) or not compares_raw:
         raise CaseError(f"{config_path}: at least one [[compare]] table is required")
@@ -70,7 +82,7 @@ def load_case(directory: Path, root: Path) -> Case:
     return Case(
         name=directory.relative_to(root).as_posix(),
         directory=directory,
-        command=command,
+        commands=commands,
         compares=compares,
     )
 
@@ -103,7 +115,8 @@ def write_digests(case: Case) -> None:
     (case.directory / DIGEST_FILE).write_text("\n".join(lines) + "\n")
 
 
-def run_command(case: Case, bin_dir: Path, out_dir: Path) -> subprocess.CompletedProcess[bytes]:
+def run_commands(case: Case, bin_dir: Path, out_dir: Path) -> subprocess.CompletedProcess[bytes]:
+    """Runs the case's commands in order; returns the first failing result, else the last."""
     substitutions = {
         "bin": str(bin_dir),
         "case": str(case.directory),
@@ -111,8 +124,14 @@ def run_command(case: Case, bin_dir: Path, out_dir: Path) -> subprocess.Complete
         "root": str(REPO_ROOT),
         "python": sys.executable,
     }
-    argv = [arg.format(**substitutions) for arg in case.command]
-    return subprocess.run(argv, cwd=case.directory, capture_output=True, check=False)
+    result: subprocess.CompletedProcess[bytes] | None = None
+    for command in case.commands:
+        argv = [arg.format(**substitutions) for arg in command]
+        result = subprocess.run(argv, cwd=case.directory, capture_output=True, check=False)
+        if result.returncode != 0:
+            break
+    assert result is not None
+    return result
 
 
 def describe_difference(produced: bytes, expected: bytes) -> str:
@@ -153,7 +172,7 @@ def check_case(case: Case, bin_dir: Path, update: bool) -> list[str]:
 
     with tempfile.TemporaryDirectory(prefix="golden-") as scratch:
         out_dir = Path(scratch)
-        result = run_command(case, bin_dir, out_dir)
+        result = run_commands(case, bin_dir, out_dir)
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             return [f"  command exited with {result.returncode}", f"    {stderr[-2000:]}"]

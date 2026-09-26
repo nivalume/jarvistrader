@@ -1,0 +1,24 @@
+# The deterministic corpus (seed 42) written to an event log and read back. 500 events cover all
+# 33 record kinds. The fingerprint of a longer run must not depend on how the log is split into
+# segments, so the rolled and unrolled logs are compared with the same expectation.
+commands = [
+  ["{bin}/bin/jarvis", "corpus", "--seed", "42", "--events", "500", "--out", "{out}/small"],
+  ["{bin}/bin/jarvis", "dump", "{out}/small", "--no-header", "--out", "{out}/dump.txt"],
+  ["{bin}/bin/jarvis", "corpus", "--seed", "42", "--events", "20000", "--out", "{out}/one"],
+  ["{bin}/bin/jarvis", "fingerprint", "{out}/one", "--out", "{out}/fingerprint.txt"],
+  ["{bin}/bin/jarvis", "corpus", "--seed", "42", "--events", "20000", "--segment-bytes", "262144",
+   "--out", "{out}/rolled"],
+  ["{bin}/bin/jarvis", "fingerprint", "{out}/rolled", "--out", "{out}/fingerprint.rolled.txt"],
+]
+
+[[compare]]
+produced = "dump.txt"
+expected = "expected.dump.txt"
+
+[[compare]]
+produced = "fingerprint.txt"
+expected = "expected.fingerprint.txt"
+
+[[compare]]
+produced = "fingerprint.rolled.txt"
+expected = "expected.fingerprint.txt"

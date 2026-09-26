@@ -129,14 +129,15 @@ TEST_SUITE("unit") {
 
   TEST_CASE("CRC-32C check value") {
     CHECK(core::crc32c(bytes("123456789")) == 0xE3069283U);
-    const std::uint32_t split = core::crc32c_finish(
-        core::crc32c_extend(core::crc32c_extend(core::crc32c_init(), bytes("1234")), bytes("56789")));
+    const std::uint32_t split = core::crc32c_finish(core::crc32c_extend(
+        core::crc32c_extend(core::crc32c_init(), bytes("1234")), bytes("56789")));
     CHECK(split == 0xE3069283U);
   }
 
   TEST_CASE("SHA-256 test vectors") {
     core::Sha256 empty;
-    CHECK(hex(empty.finish()) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(hex(empty.finish()) ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     core::Sha256 abc;
     abc.update(bytes("abc"));
     CHECK(hex(abc.finish()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

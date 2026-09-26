@@ -33,10 +33,12 @@ inline constexpr std::array<std::uint64_t, 20> kPow10 = {
     10'000'000'000'000'000'000ULL,
 };
 
-[[nodiscard]] constexpr bool checked_add(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
+[[nodiscard]] constexpr bool checked_add(std::int64_t a, std::int64_t b,
+                                         std::int64_t& out) noexcept {
   return !__builtin_add_overflow(a, b, &out);
 }
-[[nodiscard]] constexpr bool checked_sub(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
+[[nodiscard]] constexpr bool checked_sub(std::int64_t a, std::int64_t b,
+                                         std::int64_t& out) noexcept {
   return !__builtin_sub_overflow(a, b, &out);
 }
 [[nodiscard]] constexpr bool checked_add(std::uint64_t a, std::uint64_t b,

@@ -142,6 +142,50 @@ def render_enums(snapshot: dict) -> str:
             out.append("  return status;")
             out.append("}")
             out.append("")
+    names = list(snapshot["enums"])
+    out += [
+        "// Name-based access for tools and bindings: parse a value of the enum called `enum_name`.",
+        "struct EnumValueText {",
+        "  std::string_view string;",
+        "  std::uint8_t value = 0;",
+        "};",
+        "",
+        "namespace detail {",
+        "",
+        "template <typename E>",
+        "[[nodiscard]] constexpr core::Status parse_as(std::string_view text, EnumValueText& out) noexcept {",
+        "  E value{};",
+        "  const core::Status status = parse(text, value);",
+        "  if (core::ok(status)) {",
+        "    out = EnumValueText{to_string(value), static_cast<std::uint8_t>(value)};",
+        "  }",
+        "  return status;",
+        "}",
+        "",
+        "} // namespace detail",
+        "",
+        "struct EnumParser {",
+        "  std::string_view name;",
+        "  core::Status (*parse)(std::string_view text, EnumValueText& out) noexcept;",
+        "};",
+        "",
+        f"inline constexpr std::array<EnumParser, {len(names)}> kEnumParsers = {{{{",
+        *[f"    {{{cpp_string(n)}, &detail::parse_as<{n}>}}," for n in names],
+        "}};",
+        "",
+        "// NotFound when no enum has that name; ParseError when the text is not one of its values.",
+        "[[nodiscard]] constexpr core::Status parse_enum_by_name(std::string_view enum_name,",
+        "                                                        std::string_view text,",
+        "                                                        EnumValueText& out) noexcept {",
+        "  for (const EnumParser& parser : kEnumParsers) {",
+        "    if (parser.name == enum_name) {",
+        "      return parser.parse(text, out);",
+        "    }",
+        "  }",
+        "  return core::Status::NotFound;",
+        "}",
+        "",
+    ]
     out += ["} // namespace jarvis::model", ""]
     return "\n".join(out)
 

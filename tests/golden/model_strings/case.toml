@@ -1,0 +1,6 @@
+# Text forms of the model types against nautilus_trader test vectors (see input.txt).
+command = ["{bin}/bin/jarvis", "roundtrip", "{case}/input.txt", "--out", "{out}/roundtrip.txt"]
+
+[[compare]]
+produced = "roundtrip.txt"
+expected = "expected.roundtrip.txt"

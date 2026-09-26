@@ -92,6 +92,7 @@ struct PositionAdjusted {
   std::optional<core::FixedString<32>> reason;
 };
 
-using PositionEvent = std::variant<PositionOpened, PositionChanged, PositionClosed, PositionAdjusted>;
+using PositionEvent =
+    std::variant<PositionOpened, PositionChanged, PositionClosed, PositionAdjusted>;
 
 } // namespace jarvis::model

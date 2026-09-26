@@ -86,7 +86,8 @@ public:
   [[nodiscard]] constexpr std::uint64_t last_seq() const noexcept { return seq_; }
 
   [[nodiscard]] static constexpr core::Status format(std::string_view node_tag, std::uint64_t epoch,
-                                                     std::uint64_t seq, ClientOrderId& out) noexcept {
+                                                     std::uint64_t seq,
+                                                     ClientOrderId& out) noexcept {
     if (!detail::valid_node_tag(node_tag) || epoch > kMaxEpoch || seq > kMaxSeq) {
       return core::Status::InvalidArgument;
     }

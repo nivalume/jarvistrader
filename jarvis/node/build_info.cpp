@@ -9,6 +9,7 @@ BuildInfo build_info() noexcept {
       .version = build_config::kVersion,
       .git_commit = build_config::kGitCommit,
       .compiler = build_config::kCompiler,
+      .platform = build_config::kPlatform,
       .live_enabled = build_config::kLiveEnabled,
   };
 }

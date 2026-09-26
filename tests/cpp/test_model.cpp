@@ -120,12 +120,25 @@ TEST_SUITE("unit") {
     CHECK(m::Price::parse("abc", out) == Status::ParseError);
   }
 
-  TEST_CASE("Price at a fixed precision accepts extra zeros only") {
+  TEST_CASE("Price at a fixed precision rounds half to even") {
     m::Price p;
     CHECK(m::Price::parse("50000.10000000", 1, p) == Status::Ok);
     CHECK(p.raw() == 50'000'100'000'000);
     CHECK(text_of(p) == "50000.1");
-    CHECK(m::Price::parse("50000.12", 1, p) == Status::PrecisionLoss);
+    CHECK(m::Price::parse("50000.12", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "50000.1");
+    CHECK(m::Price::parse("50000.15", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "50000.2");
+    CHECK(m::Price::parse("50000.25", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "50000.2");
+    CHECK(m::Price::parse("50000.2500001", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "50000.3");
+    CHECK(m::Price::parse("-0.05", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "0.0");
+    CHECK(m::Price::parse("-0.15", 1, p) == Status::Ok);
+    CHECK(text_of(p) == "-0.2");
+    CHECK(m::Price::parse("0.4", 0, p) == Status::Ok);
+    CHECK(text_of(p) == "0");
     CHECK(m::Price::parse("7", 2, p) == Status::Ok);
     CHECK(text_of(p) == "7.00");
   }
@@ -138,7 +151,12 @@ TEST_SUITE("unit") {
     CHECK(m::Price::from_raw(m::kPriceRawMax + 1, 9, p) == Status::OutOfRange);
     CHECK(m::Price::from_mantissa_exponent(123456, -2, 2, p) == Status::Ok);
     CHECK(text_of(p) == "1234.56");
-    CHECK(m::Price::from_mantissa_exponent(123456, -3, 2, p) == Status::PrecisionLoss);
+    CHECK(m::Price::from_mantissa_exponent(123456, -3, 2, p) == Status::Ok);
+    CHECK(text_of(p) == "123.46");
+    CHECK(m::Price::from_mantissa_exponent(123455, -3, 2, p) == Status::Ok);
+    CHECK(text_of(p) == "123.46");
+    CHECK(m::Price::from_mantissa_exponent(123445, -3, 2, p) == Status::Ok);
+    CHECK(text_of(p) == "123.44");
   }
 
   TEST_CASE("Price arithmetic keeps the larger precision and detects overflow") {
@@ -170,7 +188,8 @@ TEST_SUITE("unit") {
     m::Currency c;
     CHECK(m::Currency::builtin("NOPE", c) == Status::NotFound);
     m::Currency custom;
-    REQUIRE(m::Currency::create("USDT", 2, 0, "other", m::CurrencyType::Fiat, custom) == Status::Ok);
+    REQUIRE(m::Currency::create("USDT", 2, 0, "other", m::CurrencyType::Fiat, custom) ==
+            Status::Ok);
     CHECK(custom == currency("USDT")); // equality is by code
   }
 
@@ -180,7 +199,17 @@ TEST_SUITE("unit") {
     CHECK(text_of(money) == "1000.00 USD");
     CHECK(m::Money::parse("1000 USDT", money) == Status::Ok);
     CHECK(text_of(money) == "1000.00000000 USDT");
-    CHECK(m::Money::parse("1.001 USD", money) == Status::PrecisionLoss);
+    CHECK(m::Money::parse("1.001 USD", money) == Status::Ok);
+    CHECK(text_of(money) == "1.00 USD");
+    CHECK(m::Money::parse("1.005 USD", money) == Status::Ok);
+    CHECK(text_of(money) == "1.00 USD");
+    CHECK(m::Money::parse("1.015 USD", money) == Status::Ok);
+    CHECK(text_of(money) == "1.02 USD");
+    CHECK(m::Money::parse("-1.015 USD", money) == Status::Ok);
+    CHECK(text_of(money) == "-1.02 USD");
+    CHECK(m::Money::parse("  2.5  USD ", money) == Status::Ok);
+    CHECK(text_of(money) == "2.50 USD");
+    CHECK(m::Money::parse("0 USD USD", money) == Status::ParseError);
     CHECK(m::Money::parse("1 XXX", money) == Status::NotFound);
     CHECK(m::Money::parse("1USD", money) == Status::ParseError);
     m::Money usd;
@@ -415,11 +444,52 @@ TEST_SUITE("property") {
     });
   }
 
+  TEST_CASE("Parsing at a precision rounds half to even like nautilus bankers_round") {
+    jarvis::testkit::for_all([](Gen& gen) {
+      // value = digits * 10^-(precision + extra); reference result by integer arithmetic.
+      const auto precision = static_cast<std::uint8_t>(gen.range(0, 9));
+      const auto extra = static_cast<std::uint32_t>(gen.range(1, 6));
+      const std::uint64_t digits = gen.range_u(0, 999'999'999'999ULL);
+      const bool negative = gen.coin();
+      std::uint64_t divisor = 1;
+      for (std::uint32_t i = 0; i < extra; ++i) {
+        divisor *= 10U;
+      }
+      const std::uint64_t quotient = digits / divisor;
+      const std::uint64_t remainder = digits % divisor;
+      const bool up = remainder * 2 > divisor || (remainder * 2 == divisor && quotient % 2 == 1);
+      const std::uint64_t rounded = quotient + (up ? 1U : 0U);
+      const jarvis::core::u128 expected_magnitude =
+          static_cast<jarvis::core::u128>(rounded) * jarvis::core::kPow10[9 - precision];
+
+      // Render digits with precision + extra fraction digits.
+      std::string text = std::to_string(digits);
+      const std::size_t scale = precision + extra;
+      if (text.size() <= scale) {
+        text.insert(0, scale + 1 - text.size(), '0');
+      }
+      text.insert(text.size() - scale, ".");
+      if (negative) {
+        text.insert(0, "-");
+      }
+      m::Price p;
+      const Status s = m::Price::parse(text, precision, p);
+      if (expected_magnitude > static_cast<jarvis::core::u128>(m::kPriceRawMax)) {
+        CHECK(s == Status::OutOfRange);
+        return;
+      }
+      REQUIRE(s == Status::Ok);
+      const auto magnitude = static_cast<std::int64_t>(expected_magnitude);
+      CHECK(p.raw() == (negative ? -magnitude : magnitude));
+      CHECK(p.precision() == precision);
+    });
+  }
+
   TEST_CASE("Linear notional equals the exact product truncated to the currency grid") {
     jarvis::testkit::for_all([](Gen& gen) {
       const m::CryptoPerpetual perp = btcusdt_perp();
-      const std::uint64_t q_units = gen.range_u(1, 1'000'000);          // thousandths of BTC
-      const std::uint64_t p_units = gen.range_u(1, 1'000'000'000);      // tenths of USDT
+      const std::uint64_t q_units = gen.range_u(1, 1'000'000);     // thousandths of BTC
+      const std::uint64_t p_units = gen.range_u(1, 1'000'000'000); // tenths of USDT
       m::Quantity q;
       m::Price p;
       REQUIRE(m::Quantity::from_raw(q_units * 1'000'000ULL, 3, q) == Status::Ok);
@@ -428,7 +498,8 @@ TEST_SUITE("property") {
       m::Money notional;
       const Status s = m::notional_value(perp.common, q, p, notional);
       // exact value in units of 10^-4 USDT: q_units * p_units
-      const jarvis::core::u128 exact_raw = static_cast<jarvis::core::u128>(q_units) * p_units * 100'000U;
+      const jarvis::core::u128 exact_raw =
+          static_cast<jarvis::core::u128>(q_units) * p_units * 100'000U;
       if (exact_raw > static_cast<jarvis::core::u128>(m::kMoneyRawMax)) {
         CHECK(s == Status::Overflow);
       } else {
@@ -467,7 +538,8 @@ TEST_SUITE("property") {
       m::BarType type;
       type.instrument_id = instrument_id("ETH-USD-SWAP.OKX");
       type.spec.step = gen.range_u(1, 1'000'000);
-      type.spec.aggregation = gen.pick(std::span<const m::BarAggregation>{m::kBarAggregationValues});
+      type.spec.aggregation =
+          gen.pick(std::span<const m::BarAggregation>{m::kBarAggregationValues});
       type.spec.price_type = gen.pick(std::span<const m::PriceType>{m::kPriceTypeValues});
       type.aggregation_source =
           gen.pick(std::span<const m::AggregationSource>{m::kAggregationSourceValues});

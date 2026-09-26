@@ -66,7 +66,8 @@ public:
       } else {
         return core::Status::ParseError;
       }
-      bytes[nibble / 2] = static_cast<std::uint8_t>(bytes[nibble / 2] | (nibble % 2 == 0 ? v << 4U : v));
+      bytes[nibble / 2] =
+          static_cast<std::uint8_t>(bytes[nibble / 2] | (nibble % 2 == 0 ? v << 4U : v));
       ++nibble;
     }
     return from_bytes(bytes, out);

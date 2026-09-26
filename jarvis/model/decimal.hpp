@@ -38,19 +38,17 @@ struct ParsedDecimal {
   return true;
 }
 
-// Grammar: [+|-] digits [. digits] [(e|E) [+|-] digits]. Underscores are ignored anywhere, as in
-// nautilus. At least one mantissa digit is required.
-[[nodiscard]] constexpr core::Status parse_decimal_text(std::string_view text,
-                                                        ParsedDecimal& out) noexcept {
-  ParsedDecimal result;
-  std::size_t pos = 0;
+// "[+|-] digits [. digits]" at `pos`, underscores ignored: sign, mantissa and fraction digits.
+[[nodiscard]] constexpr core::Status parse_mantissa(std::string_view text, std::size_t& pos,
+                                                    ParsedDecimal& result,
+                                                    std::uint32_t& fraction_digits) noexcept {
   if (pos < text.size() && (text[pos] == '+' || text[pos] == '-')) {
     result.negative = text[pos] == '-';
     ++pos;
   }
   bool any_digit = false;
   bool seen_point = false;
-  std::uint32_t fraction_digits = 0;
+  constexpr core::u128 kLimit = (~static_cast<core::u128>(0) - 9U) / 10U;
   for (; pos < text.size(); ++pos) {
     const char c = text[pos];
     if (c == '_') {
@@ -66,49 +64,65 @@ struct ParsedDecimal {
     if (c < '0' || c > '9') {
       break;
     }
-    any_digit = true;
-    const auto digit = static_cast<core::u128>(c - '0');
-    constexpr core::u128 kLimit = (~static_cast<core::u128>(0) - 9U) / 10U;
     if (result.mantissa > kLimit) {
       return core::Status::Overflow;
     }
-    result.mantissa = result.mantissa * 10U + digit;
-    if (seen_point) {
-      ++fraction_digits;
+    any_digit = true;
+    result.mantissa = result.mantissa * 10U + static_cast<core::u128>(c - '0');
+    fraction_digits += seen_point ? 1U : 0U;
+  }
+  return any_digit ? core::Status::Ok : core::Status::ParseError;
+}
+
+// Optional "(e|E) [+|-] digits" at `pos`, underscores ignored. |exponent| is capped at 64.
+[[nodiscard]] constexpr core::Status parse_exponent(std::string_view text, std::size_t& pos,
+                                                    std::int64_t& exponent) noexcept {
+  exponent = 0;
+  if (pos >= text.size() || (text[pos] != 'e' && text[pos] != 'E')) {
+    return core::Status::Ok;
+  }
+  ++pos;
+  bool negative = false;
+  if (pos < text.size() && (text[pos] == '+' || text[pos] == '-')) {
+    negative = text[pos] == '-';
+    ++pos;
+  }
+  bool any_digit = false;
+  for (; pos < text.size(); ++pos) {
+    const char c = text[pos];
+    if (c == '_') {
+      continue;
+    }
+    if (c < '0' || c > '9') {
+      return core::Status::ParseError;
+    }
+    any_digit = true;
+    exponent = exponent * 10 + (c - '0');
+    if (exponent > 64) {
+      return core::Status::OutOfRange;
     }
   }
   if (!any_digit) {
     return core::Status::ParseError;
   }
+  exponent = negative ? -exponent : exponent;
+  return core::Status::Ok;
+}
+
+// Grammar: [+|-] digits [. digits] [(e|E) [+|-] digits]. Underscores are ignored anywhere, as in
+// nautilus. At least one mantissa digit is required.
+[[nodiscard]] constexpr core::Status parse_decimal_text(std::string_view text,
+                                                        ParsedDecimal& out) noexcept {
+  ParsedDecimal result;
+  std::size_t pos = 0;
+  std::uint32_t fraction_digits = 0;
   std::int64_t exponent = 0;
-  if (pos < text.size() && (text[pos] == 'e' || text[pos] == 'E')) {
-    ++pos;
-    bool exponent_negative = false;
-    if (pos < text.size() && (text[pos] == '+' || text[pos] == '-')) {
-      exponent_negative = text[pos] == '-';
-      ++pos;
-    }
-    bool exponent_digit = false;
-    for (; pos < text.size(); ++pos) {
-      const char c = text[pos];
-      if (c == '_') {
-        continue;
-      }
-      if (c < '0' || c > '9') {
-        return core::Status::ParseError;
-      }
-      exponent_digit = true;
-      exponent = exponent * 10 + (c - '0');
-      if (exponent > 64) {
-        return core::Status::OutOfRange;
-      }
-    }
-    if (!exponent_digit) {
-      return core::Status::ParseError;
-    }
-    if (exponent_negative) {
-      exponent = -exponent;
-    }
+  core::Status s = parse_mantissa(text, pos, result, fraction_digits);
+  if (core::ok(s)) {
+    s = parse_exponent(text, pos, exponent);
+  }
+  if (!core::ok(s)) {
+    return s;
   }
   if (pos != text.size()) {
     return core::Status::ParseError;
@@ -117,7 +131,7 @@ struct ParsedDecimal {
   if (scale < 0) {
     core::u128 factor = 0;
     if (!pow10_u128(static_cast<std::uint32_t>(-scale), factor) ||
-        (factor != 0 && result.mantissa > ~static_cast<core::u128>(0) / factor)) {
+        result.mantissa > ~static_cast<core::u128>(0) / factor) {
       return core::Status::Overflow;
     }
     result.mantissa *= factor;
@@ -133,8 +147,9 @@ struct ParsedDecimal {
   return d.scale;
 }
 
-// Converts to a raw value at 10^9 scale for the given precision. Extra fraction digits are
-// accepted only when they are zeros; otherwise the conversion would lose information.
+// Converts to a raw value at 10^9 scale for the given precision. Fraction digits beyond the
+// precision are rounded half to even, as nautilus does in `mantissa_exponent_to_fixed_i128`
+// (Money::from_str, Price::from_decimal_dp, from_mantissa_exponent).
 [[nodiscard]] constexpr core::Status to_raw9(const ParsedDecimal& d, std::uint8_t precision,
                                              core::i128& raw9) noexcept {
   if (precision > kFixedPrecision) {
@@ -144,16 +159,14 @@ struct ParsedDecimal {
   if (d.scale > precision) {
     core::u128 divisor = 0;
     if (!pow10_u128(d.scale - precision, divisor)) {
-      if (mantissa != 0) {
-        return core::Status::PrecisionLoss;
-      }
-      raw9 = 0;
+      raw9 = 0; // more than 38 excess digits: every representable mantissa rounds to zero
       return core::Status::Ok;
     }
-    if (mantissa % divisor != 0) {
-      return core::Status::PrecisionLoss;
-    }
-    mantissa /= divisor;
+    const core::u128 quotient = mantissa / divisor;
+    const core::u128 remainder = mantissa % divisor;
+    const core::u128 half = divisor / 2U;
+    const bool round_up = remainder > half || (remainder == half && quotient % 2U != 0U);
+    mantissa = quotient + (round_up ? 1U : 0U);
   } else {
     core::u128 factor = 0;
     static_cast<void>(pow10_u128(precision - d.scale, factor));

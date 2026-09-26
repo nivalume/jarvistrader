@@ -32,6 +32,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.15 CACHE STRING "Minimum policy version accep
 option(JARVIS_BUILD_PYTHON "Build the Python extension" ON)
 option(JARVIS_BUILD_TESTS "Configure the C++ test scaffold" ${PROJECT_IS_TOP_LEVEL})
 option(JARVIS_BUILD_BENCHMARKS "Configure the benchmark scaffold" OFF)
+option(JARVIS_BUILD_CLI "Build the jarvis command-line tool" ${PROJECT_IS_TOP_LEVEL})
 option(JARVIS_BUILD_LIVE "Build live-trading shell components (network stack, venue adapters)" OFF)
 option(JARVIS_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(JARVIS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
@@ -147,13 +148,30 @@ if(JARVIS_BUILD_LIVE)
 else()
   set(JARVIS_LIVE_BOOL false)
 endif()
+set(JARVIS_PLATFORM "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 configure_file(jarvis/node/build_config.hpp.in
                "${CMAKE_CURRENT_BINARY_DIR}/generated/include/jarvis/node/build_config.hpp" @ONLY)
 
-add_library(jarvis_shell STATIC jarvis/node/build_info.cpp)
+add_library(
+  jarvis_shell STATIC
+  jarvis/node/build_info.cpp
+  jarvis/node/corpus.cpp
+  jarvis/node/event_log.cpp
+  jarvis/node/event_text.cpp
+  jarvis/node/fingerprint.cpp
+  jarvis/node/model_text.cpp
+)
 add_library(jarvis::shell ALIAS jarvis_shell)
 target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)
 target_include_directories(jarvis_shell PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
+
+if(JARVIS_BUILD_CLI)
+  add_executable(jarvis_cli jarvis/node/cli_main.cpp)
+  target_link_libraries(jarvis_cli PRIVATE jarvis::shell)
+  set_target_properties(
+    jarvis_cli PROPERTIES OUTPUT_NAME jarvis RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  )
+endif()
 
 add_library(jarvis_testkit INTERFACE)
 add_library(jarvis::testkit ALIAS jarvis_testkit)

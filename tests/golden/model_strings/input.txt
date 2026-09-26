@@ -1,0 +1,158 @@
+# Model text round trips. Inputs come from the nautilus_trader test suite at cd417b80
+# (crates/model/src/types, identifiers, data/bar.rs and crates/core/src/nanos.rs) unless marked
+# "jarvis". Each line is "<type> <text>"; `jarvis roundtrip` appends "=> <result>".
+
+# Price: inferred precision, trailing zeros kept, scientific notation, underscores.
+price 1.0
+price 1.00
+price 1.000
+price 100.00
+price 0.10
+price 0.100
+price 123.456
+price -10.5
+price 15.75
+price 1e7
+price 1.5e3
+price 1.234e-2
+price 5E-3
+price 1_234.56
+price 1000000
+price 99_999.999_99
+price 1.123456789
+# jarvis: out of range and malformed inputs.
+price 9223372037
+price 1.1234567891
+price abc
+price 1.2.3
+
+# Quantity
+quantity 0
+quantity 1.1
+quantity 1.123456789
+quantity 1e7
+quantity 2.5e3
+quantity 1.234e-2
+quantity 5E-3
+quantity 1.0e6
+quantity 1_234.56
+quantity 99_999.999_99
+quantity 0.100
+# jarvis: quantities are non-negative.
+quantity -1
+
+# Money: rounds half to even at the currency precision.
+money 0 USD
+money 1.1 AUD
+money 1.12345678 BTC
+money 10_000.10 USD
+money 1.005 USD
+money 1.015 USD
+money -1.005 USD
+money -1.015 USD
+money 1e7 USD
+money 2.5e3 EUR
+money 1.234e-2 GBP
+money 5E-3 JPY
+money 1_234.56 USD
+money 1_000_000 EUR
+money 99_999.99 GBP
+money -123.45 USD
+money 0USD
+money 0x00 USD
+money 0 US
+money 0 USD USD
+
+# Currency
+currency USD
+currency USDT
+currency BTC
+currency JPY
+currency XYZ
+
+# Identifiers
+instrument_id BTCUSDT-PERP.BINANCE
+instrument_id AUDUSD.SIM
+instrument_id ES.FUT.XCME
+instrument_id 1.211334112-31570229.BETFAIR
+instrument_id NODOT
+trader_id TRADER-001
+trader_id -001
+trader_id TRADER-
+strategy_id EMACross-001
+strategy_id -001
+strategy_id EMACross-
+account_id IB-1234567890
+account_id BINANCE-USDM-001
+account_id -123456
+account_id IB-
+client_order_id O-20210410-022422-001-001-1
+venue_order_id 001
+trade_id 1000000001
+position_id P-123456789
+symbol BTCUSDT-PERP
+venue BINANCE
+
+# Bars
+bar_spec 1-MINUTE-LAST
+bar_spec 100-TICK-MID
+bar_spec 1-MINUTE
+bar_type BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL
+bar_type BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-INTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-EXTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-EXTERNAL@1-MINUTE-INTERNAL
+bar_type BTCUSDT-PERP.BINANCE-30500-WEEK-LAST-INTERNAL
+bar_type ESM4.XCME-1-MINUTE-LAST-EXTERNAL
+bar_type AAPL.XNAS-1-MINUTE-LAST-INTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@INVALID-MINUTE-EXTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-INVALID-EXTERNAL
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-INVALID
+bar_type BTCUSDT-PERP.BINANCE-2-MINUTE-LAST-INTERNAL@1-MINUTE-EXTERNAL@1-HOUR-EXTERNAL
+
+# Timestamps: to_rfc3339 and RFC 3339 parsing.
+unix_nanos 0
+unix_nanos 1000000000
+unix_nanos 1000000000000000000
+unix_nanos 1500000000000000000
+unix_nanos 1500000000500000000
+unix_nanos 1500000000123456000
+unix_nanos 1500000000123456789
+unix_nanos 1707577123456789000
+rfc3339 2024-02-10T14:58:43Z
+rfc3339 2024-02-10t14:58:43Z
+rfc3339 2024-02-10 14:58:43Z
+rfc3339 2024-02-10T14:58:43.456789Z
+rfc3339 2024-02-10 14:58:43
+rfc3339 2024-02-10T14:58:43Z[UTC]
+# jarvis: offsets and fraction lengths.
+rfc3339 2024-02-10T22:58:43.1+08:00
+rfc3339 1970-01-01T00:00:00+00:00
+rfc3339 1969-12-31T23:59:59Z
+
+# UUID
+uuid 2d89666b-1a1e-4a75-b193-4eb3b454c757
+uuid 2D89666B-1A1E-4A75-B193-4EB3B454C757
+uuid 2d89666b1a1e4a75b1934eb3b454c757
+
+# Enums: case-insensitive parsing, aliases, unknown values.
+enum:OrderSide BUY
+enum:OrderSide sell
+enum:OrderSide NO_ORDER_SIDE
+enum:AggressorSide BUYER
+enum:AggressorSide seller
+enum:AggressorSide NO_AGGRESSOR
+enum:OrderType STOP_LIMIT
+enum:OrderType TRAILING_STOP_MARKET
+enum:TimeInForce GTC
+enum:TimeInForce AT_THE_CLOSE
+enum:OrderStatus PARTIALLY_FILLED
+enum:OrderStatus VOIDED
+enum:BookAction CLEAR
+enum:BarAggregation MINUTE
+enum:BarAggregation RENKO
+enum:PriceType MARK
+enum:TrailingOffsetType PRICE
+enum:RecordFlag F_LAST
+enum:TradingState REDUCING
+enum:OmsType NETTING
+enum:NoSuchEnum X

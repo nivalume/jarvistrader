@@ -64,7 +64,8 @@ public:
     return from_parsed(d, static_cast<std::uint8_t>(detail::implied_precision(d)), out);
   }
 
-  // Parses at a fixed precision; extra fraction digits must be zeros.
+  // Parses at a fixed precision; extra fraction digits are rounded half to even, like nautilus
+  // Price::from_decimal_dp.
   [[nodiscard]] static constexpr core::Status parse(std::string_view text, std::uint8_t precision,
                                                     SignedFixed& out) noexcept {
     detail::ParsedDecimal d;
@@ -75,7 +76,8 @@ public:
     return from_parsed(d, precision, out);
   }
 
-  // value = mantissa * 10^exponent (the SBE decimal encoding), expressed at `precision`.
+  // value = mantissa * 10^exponent (the SBE decimal encoding), expressed at `precision` and
+  // rounded half to even like nautilus from_mantissa_exponent.
   [[nodiscard]] static constexpr core::Status from_mantissa_exponent(std::int64_t mantissa,
                                                                      std::int8_t exponent,
                                                                      std::uint8_t precision,
@@ -135,9 +137,8 @@ private:
   constexpr SignedFixed(std::int64_t raw, std::uint8_t precision) noexcept
       : raw_{raw}, precision_{precision} {}
 
-  [[nodiscard]] static constexpr core::Status range_checked(std::int64_t raw,
-                                                            std::uint8_t precision,
-                                                            SignedFixed& out) noexcept {
+  [[nodiscard]] static constexpr core::Status
+  range_checked(std::int64_t raw, std::uint8_t precision, SignedFixed& out) noexcept {
     if (raw < kPriceRawMin || raw > kPriceRawMax) {
       return core::Status::Overflow;
     }

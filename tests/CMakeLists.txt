@@ -49,9 +49,13 @@ endfunction()
 jarvis_add_layer_test(testkit SOURCES cpp/test_testkit.cpp SUITES unit property zero-alloc)
 jarvis_add_layer_test(core SOURCES cpp/test_core.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(model SOURCES cpp/test_model.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
-jarvis_add_layer_test(node SOURCES cpp/test_node.cpp SUITES unit LIBS jarvis::shell)
+jarvis_add_layer_test(node SOURCES cpp/test_node.cpp SUITES unit property LIBS jarvis::shell)
 
-# Golden trace conformance (tests/golden/<case>/case.toml).
+# Golden trace conformance (tests/golden/<case>/case.toml). Cases run the jarvis CLI.
+if(NOT TARGET jarvis_cli)
+  message(FATAL_ERROR "JARVIS_BUILD_TESTS needs JARVIS_BUILD_CLI for the golden cases")
+endif()
+add_dependencies(jarvis_tests jarvis_cli)
 add_test(
   NAME golden.all
   COMMAND "${Python_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/golden.py"

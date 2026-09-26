@@ -18,8 +18,9 @@ NB_MODULE(_core, module) {
         result["version"] = std::string{info.version};
         result["git_commit"] = std::string{info.git_commit};
         result["compiler"] = std::string{info.compiler};
+        result["platform"] = std::string{info.platform};
         result["live_enabled"] = info.live_enabled;
         return result;
       },
-      "Identity of the native build: version, git commit, compiler, live components.");
+      "Identity of the native build: version, git commit, compiler, platform, live components.");
 }

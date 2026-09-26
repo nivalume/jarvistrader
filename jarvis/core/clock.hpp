@@ -62,7 +62,8 @@ struct FiredTimer {
 // construction.
 class TimerQueue {
 public:
-  explicit TimerQueue(std::uint32_t capacity) : slots_{capacity}, heap_{std::size_t{capacity} * 2} {}
+  explicit TimerQueue(std::uint32_t capacity)
+      : slots_{capacity}, heap_{std::size_t{capacity} * 2} {}
 
   [[nodiscard]] Status schedule(UnixNanos deadline, DurationNanos period, TimerKey key,
                                 TimerHandle& out) noexcept {
@@ -99,8 +100,7 @@ public:
         static_cast<void>(slots_.erase(entry.payload.handle));
       } else {
         UnixNanos next;
-        if (!ok(entry.key.ts.plus(slot->period, next)) ||
-            !ok(arm(entry.payload.handle, next))) {
+        if (!ok(entry.key.ts.plus(slot->period, next)) || !ok(arm(entry.payload.handle, next))) {
           static_cast<void>(slots_.erase(entry.payload.handle));
         }
       }
