@@ -22,11 +22,21 @@
 
 namespace jarvis::node {
 
+// Called with every input before it is recorded and stepped. The Python node uses it to give
+// the GIL back between batches (docs/architecture.md section 7.4).
+template <typename H>
+concept InputHook = requires(H& hook, const model::Event& event) { hook.before_input(event); };
+
+struct NoHook {
+  static void before_input(const model::Event& /*event*/) noexcept {}
+};
+
 // The driver's Recorder over the run log.
-class LogRecorder {
+template <InputHook Hook> class LogRecorder {
 public:
-  explicit LogRecorder(EventLogWriter& writer) noexcept : writer_{&writer} {}
+  LogRecorder(EventLogWriter& writer, Hook& hook) noexcept : writer_{&writer}, hook_{&hook} {}
   [[nodiscard]] core::Status record(const core::EventKey& key, const model::Event& event) {
+    hook_->before_input(event);
     return writer_->append(key, event);
   }
   [[nodiscard]] core::Status emit(const core::EventKey& key, const model::Output& output) {
@@ -35,18 +45,24 @@ public:
 
 private:
   EventLogWriter* writer_;
+  Hook* hook_;
 };
 
 // persistence.mode = "none": nothing is written.
-struct NullRecorder {
-  [[nodiscard]] static core::Status record(const core::EventKey& /*key*/,
-                                           const model::Event& /*event*/) noexcept {
+template <InputHook Hook> class NullRecorder {
+public:
+  explicit NullRecorder(Hook& hook) noexcept : hook_{&hook} {}
+  [[nodiscard]] core::Status record(const core::EventKey& /*key*/, const model::Event& event) {
+    hook_->before_input(event);
     return core::Status::Ok;
   }
   [[nodiscard]] static core::Status emit(const core::EventKey& /*key*/,
                                          const model::Output& /*output*/) noexcept {
     return core::Status::Ok;
   }
+
+private:
+  Hook* hook_;
 };
 
 // Kernel capacities and the strategy error policy from [node] and [risk].
@@ -70,9 +86,9 @@ struct BacktestResult {
   backtest::RunSummary summary;
 };
 
-template <strategy::StrategySet SS>
+template <strategy::StrategySet SS, InputHook Hook>
 [[nodiscard]] core::Status run_backtest(const BacktestRequest& request, SS& strategies,
-                                        BacktestResult& result, std::string& error) {
+                                        BacktestResult& result, std::string& error, Hook& hook) {
   const NodeConfig& config = *request.config;
   if (config.node.env != Env::Backtest) {
     error = "node.env = \"" + std::string{to_string(config.node.env)} +
@@ -104,7 +120,7 @@ template <strategy::StrategySet SS>
   }
   engine::Engine<SS> engine{kernel_config(config), strategies, error_policy(config)};
   if (config.persistence.mode == PersistenceMode::None) {
-    NullRecorder recorder;
+    NullRecorder<Hook> recorder{hook};
     backtest::Driver driver{engine, merge, recorder, options};
     s = driver.run(result.summary);
     if (!core::ok(s)) {
@@ -124,7 +140,7 @@ template <strategy::StrategySet SS>
     error = "cannot open the run log in " + result.directory;
     return s;
   }
-  LogRecorder recorder{writer};
+  LogRecorder<Hook> recorder{writer, hook};
   backtest::Driver driver{engine, merge, recorder, options};
   s = driver.run(result.summary);
   const core::Status closed = writer.close();
@@ -137,6 +153,13 @@ template <strategy::StrategySet SS>
     error = "cannot finish the run log in " + result.directory;
   }
   return closed;
+}
+
+template <strategy::StrategySet SS>
+[[nodiscard]] core::Status run_backtest(const BacktestRequest& request, SS& strategies,
+                                        BacktestResult& result, std::string& error) {
+  NoHook hook;
+  return run_backtest(request, strategies, result, error, hook);
 }
 
 } // namespace jarvis::node

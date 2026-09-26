@@ -307,19 +307,19 @@ import jarvis
 from jarvis import Strategy, Cadence
 
 class MyMM(Strategy):
-    params = {"spread_bps": 2, "size": "0.010"}
+    params = {"spread_bps": 2, "size": "0.010"}     # [[strategies]] 的 params 覆盖这些默认值
 
     def on_start(self, ctx):
         iid = "BTCUSDT-PERP.BINANCE"
         ctx.subscribe_trades(iid)
         ctx.subscribe_quotes(iid, cadence=Cadence.CONFLATED)
-        self.mp = ctx.feature(jarvis.features.Microprice(iid), cadence=Cadence.sampled_ms(100))
+        self.mp = ctx.feature(jarvis.features.microprice(iid), cadence=Cadence.sampled_ms(100))
 
     def on_trade(self, ctx, t): ...
     def on_quote(self, ctx, q): ...
-    def on_feature(self, ctx, fid, value, ts): ...
-    def on_order_event(self, ctx, ev): ...
-    def on_timer(self, ctx, key, ts): ...
+    def on_feature(self, ctx, feature_id, value, ts): ...
+    def on_order_event(self, ctx, ev): ...               # M3
+    def on_timer(self, ctx, timer_id, deadline): ...
     def on_stop(self, ctx): ...
 
 if __name__ == "__main__":
@@ -335,7 +335,7 @@ python my_mm.py --replay runs/x [--until SEQ] [--dump-state]
 
 `--replay` 读取运行目录（第 16.1 节）中保存的配置与覆盖项，核对配置 hash 后以同一策略文件重算全部输出，报告第一处偏差（退出码 3）。C++ 的 `node_main<S...>` 与 Python 的 `jarvis.main` 共用这套参数（`jarvis/node/node_cli.hpp`）。
 
-`jarvis.main(cls)` 等价于 `Node(NodeConfig.load(argv)).add_strategy(cls, ...).run()`。显式写法 `node.add_native_strategy("PeggedMM", ...)` 可以把注册过的 C++ 策略加入同一个 Python 启动的节点。
+`jarvis.main(*classes)` 等价于 `Node(config, env=..., sets=..., out=...)` 加上按 `[[strategies]]` 条目构造的策略再 `run()`：`impl = "py:MyMM"` 用传入的同名类，以条目的 `id`、`instruments`、`params` 构造；`impl = "cpp:Name"` 用注册过的 C++ 策略。配置不列策略时，每个类以默认参数各构造一个。显式写法 `Node(...).add_strategy(obj).add_native_strategy("PeggedMM", params).run()` 与之等价，`Node.from_run(dir).add_strategy(obj).replay()` 回放。
 
 C++：
 
@@ -619,8 +619,8 @@ jarvis 采用 nautilus 的 standard precision 模式。
 ### 7.4 GIL 策略
 
 - Python 启动的节点里，主线程就是 core 线程。`Node.run()` 进入时释放 GIL，所有 IO 线程都是 C++ 线程，从不触碰 Python。
-- core 每排空一批事件，仅当这批事件中有路由到 `PyStrategyHost` 的事件时获取一次 GIL，处理完释放。释放发生在排空出站环和写日志之前。
-- 空闲时不持有 GIL。`on_idle(ctx)` 钩子按 `idle_hook_ms` 的节奏在持有 GIL 的情况下运行，默认做 `gc.collect(0)`。
+- 一批输入中第一次需要调用 Python 回调时，`PyStrategyHost` 获取 GIL（`python/src/bind_node.cpp` 的 `GilBatch`）；策略没有定义的回调直接跳过，不触碰 Python，所以只路由到 C++ 策略的批次不获取 GIL。批次结束后，节点在写下一批的第一条输入之前释放 GIL（backtest 的输入钩子 `InputHook`）。回放在调用方持有 GIL 的情况下进行。
+- 空闲时不持有 GIL。`on_idle(ctx)` 钩子按 `idle_hook_ms` 的节奏在持有 GIL 的情况下运行，默认做 `gc.collect(0)`；backtest 没有空闲期，这个钩子随 sandbox（M4）实现。
 - 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。
 - `on_start` 结束后调用 `gc.freeze()`，第二代回收只在 `on_idle` 中进行。
 
@@ -630,17 +630,17 @@ jarvis 采用 nautilus 的 standard precision 模式。
 | --- | --- |
 | 订阅节奏 `Cadence` | `Every`：逐条投递。`Conflated`：在 `BatchEnd` 只投递该单元本批最新的值（盘口投递最新的簿视图）。`Sampled(p)`：投递每个周期内的第一条更新，周期按 `ts_init / p` 对齐到 Unix 纪元，与启动时间无关。`OnBatch`：缓冲到 `BatchEnd`，经 `on_trade_batch`/`on_quote_batch` 一次交付；缓冲满时先交付已缓冲部分再继续，这一行为同样确定。批次边界是记录事件，回放按同样的边界合并 |
 | 内核特征图 `FeatureGraph` | EMA、VWAP（窗口）、盘口失衡、microprice、实现波动率，在 `jarvis/data/features.hpp` 中以定点实现；bar 聚合（tick、volume、时间 bar）在 `jarvis/data/bars.hpp`，时间 bar 由内核定时器收盘。策略在 `on_start` 中声明，相同声明共享一个特征。声明发生在 `step` 内并随输入回放，所以不进入配置 hash。特征在 `step` 内计算，以 `FeatureUpdate` 按所选节奏投递，投递的值同时写入日志作为输出记录 |
-| 批量回调 `on_batch` | 以列式（`ts`、`price_raw`、`size_raw`、`side`）只读 `nb::ndarray` 视图交付一批事件，视图只在回调期间有效，debug 构建用代际计数检查视图是否逃逸 |
+| 批量回调 `on_trade_batch`/`on_quote_batch` | 以列式只读 numpy 视图交付一个 instrument 在一批中的全部成交（`ts_init`、`price_raw`、`size_raw`、`aggressor_side`）或报价（`ts_init`、`bid_raw`、`ask_raw`、`bid_size_raw`、`ask_size_raw`），raw 值为 10^9 刻度。视图指向宿主复用的缓冲，只在回调期间有效。回调返回后宿主检查批对象与各列的引用计数，仍被引用即视为逃逸，按策略错误处理（`jarvis.BatchEscaped`）；引用计数是确定的，所以这项检查在所有构建中开启 |
 | 单事件拷贝 | 单个事件以 48–64 字节的 POD 按值拷贝给 Python，比创建视图加引用计数更便宜 |
 
 跨越 Python 边界的永远是值，不是竞技场句柄或指针。`ctx.position(iid)` 之类的查询返回拷贝。
 
 ### 7.6 异常与超时
 
-- `PyStrategyHost` 捕获 Python 异常，截断格式化到 4 KiB，产生记录事件 `StrategyError{ strategy_id, kind = Exception, hash }`。`risk.on_strategy_error` 决定后果：撤掉该策略的订单并停用该策略（默认）、停止整个节点，或忽略。
+- `PyStrategyHost` 捕获 Python 异常，把回溯截断到 4 KiB 写到 stderr，产生记录事件 `StrategyError{ strategy_index, kind = Exception, message_hash }`。`message_hash` 是 `"python:" + 异常类型的限定名` 的 FNV-1a：回溯文本含对象地址，跨进程不稳定，异常类型稳定。`risk.on_strategy_error` 决定后果：撤掉该策略的订单并停用该策略（默认）、停止整个节点，或忽略。
 - C++ 回调返回非 `Ok` 的 `Status` 走同一路径：引擎在 `step` 内记下 `StrategyFailure`（每个策略只记第一次，`hash` 为 Status 名的 FNV-1a），节点把它转成下一条输入 `StrategyError` 并写入日志，处置在该输入的 `step` 中执行。
 - 回放时 `StrategyError` 从日志读取，不重新抛出。回放中如果 Python 在该 `seq` 没有抛异常，视为偏差。
-- 超时不抢占。Node 在 `step` 之外测量回调耗时，超过 `callback_budget_us` 记为遥测；连续 `overrun_limit` 次超限产生 `StrategyError{ kind = Overrun }`，按同一策略处置。测量本身不确定，但它的后果是事件，`step` 仍然是纯函数。
+- 超时不抢占。Node 在 `step` 之外测量回调耗时，超过 `callback_budget_us` 记为遥测；连续 `overrun_limit` 次超限产生 `StrategyError{ kind = Overrun }`，按同一策略处置。测量本身不确定，但它的后果是事件，`step` 仍然是纯函数。超限检测只在 sandbox 与 live 开启：backtest 的运行日志必须只由输入决定，回放则读取日志里记录的 `Overrun`，不重新测量。回调计时在所有环境都作为统计返回（`RunResult.strategies`）。
 
 ### 7.7 Python 策略的确定性守卫
 

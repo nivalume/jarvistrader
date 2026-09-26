@@ -8,7 +8,7 @@
 
 NB_MODULE(_core, module) {
   namespace nb = nanobind;
-  module.doc() = "jarvis native extension: model types and event logs";
+  module.doc() = "jarvis native extension: model types, event logs, strategies and the node";
 
   module.def(
       "build_info",
@@ -32,4 +32,8 @@ NB_MODULE(_core, module) {
 
   nb::module_ log = module.def_submodule("log", "Event logs (docs/architecture.md section 16)");
   jarvis::py::bind_log(log);
+
+  nb::module_ node = module.def_submodule(
+      "node", "Strategies and the node (docs/architecture.md sections 4 and 7)");
+  jarvis::py::bind_node(node);
 }

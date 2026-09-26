@@ -70,9 +70,9 @@
 - [x] task: data — `FeatureGraph` v0：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点实现
 - [x] task: strategy — `Strategy` concept 与 `Context` 中与数据、时间、定时器相关的方法（§9.4）
 - [x] task: strategy — `StaticStrategySet<S...>`、`DynamicStrategySet`、`StrategyVTable`、`JARVIS_REGISTER_STRATEGY`（§7.3）
-- [ ] task: python — `PyStrategyHost`：按批获取 GIL、异常转为 `StrategyError`、回调计时与超限、`on_idle`（§7.4、§7.6）
-- [ ] task: python — `jarvis.Strategy` 基类、`jarvis.Node`、`jarvis.main()` 与命令行参数（§4.5）
-- [ ] task: python — `on_batch` 的列式只读 `nb::ndarray` 视图与 debug 代际检查
+- [x] task: python — `PyStrategyHost`：按批获取 GIL、异常转为 `StrategyError`、回调计时与超限（§7.4、§7.6）；`on_idle` 移到 M4（backtest 没有空闲期）
+- [x] task: python — `jarvis.Strategy` 基类、`jarvis.Node`、`jarvis.main()` 与命令行参数（§4.5）
+- [x] task: python — `on_batch` 的列式只读 `nb::ndarray` 视图与 debug 代际检查
 - [x] task: backtest — `ReplaySource`（多源合并，按 `(ts, source_id, seq)` 排序）与 `BacktestWiring`
 - [ ] task: python — 数据转换器：data.binance.vision 的 aggTrades、bookTicker、klines、markPrice 转为解码事件日志
 - [ ] task: python — 数据转换器：nautilus Parquet 目录与解码事件日志双向转换（pyarrow，§16.5）
@@ -137,6 +137,7 @@
 - [ ] task: live — 原始帧录制与解码日志录制，`jarvis redecode`（§13.4）
 - [ ] task: live — `SandboxWiring`：`RingSource`、`SimulatedExchange`（真实定时器，触发写入日志）、`MonotonicClock`
 - [ ] task: tools — 深度与成交流录制器可独立运行，用于积累 USDⓈ-M L2 数据（§12.4）
+- [ ] task: python — `on_idle(ctx)` 钩子：空闲期按 `idle_hook_ms` 持 GIL 运行，默认 `gc.collect(0)`；`on_start` 后 `gc.freeze()`（§7.4）
 - [ ] task: harness — Codec、WebSocket 帧层、HTTP 解析的 fuzz 目标：PR 每个 60 秒，nightly 10 分钟，语料入库
 - [ ] task: harness — `tsan` preset 覆盖环与 IO 线程
 - [ ] task: harness — testnet 契约测试（nightly）：每类流与每个 WS API 方法的往返

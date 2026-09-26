@@ -1,0 +1,1117 @@
+// Python strategies and the node (docs/architecture.md sections 4.5 and 7.3-7.7).
+//
+// A PyStrategyHost adapts one Python strategy object to the kernel's StrategyVTable, so Python
+// strategies and registered C++ strategies share one DynamicStrategySet and one engine. The run
+// releases the GIL; a host takes it for the first Python callback of a batch, and the node gives
+// it back before the next batch's first input is written (GilBatch). Callbacks a strategy does
+// not define are skipped without touching Python.
+
+#include <Python.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/string_view.h>
+#include <nanobind/stl/vector.h>
+
+#include "common.hpp"
+#include "events.hpp"
+#include "jarvis/data/book.hpp"
+#include "jarvis/data/features.hpp"
+#include "jarvis/data/subscription.hpp"
+#include "jarvis/node/backtest_node.hpp"
+#include "jarvis/node/build_info.hpp"
+#include "jarvis/node/config.hpp"
+#include "jarvis/node/fingerprint.hpp"
+#include "jarvis/node/node_cli.hpp"
+#include "jarvis/node/replay.hpp"
+#include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/strategy/context.hpp"
+#include "jarvis/strategy/strategy.hpp"
+#include "jarvis/strategy/strategy_set.hpp"
+
+namespace jarvis::py {
+
+namespace {
+
+namespace st = jarvis::strategy;
+namespace d = jarvis::data;
+
+using core::Status;
+
+// ---- GIL ------------------------------------------------------------------------------------
+
+// Holds the GIL from the first Python callback of a batch until the node releases it. During a
+// replay the caller keeps the GIL; PyGILState_Ensure then only counts.
+class GilBatch {
+public:
+  GilBatch() = default;
+  GilBatch(const GilBatch&) = delete;
+  GilBatch& operator=(const GilBatch&) = delete;
+  ~GilBatch() { release(); }
+
+  void acquire() {
+    if (!held_) {
+      state_ = PyGILState_Ensure();
+      held_ = true;
+    }
+  }
+  void release() {
+    if (held_) {
+      PyGILState_Release(state_);
+      held_ = false;
+    }
+  }
+
+private:
+  PyGILState_STATE state_{};
+  bool held_ = false;
+};
+
+// The node's input hook: gives the GIL back once a batch is complete, before the next batch's
+// first input is written to the log.
+class GilHook {
+public:
+  explicit GilHook(GilBatch& gil) noexcept : gil_{&gil} {}
+  void before_input(const m::Event& event) {
+    if (after_batch_end_) {
+      gil_->release();
+    }
+    after_batch_end_ = std::holds_alternative<m::BatchEnd>(event);
+  }
+
+private:
+  GilBatch* gil_;
+  bool after_batch_end_ = false;
+};
+
+// ---- objects valid during one callback ------------------------------------------------------
+
+[[noreturn]] void expired(std::string_view what) {
+  const std::string message = std::string{what} +
+                              " is only valid during the callback it was passed to; copy what "
+                              "you need to keep";
+  throw nb::type_error(message.c_str());
+}
+
+struct PyBookView {
+  m::InstrumentId instrument_id;
+  const d::OrderBook* book = nullptr;
+
+  [[nodiscard]] const d::OrderBook& get() const {
+    if (book == nullptr) {
+      expired("BookView");
+    }
+    return *book;
+  }
+};
+
+nb::object level_tuple(const d::BookLevel& level) {
+  return nb::make_tuple(nb::cast(level.price), nb::cast(level.size));
+}
+
+nb::list levels(const d::OrderBook& book, bool bids, std::size_t depth) {
+  std::vector<d::BookLevel> buffer(depth);
+  const std::size_t n = bids ? book.bids(buffer) : book.asks(buffer);
+  nb::list out;
+  for (std::size_t i = 0; i < n; ++i) {
+    out.append(level_tuple(buffer[i]));
+  }
+  return out;
+}
+
+struct PyTradeBatch {
+  m::InstrumentId instrument_id;
+  nb::object ts_init, price_raw, size_raw, aggressor_side;
+  std::uint8_t price_precision = 0;
+  std::uint8_t size_precision = 0;
+  std::size_t size = 0;
+};
+
+struct PyQuoteBatch {
+  m::InstrumentId instrument_id;
+  nb::object ts_init, bid_raw, ask_raw, bid_size_raw, ask_size_raw;
+  std::uint8_t price_precision = 0;
+  std::uint8_t size_precision = 0;
+  std::size_t size = 0;
+};
+
+template <typename T> nb::object column(const std::vector<T>& values) {
+  const std::size_t shape[1] = {values.size()}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+  nb::ndarray<nb::numpy, const T, nb::ndim<1>> array(values.data(), 1, shape, nb::handle());
+  return nb::cast(array, nb::rv_policy::reference);
+}
+
+// ---- Python context -------------------------------------------------------------------------
+
+struct PyContext {
+  st::Context* ctx = nullptr;
+  std::vector<nb::object>* views = nullptr; // book views handed out during the callback
+
+  [[nodiscard]] st::Context& get() const {
+    if (ctx == nullptr) {
+      expired("Context");
+    }
+    return *ctx;
+  }
+};
+
+m::InstrumentId instrument_of(nb::handle h) {
+  m::InstrumentId id;
+  from_py(h, id, "instrument_id");
+  return id;
+}
+
+m::BarType bar_type_of(nb::handle h) {
+  m::BarType t;
+  from_py(h, t, "bar_type");
+  return t;
+}
+
+// ---- the host -------------------------------------------------------------------------------
+
+constexpr std::string_view kCallbackNames[] = { // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    "on_start",
+    "on_stop",
+    "on_trade",
+    "on_quote",
+    "on_book",
+    "on_book_deltas",
+    "on_bar",
+    "on_mark_price",
+    "on_index_price",
+    "on_funding_rate",
+    "on_instrument_status",
+    "on_instrument_close",
+    "on_liquidation",
+    "on_feature",
+    "on_trade_batch",
+    "on_quote_batch",
+    "on_timer",
+    "on_error"};
+
+enum Callback : std::uint8_t {
+  kOnStart,
+  kOnStop,
+  kOnTrade,
+  kOnQuote,
+  kOnBook,
+  kOnBookDeltas,
+  kOnBar,
+  kOnMarkPrice,
+  kOnIndexPrice,
+  kOnFundingRate,
+  kOnInstrumentStatus,
+  kOnInstrumentClose,
+  kOnLiquidation,
+  kOnFeature,
+  kOnTradeBatch,
+  kOnQuoteBatch,
+  kOnTimer,
+  kOnError,
+  kCallbackCount
+};
+
+struct HostOptions {
+  bool measure_overruns = false; // sandbox and live; never in backtest or replay
+  std::uint64_t budget_ns = 2'000'000;
+  std::uint64_t overrun_limit = 50;
+};
+
+struct HostStats {
+  std::uint64_t calls = 0;
+  std::uint64_t total_ns = 0;
+  std::uint64_t max_ns = 0;
+  std::uint64_t overruns = 0;
+  std::uint64_t escapes = 0;
+};
+
+class PyStrategyHost {
+public:
+  PyStrategyHost(nb::object strategy, std::string id, GilBatch& gil, HostOptions options)
+      : strategy_{std::move(strategy)}, id_{std::move(id)}, gil_{&gil}, options_{options} {
+    for (std::size_t i = 0; i < kCallbackCount; ++i) {
+      nb::object f = nb::getattr(strategy_, std::string{kCallbackNames[i]}.c_str(), nb::none());
+      if (!f.is_none()) {
+        callbacks_[i] = std::move(f);
+      }
+    }
+    context_ = nb::cast(PyContext{}, nb::rv_policy::move);
+    context_ptr_ = nb::inst_ptr<PyContext>(context_);
+    context_ptr_->views = &views_;
+  }
+
+  PyStrategyHost(const PyStrategyHost&) = delete;
+  PyStrategyHost& operator=(const PyStrategyHost&) = delete;
+  PyStrategyHost(PyStrategyHost&&) = delete;
+  PyStrategyHost& operator=(PyStrategyHost&&) = delete;
+  ~PyStrategyHost() = default;
+
+  static const st::StrategyVTable kVTable;
+
+  [[nodiscard]] const HostStats& stats() const noexcept { return stats_; }
+  [[nodiscard]] const std::string& id() const noexcept { return id_; }
+
+private:
+  [[nodiscard]] bool has(Callback c) const noexcept { return callbacks_[c].is_valid(); }
+
+  // Calls a Python callback with the context bound; exceptions become strategy failures.
+  template <typename... A> Status call(st::Context& ctx, Callback c, A&&... args) {
+    if (!has(c)) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    const auto start = std::chrono::steady_clock::now();
+    context_ptr_->ctx = &ctx;
+    Status status = Status::Ok;
+    try {
+      callbacks_[c](context_, std::forward<A>(args)...);
+    } catch (nb::python_error& e) {
+      status = failed(ctx, c, e);
+    } catch (const std::exception& e) {
+      status = failed(ctx, c, "RuntimeError", e.what());
+    }
+    context_ptr_->ctx = nullptr;
+    for (nb::object& view : views_) {
+      nb::inst_ptr<PyBookView>(view)->book = nullptr;
+    }
+    views_.clear();
+    measure(ctx, start);
+    return status;
+  }
+
+  Status failed(st::Context& ctx, Callback c, nb::python_error& e) {
+    const std::string type = nb::type_name(e.type()).c_str();
+    return failed(ctx, c, type, e.what());
+  }
+
+  Status failed(st::Context& ctx, Callback c, const std::string& type, std::string_view text) {
+    constexpr std::size_t kMaxText = 4096;
+    std::cerr << "jarvis: strategy " << id_ << " raised " << type << " in " << kCallbackNames[c]
+              << " at seq " << ctx.seq() << ":\n"
+              << text.substr(0, kMaxText) << "\n";
+    ctx.report_error(m::StrategyErrorKind::Exception,
+                     st::KernelServices::failure_hash("python:" + type));
+    return Status::InvalidState;
+  }
+
+  void measure(st::Context& ctx, std::chrono::steady_clock::time_point start) {
+    const auto ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   std::chrono::steady_clock::now() - start)
+                                                   .count());
+    ++stats_.calls;
+    stats_.total_ns += ns;
+    stats_.max_ns = std::max(stats_.max_ns, ns);
+    if (!options_.measure_overruns) {
+      return;
+    }
+    if (ns <= options_.budget_ns) {
+      consecutive_overruns_ = 0;
+      return;
+    }
+    ++stats_.overruns;
+    if (++consecutive_overruns_ >= options_.overrun_limit) {
+      consecutive_overruns_ = 0;
+      ctx.report_error(m::StrategyErrorKind::Overrun, st::KernelServices::failure_hash("overrun"));
+    }
+  }
+
+  // A batch array still referenced after the callback would see the next batch's data.
+  void check_escape(st::Context& ctx, std::initializer_list<const nb::object*> arrays,
+                    nb::handle batch) {
+    bool escaped = Py_REFCNT(batch.ptr()) > 1;
+    for (const nb::object* a : arrays) {
+      escaped = escaped || Py_REFCNT(a->ptr()) > 1;
+    }
+    if (escaped) {
+      ++stats_.escapes;
+      std::cerr << "jarvis: strategy " << id_ << " kept a batch or one of its arrays after the "
+                << "batch callback at seq " << ctx.seq()
+                << "; the arrays are views that the next batch overwrites. Copy them "
+                << "(numpy.array(x)) to keep the data.\n";
+      ctx.report_error(m::StrategyErrorKind::Exception,
+                       st::KernelServices::failure_hash("jarvis.BatchEscaped"));
+    }
+  }
+
+  Status on_data(st::Context& ctx, const st::DataView& view) {
+    return std::visit([this, &ctx](const auto* v) { return this->data(ctx, *v); }, view);
+  }
+
+  Status data(st::Context& ctx, const m::TradeTick& v) { return simple(ctx, kOnTrade, v); }
+  Status data(st::Context& ctx, const m::QuoteTick& v) { return simple(ctx, kOnQuote, v); }
+  Status data(st::Context& ctx, const m::Bar& v) { return simple(ctx, kOnBar, v); }
+  Status data(st::Context& ctx, const m::MarkPriceUpdate& v) {
+    return simple(ctx, kOnMarkPrice, v);
+  }
+  Status data(st::Context& ctx, const m::IndexPriceUpdate& v) {
+    return simple(ctx, kOnIndexPrice, v);
+  }
+  Status data(st::Context& ctx, const m::FundingRateUpdate& v) {
+    return simple(ctx, kOnFundingRate, v);
+  }
+  Status data(st::Context& ctx, const m::InstrumentStatus& v) {
+    return simple(ctx, kOnInstrumentStatus, v);
+  }
+  Status data(st::Context& ctx, const m::InstrumentClose& v) {
+    return simple(ctx, kOnInstrumentClose, v);
+  }
+  Status data(st::Context& ctx, const m::LiquidationOrder& v) {
+    return simple(ctx, kOnLiquidation, v);
+  }
+  Status data(st::Context& ctx, const m::OrderBookDeltas& v) {
+    if (!has(kOnBookDeltas)) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    return call(ctx, kOnBookDeltas, event_to_py(m::Event{v}));
+  }
+  Status data(st::Context& ctx, const d::BookView& v) {
+    if (!has(kOnBook)) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    nb::object view = nb::cast(PyBookView{v.instrument_id, v.book}, nb::rv_policy::move);
+    views_.push_back(view);
+    return call(ctx, kOnBook, view);
+  }
+  Status data(st::Context& ctx, const m::FeatureUpdate& v) {
+    if (!has(kOnFeature)) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    return call(ctx, kOnFeature, v.feature_id, to_py(v.value), v.ts_init.value());
+  }
+
+  template <typename T> Status simple(st::Context& ctx, Callback c, const T& v) {
+    if (!has(c)) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    return call(ctx, c, nb::cast(v, nb::rv_policy::copy));
+  }
+
+  Status on_batch(st::Context& ctx, const st::BatchView& view) {
+    return std::visit([this, &ctx](const auto* b) { return this->batch(ctx, *b); }, view);
+  }
+
+  Status batch(st::Context& ctx, const st::TradeBatch& b) {
+    if (!has(kOnTradeBatch) || b.trades.empty()) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    const std::size_t n = b.trades.size();
+    ts_.resize(n);
+    a_.resize(n);
+    u_.resize(n);
+    side_.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const m::TradeTick& t = b.trades[i];
+      ts_[i] = t.ts_init.value();
+      a_[i] = t.price.raw();
+      u_[i] = t.size.raw();
+      side_[i] = static_cast<std::uint8_t>(t.aggressor_side);
+    }
+    PyTradeBatch out{b.instrument_id,
+                     column(ts_),
+                     column(a_),
+                     column(u_),
+                     column(side_),
+                     b.trades[0].price.precision(),
+                     b.trades[0].size.precision(),
+                     n};
+    nb::object obj = nb::cast(std::move(out), nb::rv_policy::move);
+    const Status s = call(ctx, kOnTradeBatch, obj);
+    auto* p = nb::inst_ptr<PyTradeBatch>(obj);
+    check_escape(ctx, {&p->ts_init, &p->price_raw, &p->size_raw, &p->aggressor_side}, obj);
+    p->ts_init = p->price_raw = p->size_raw = p->aggressor_side = nb::none();
+    return s;
+  }
+
+  Status batch(st::Context& ctx, const st::QuoteBatch& b) {
+    if (!has(kOnQuoteBatch) || b.quotes.empty()) {
+      return Status::Ok;
+    }
+    gil_->acquire();
+    const std::size_t n = b.quotes.size();
+    ts_.resize(n);
+    a_.resize(n);
+    b_.resize(n);
+    u_.resize(n);
+    v_.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const m::QuoteTick& q = b.quotes[i];
+      ts_[i] = q.ts_init.value();
+      a_[i] = q.bid_price.raw();
+      b_[i] = q.ask_price.raw();
+      u_[i] = q.bid_size.raw();
+      v_[i] = q.ask_size.raw();
+    }
+    PyQuoteBatch out{b.instrument_id,
+                     column(ts_),
+                     column(a_),
+                     column(b_),
+                     column(u_),
+                     column(v_),
+                     b.quotes[0].bid_price.precision(),
+                     b.quotes[0].bid_size.precision(),
+                     n};
+    nb::object obj = nb::cast(std::move(out), nb::rv_policy::move);
+    const Status s = call(ctx, kOnQuoteBatch, obj);
+    auto* p = nb::inst_ptr<PyQuoteBatch>(obj);
+    check_escape(ctx, {&p->ts_init, &p->bid_raw, &p->ask_raw, &p->bid_size_raw, &p->ask_size_raw},
+                 obj);
+    p->ts_init = p->bid_raw = p->ask_raw = p->bid_size_raw = p->ask_size_raw = nb::none();
+    return s;
+  }
+
+  static PyStrategyHost& self(void* p) { return *static_cast<PyStrategyHost*>(p); }
+
+  nb::object strategy_;
+  std::string id_;
+  GilBatch* gil_;
+  HostOptions options_;
+  nb::object callbacks_[kCallbackCount]; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+  nb::object context_;
+  PyContext* context_ptr_ = nullptr;
+  std::vector<nb::object> views_;
+  std::vector<std::uint64_t> ts_;
+  std::vector<std::int64_t> a_, b_;
+  std::vector<std::uint64_t> u_, v_;
+  std::vector<std::uint8_t> side_;
+  HostStats stats_;
+  std::uint64_t consecutive_overruns_ = 0;
+
+  friend struct HostVTable;
+};
+
+// The kernel's side of the host. No exception crosses back into the kernel: anything thrown
+// while preparing a callback's arguments is a failure of that strategy, like one raised in it.
+struct HostVTable {
+  template <typename F>
+  static Status guarded(PyStrategyHost& h, st::Context& ctx, Callback c, F&& f) {
+    try {
+      return f();
+    } catch (nb::python_error& e) {
+      return h.failed(ctx, c, e);
+    } catch (const std::exception& e) {
+      return h.failed(ctx, c, "RuntimeError", e.what());
+    }
+  }
+
+  static Status on_start(void* p, st::Context& ctx) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    return guarded(h, ctx, kOnStart, [&] { return h.call(ctx, kOnStart); });
+  }
+  static Status on_stop(void* p, st::Context& ctx) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    return guarded(h, ctx, kOnStop, [&] { return h.call(ctx, kOnStop); });
+  }
+  static Status on_data(void* p, st::Context& ctx, const st::DataView& view) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    return guarded(h, ctx, kOnTrade, [&] { return h.on_data(ctx, view); });
+  }
+  static Status on_batch(void* p, st::Context& ctx, const st::BatchView& view) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    return guarded(h, ctx, kOnTradeBatch, [&] { return h.on_batch(ctx, view); });
+  }
+  static Status on_timer(void* p, st::Context& ctx, core::TimerKey key, core::UnixNanos ts) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnTimer)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnTimer, [&] { return h.call(ctx, kOnTimer, key.id, ts.value()); });
+  }
+  static Status on_error(void* p, st::Context& ctx, const m::StrategyError& e) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnError)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnError, [&] {
+      h.gil_->acquire();
+      return h.call(ctx, kOnError, nb::cast(e, nb::rv_policy::copy));
+    });
+  }
+};
+
+const st::StrategyVTable PyStrategyHost::kVTable{&HostVTable::on_start, &HostVTable::on_stop,
+                                                 &HostVTable::on_data,  &HostVTable::on_batch,
+                                                 &HostVTable::on_timer, &HostVTable::on_error};
+
+// ---- node setup -----------------------------------------------------------------------------
+
+nb::object param_to_py(const node::ParamScalar& v) {
+  return std::visit([](const auto& x) -> nb::object { return nb::cast(x); }, v);
+}
+
+nb::dict params_to_py(const std::vector<node::Param>& params) {
+  nb::dict out;
+  for (const node::Param& p : params) {
+    out[p.key.c_str()] = std::visit(
+        [](const auto& x) -> nb::object {
+          using T = std::decay_t<decltype(x)>;
+          if constexpr (std::is_same_v<T, std::vector<node::ParamScalar>>) {
+            nb::list l;
+            for (const node::ParamScalar& s : x) {
+              l.append(param_to_py(s));
+            }
+            return l;
+          } else {
+            return nb::cast(x);
+          }
+        },
+        p.value);
+  }
+  return out;
+}
+
+node::ParamScalar scalar_from_py(nb::handle h, const std::string& key) {
+  if (nb::isinstance<nb::bool_>(h)) {
+    return nb::cast<bool>(h);
+  }
+  if (nb::isinstance<nb::int_>(h)) {
+    return nb::cast<std::int64_t>(h);
+  }
+  if (nb::isinstance<nb::str>(h)) {
+    return nb::cast<std::string>(h);
+  }
+  if (nb::hasattr(h, "as_tuple")) { // decimal.Decimal: kept exact, as text
+    return nb::cast<std::string>(nb::str(h));
+  }
+  type_error(key, "bool, int, str or decimal.Decimal (floats are not accepted)", h);
+}
+
+std::vector<node::Param> params_from_py(const nb::dict& params) {
+  std::vector<node::Param> out;
+  for (auto [k, v] : params) {
+    const auto key = nb::cast<std::string>(k);
+    if (nb::isinstance<nb::list>(v) || nb::isinstance<nb::tuple>(v)) {
+      std::vector<node::ParamScalar> items;
+      for (nb::handle item : v) {
+        items.push_back(scalar_from_py(item, key));
+      }
+      out.push_back(node::Param{key, std::move(items)});
+    } else {
+      out.push_back(std::visit([&](auto&& x) { return node::Param{key, node::ParamValue{x}}; },
+                               scalar_from_py(v, key)));
+    }
+  }
+  std::sort(out.begin(), out.end(),
+            [](const node::Param& a, const node::Param& b) { return a.key < b.key; });
+  return out;
+}
+
+// A registered C++ strategy for a Python-launched node.
+struct NativeSpec {
+  std::string name;
+  node::StrategyConfig entry;
+};
+
+node::HeaderExtras header_extras() {
+  node::HeaderExtras extras;
+  const nb::object v = nb::module_::import_("sys").attr("version_info");
+  extras.python_version = std::to_string(nb::cast<int>(v.attr("major"))) + "." +
+                          std::to_string(nb::cast<int>(v.attr("minor"))) + "." +
+                          std::to_string(nb::cast<int>(v.attr("micro")));
+  try {
+    extras.numpy_version = nb::cast<std::string>(nb::module_::import_("numpy").attr("__version__"));
+  } catch (nb::python_error&) {
+    extras.numpy_version = "";
+  }
+  const nb::object environ = nb::module_::import_("os").attr("environ");
+  const auto seed = nb::cast<std::string>(environ.attr("get")("PYTHONHASHSEED", ""));
+  if (!seed.empty() && seed.find_first_not_of("0123456789") == std::string::npos) {
+    extras.python_hash_seed = std::stoull(seed);
+  }
+  return extras;
+}
+
+struct NodeSetup {
+  node::NodeConfig config;
+  node::RunManifest manifest;
+};
+
+nb::dict entry_dict(const node::StrategyConfig& e) {
+  nb::dict d;
+  d["id"] = e.id;
+  d["impl"] = e.impl;
+  nb::list instruments;
+  for (const m::InstrumentId& id : e.instruments) {
+    instruments.append(nb::cast(id));
+  }
+  d["instruments"] = instruments;
+  d["params"] = params_to_py(e.params);
+  return d;
+}
+
+// The strategies of one run: Python hosts and native instances, in node order.
+struct Assembly {
+  GilBatch gil;
+  std::vector<std::unique_ptr<PyStrategyHost>> hosts;
+  std::vector<node::NativeStrategy> natives;
+  std::unique_ptr<st::DynamicStrategySet> set;
+
+  void build(const nb::list& strategies, const node::NodeConfig& config, bool replaying) {
+    set = std::make_unique<st::DynamicStrategySet>(strategies.size());
+    HostOptions options;
+    options.measure_overruns = !replaying && config.node.env != node::Env::Backtest;
+    options.budget_ns = config.python.callback_budget_us * 1'000U;
+    options.overrun_limit = config.python.overrun_limit;
+    const auto& registry = node::StrategyRegistry::instance();
+    std::string error;
+    check(registry.check(error), error.empty() ? "strategy registry" : error);
+    for (nb::handle item : strategies) {
+      if (nb::isinstance<NativeSpec>(item)) {
+        const auto& spec = nb::cast<const NativeSpec&>(item);
+        node::NativeStrategy native;
+        const Status s = registry.create(spec.name, node::StrategyParams{spec.entry}, native);
+        if (s == Status::NotFound) {
+          throw nb::value_error(
+              ("no C++ strategy named '" + spec.name + "' is registered in this build").c_str());
+        }
+        check(s, "strategy " + spec.entry.id);
+        check(native.add_to(*set), "add_native_strategy");
+        natives.push_back(std::move(native));
+      } else {
+        const std::string id = nb::cast<std::string>(
+            nb::str(nb::getattr(item, "id", nb::str(nb::type_name(item.type())))));
+        hosts.push_back(std::make_unique<PyStrategyHost>(nb::borrow(item), id, gil, options));
+        check(set->add(hosts.back().get(), &PyStrategyHost::kVTable), "add_strategy");
+      }
+    }
+  }
+
+  [[nodiscard]] nb::list stats() const {
+    nb::list out;
+    for (const auto& h : hosts) {
+      nb::dict d;
+      d["id"] = h->id();
+      d["calls"] = h->stats().calls;
+      d["total_ns"] = h->stats().total_ns;
+      d["max_ns"] = h->stats().max_ns;
+      d["overruns"] = h->stats().overruns;
+      d["escapes"] = h->stats().escapes;
+      out.append(d);
+    }
+    return out;
+  }
+};
+
+nb::dict summary_dict(const node::BacktestResult& r) {
+  const auto& s = r.summary;
+  nb::dict d;
+  d["directory"] = r.directory;
+  d["data_events"] = s.data_events;
+  d["skipped"] = s.skipped;
+  d["inputs"] = s.inputs;
+  d["outputs"] = s.outputs;
+  d["batches"] = s.batches;
+  d["timers"] = s.timers;
+  d["strategy_errors"] = s.strategy_errors;
+  d["halted"] = s.halted;
+  d["state"] = std::string{m::to_string(s.state)};
+  d["first_ts"] = s.first_ts.value();
+  d["last_ts"] = s.last_ts.value();
+  return d;
+}
+
+nb::dict run_node(const NodeSetup& setup, const nb::list& strategies,
+                  const std::optional<std::string>& out) {
+  Assembly assembly;
+  assembly.build(strategies, setup.config, false);
+  node::BacktestRequest request;
+  request.config = &setup.config;
+  request.manifest = setup.manifest;
+  request.out = out.value_or("");
+  request.extras = header_extras();
+  node::BacktestResult result;
+  std::string error;
+  Status s = Status::Ok;
+  {
+    nb::gil_scoped_release release;
+    GilHook hook{assembly.gil};
+    try {
+      s = node::run_backtest(request, *assembly.set, result, error, hook);
+    } catch (...) {
+      assembly.gil.release(); // before `release` takes the GIL back
+      throw;
+    }
+    assembly.gil.release();
+  }
+  if (PyErr_Occurred() != nullptr) {
+    throw nb::python_error();
+  }
+  check(s, error);
+  nb::dict d = summary_dict(result);
+  d["strategies"] = assembly.stats();
+  return d;
+}
+
+nb::dict replay_node(const NodeSetup& setup, const std::string& directory,
+                     const nb::list& strategies, std::optional<std::uint64_t> until,
+                     bool dump_state) {
+  Assembly assembly;
+  assembly.build(strategies, setup.config, true);
+  node::ReplayOptions options;
+  options.until = until;
+  options.dump_state = dump_state;
+  node::ReplayReport report;
+  std::string error;
+  check(node::replay_run(directory, setup.config, *assembly.set, options, report, error), error);
+  nb::dict d;
+  d["inputs"] = report.inputs;
+  d["outputs"] = report.outputs;
+  if (report.divergence) {
+    nb::dict div;
+    div["seq"] = report.divergence->seq;
+    div["recorded"] = report.divergence->recorded;
+    div["replayed"] = report.divergence->replayed;
+    d["divergence"] = div;
+  } else {
+    d["divergence"] = nb::none();
+  }
+  d["state"] = report.state;
+  return d;
+}
+
+void bind_data_types(nb::module_& mod) {
+  nb::class_<d::Cadence> cadence(mod, "Cadence",
+                                 "When a subscriber sees updates: every update, the latest per "
+                                 "batch (conflated), the first per period (sampled), or all of a "
+                                 "batch at once (on_batch).");
+  cadence.def_static("every", &d::Cadence::every)
+      .def_static("conflated", &d::Cadence::conflated)
+      .def_static("on_batch", &d::Cadence::on_batch)
+      .def_static("sampled_ns", &d::Cadence::sampled_ns, nb::arg("period_ns"))
+      .def_static("sampled_ms", &d::Cadence::sampled_ms, nb::arg("period_ms"))
+      .def("__eq__", [](const d::Cadence& a, const d::Cadence& b) { return a == b; })
+      .def("__repr__", [](const d::Cadence& c) {
+        switch (c.mode) {
+        case d::Cadence::Mode::Every:
+          return std::string{"Cadence.EVERY"};
+        case d::Cadence::Mode::Conflated:
+          return std::string{"Cadence.CONFLATED"};
+        case d::Cadence::Mode::OnBatch:
+          return std::string{"Cadence.ON_BATCH"};
+        case d::Cadence::Mode::Sampled:
+          return "Cadence.sampled_ns(" + std::to_string(c.period.value()) + ")";
+        }
+        return std::string{"Cadence(?)"};
+      });
+  // Properties rather than stored instances: a class attribute holding an instance of its own
+  // class is a reference cycle that outlives the interpreter's module teardown.
+  cadence.def_prop_ro_static("EVERY", [](nb::handle /*cls*/) { return d::Cadence::every(); })
+      .def_prop_ro_static("CONFLATED", [](nb::handle /*cls*/) { return d::Cadence::conflated(); })
+      .def_prop_ro_static("ON_BATCH", [](nb::handle /*cls*/) { return d::Cadence::on_batch(); });
+
+  nb::enum_<d::DataKind>(mod, "DataKind")
+      .value("TRADE", d::DataKind::Trade)
+      .value("QUOTE", d::DataKind::Quote)
+      .value("BOOK_DELTAS", d::DataKind::BookDeltas)
+      .value("BOOK", d::DataKind::Book)
+      .value("BAR", d::DataKind::Bar)
+      .value("MARK_PRICE", d::DataKind::MarkPrice)
+      .value("INDEX_PRICE", d::DataKind::IndexPrice)
+      .value("FUNDING_RATE", d::DataKind::FundingRate)
+      .value("STATUS", d::DataKind::Status)
+      .value("CLOSE", d::DataKind::Close)
+      .value("LIQUIDATION", d::DataKind::Liquidation)
+      .value("FEATURE", d::DataKind::Feature);
+
+  nb::enum_<d::FeatureKind>(mod, "FeatureKind")
+      .value("EMA", d::FeatureKind::Ema)
+      .value("VWAP", d::FeatureKind::Vwap)
+      .value("IMBALANCE", d::FeatureKind::Imbalance)
+      .value("MICROPRICE", d::FeatureKind::Microprice)
+      .value("REALIZED_VOL", d::FeatureKind::RealizedVol);
+
+  nb::class_<d::FeatureSpec>(mod, "FeatureSpec", "A kernel feature declaration.")
+      .def(
+          "__init__",
+          [](d::FeatureSpec* self, d::FeatureKind kind, nb::handle instrument_id,
+             std::uint32_t window) {
+            new (self) d::FeatureSpec{kind, instrument_of(instrument_id), window};
+          },
+          nb::arg("kind"), nb::arg("instrument_id"), nb::arg("window") = 0)
+      .def_ro("kind", &d::FeatureSpec::kind)
+      .def_prop_ro("instrument_id", [](const d::FeatureSpec& s) { return s.instrument_id; })
+      .def_ro("window", &d::FeatureSpec::window)
+      .def("__eq__", [](const d::FeatureSpec& a, const d::FeatureSpec& b) { return a == b; });
+
+  nb::class_<PyBookView>(mod, "BookView",
+                         "Read-only order book, valid only during the callback it was passed "
+                         "to. Levels are (Price, Quantity) tuples, best first.")
+      .def_prop_ro("instrument_id", [](const PyBookView& v) { return v.instrument_id; })
+      .def("best_bid",
+           [](const PyBookView& v) -> nb::object {
+             d::BookLevel level;
+             return v.get().best_bid(level) ? level_tuple(level) : nb::none();
+           })
+      .def("best_ask",
+           [](const PyBookView& v) -> nb::object {
+             d::BookLevel level;
+             return v.get().best_ask(level) ? level_tuple(level) : nb::none();
+           })
+      .def(
+          "bids",
+          [](const PyBookView& v, std::size_t depth) { return levels(v.get(), true, depth); },
+          nb::arg("depth") = 10)
+      .def(
+          "asks",
+          [](const PyBookView& v, std::size_t depth) { return levels(v.get(), false, depth); },
+          nb::arg("depth") = 10)
+      .def_prop_ro("sequence", [](const PyBookView& v) { return v.get().sequence(); })
+      .def_prop_ro("ts_last", [](const PyBookView& v) { return v.get().ts_last().value(); });
+
+  nb::class_<PyTradeBatch>(mod, "TradeBatch",
+                           "Trades of one instrument in one batch, as read-only numpy columns "
+                           "(raw values at 10^9 scale). Valid only during on_trade_batch.")
+      .def_prop_ro("instrument_id", [](const PyTradeBatch& b) { return b.instrument_id; })
+      .def_ro("ts_init", &PyTradeBatch::ts_init)
+      .def_ro("price_raw", &PyTradeBatch::price_raw)
+      .def_ro("size_raw", &PyTradeBatch::size_raw)
+      .def_ro("aggressor_side", &PyTradeBatch::aggressor_side)
+      .def_ro("price_precision", &PyTradeBatch::price_precision)
+      .def_ro("size_precision", &PyTradeBatch::size_precision)
+      .def("__len__", [](const PyTradeBatch& b) { return b.size; });
+
+  nb::class_<PyQuoteBatch>(mod, "QuoteBatch",
+                           "Quotes of one instrument in one batch, as read-only numpy columns "
+                           "(raw values at 10^9 scale). Valid only during on_quote_batch.")
+      .def_prop_ro("instrument_id", [](const PyQuoteBatch& b) { return b.instrument_id; })
+      .def_ro("ts_init", &PyQuoteBatch::ts_init)
+      .def_ro("bid_raw", &PyQuoteBatch::bid_raw)
+      .def_ro("ask_raw", &PyQuoteBatch::ask_raw)
+      .def_ro("bid_size_raw", &PyQuoteBatch::bid_size_raw)
+      .def_ro("ask_size_raw", &PyQuoteBatch::ask_size_raw)
+      .def_ro("price_precision", &PyQuoteBatch::price_precision)
+      .def_ro("size_precision", &PyQuoteBatch::size_precision)
+      .def("__len__", [](const PyQuoteBatch& b) { return b.size; });
+}
+
+void bind_context(nb::module_& mod) {
+  const auto cadence_arg = nb::arg("cadence") = d::Cadence::every();
+  nb::class_<PyContext>(mod, "Context",
+                        "The kernel as a strategy sees it; valid only during the callback it "
+                        "was passed to.")
+      .def(
+          "now", [](const PyContext& c) { return c.get().now().value(); },
+          "The current input's ts, in nanoseconds (the only clock a strategy may read).")
+      .def("seq", [](const PyContext& c) { return c.get().seq(); })
+      .def(
+          "rng", [](const PyContext& c, std::uint32_t key) { return c.get().rng(key); },
+          nb::arg("key"), "A deterministic 64-bit draw keyed by (seq, strategy, key).")
+      .def_prop_ro("strategy_index", [](const PyContext& c) { return c.get().strategy_index(); })
+      .def(
+          "set_timer",
+          [](const PyContext& c, std::uint32_t id, std::uint64_t deadline, std::uint64_t period) {
+            check(c.get().set_timer(id, core::UnixNanos{deadline}, core::DurationNanos{period}),
+                  "set_timer");
+          },
+          nb::arg("timer_id"), nb::arg("deadline"), nb::arg("period") = 0)
+      .def(
+          "cancel_timer",
+          [](const PyContext& c, std::uint32_t id) {
+            check(c.get().cancel_timer(id), "cancel_timer");
+          },
+          nb::arg("timer_id"))
+      .def(
+          "subscribe_trades",
+          [](const PyContext& c, nb::handle iid, const d::Cadence& cad) {
+            check(c.get().subscribe_trades(instrument_of(iid), cad), "subscribe_trades");
+          },
+          nb::arg("instrument_id"), cadence_arg)
+      .def(
+          "subscribe_quotes",
+          [](const PyContext& c, nb::handle iid, const d::Cadence& cad) {
+            check(c.get().subscribe_quotes(instrument_of(iid), cad), "subscribe_quotes");
+          },
+          nb::arg("instrument_id"), cadence_arg)
+      .def(
+          "subscribe_book",
+          [](const PyContext& c, nb::handle iid, const d::Cadence& cad, m::BookType type) {
+            check(c.get().subscribe_book(instrument_of(iid), cad, type), "subscribe_book");
+          },
+          nb::arg("instrument_id"), cadence_arg, nb::arg("book_type") = m::BookType::L2_MBP)
+      .def(
+          "subscribe_book_deltas",
+          [](const PyContext& c, nb::handle iid) {
+            check(c.get().subscribe_book_deltas(instrument_of(iid)), "subscribe_book_deltas");
+          },
+          nb::arg("instrument_id"))
+      .def(
+          "subscribe_mark_price",
+          [](const PyContext& c, nb::handle iid, const d::Cadence& cad) {
+            check(c.get().subscribe_mark_price(instrument_of(iid), cad), "subscribe_mark_price");
+          },
+          nb::arg("instrument_id"), cadence_arg)
+      .def(
+          "subscribe_funding",
+          [](const PyContext& c, nb::handle iid, const d::Cadence& cad) {
+            check(c.get().subscribe_funding(instrument_of(iid), cad), "subscribe_funding");
+          },
+          nb::arg("instrument_id"), cadence_arg)
+      .def(
+          "subscribe_bars",
+          [](const PyContext& c, nb::handle bar_type, const d::Cadence& cad) {
+            check(c.get().subscribe_bars(bar_type_of(bar_type), cad), "subscribe_bars");
+          },
+          nb::arg("bar_type"), cadence_arg)
+      .def(
+          "unsubscribe",
+          [](const PyContext& c, d::DataKind kind, nb::handle iid) {
+            check(c.get().unsubscribe(kind, instrument_of(iid)), "unsubscribe");
+          },
+          nb::arg("kind"), nb::arg("instrument_id"))
+      .def(
+          "unsubscribe_bars",
+          [](const PyContext& c, nb::handle bar_type) {
+            check(c.get().unsubscribe_bars(bar_type_of(bar_type)), "unsubscribe_bars");
+          },
+          nb::arg("bar_type"))
+      .def(
+          "feature",
+          [](const PyContext& c, const d::FeatureSpec& spec, const d::Cadence& cad) {
+            m::FeatureId id = 0;
+            check(c.get().feature(spec, cad, id), "feature");
+            return id;
+          },
+          nb::arg("spec"), cadence_arg,
+          "Declares a kernel feature (identical declarations share one) and subscribes to it; "
+          "returns its id, which on_feature receives.")
+      .def(
+          "record",
+          [](const PyContext& c, std::string_view tag, nb::handle value) {
+            m::Decimal v;
+            from_py(value, v, "value");
+            check(c.get().record(tag, v), "record");
+          },
+          nb::arg("tag"), nb::arg("value"),
+          "Records a value as a StrategyRecord output (tag up to 32 bytes); replay compares it.")
+      .def(
+          "book",
+          [](const PyContext& c, nb::handle iid) -> nb::object {
+            const m::InstrumentId id = instrument_of(iid);
+            d::BookView view;
+            if (!c.get().book(id, view)) {
+              return nb::none();
+            }
+            nb::object obj = nb::cast(PyBookView{id, view.book}, nb::rv_policy::move);
+            c.views->push_back(obj);
+            return obj;
+          },
+          nb::arg("instrument_id"), "The instrument's book, or None without a book subscription.");
+}
+
+} // namespace
+
+void bind_node(nb::module_& mod) {
+  bind_data_types(mod);
+  bind_context(mod);
+
+  nb::class_<NativeSpec>(mod, "NativeSpec", "A registered C++ strategy and its parameters.")
+      .def(
+          "__init__",
+          [](NativeSpec* self, std::string name, std::string id, const nb::dict& params) {
+            node::StrategyConfig entry;
+            entry.id = std::move(id);
+            entry.impl = "cpp:" + name;
+            entry.params = params_from_py(params);
+            new (self) NativeSpec{std::move(name), std::move(entry)};
+          },
+          nb::arg("name"), nb::arg("id"), nb::arg("params") = nb::dict())
+      .def_ro("name", &NativeSpec::name)
+      .def_prop_ro("id", [](const NativeSpec& s) { return s.entry.id; });
+
+  nb::class_<NodeSetup>(mod, "NodeSetup", "A loaded node configuration.")
+      .def_static(
+          "load",
+          [](const std::string& path, std::optional<std::string> env,
+             const std::vector<std::string>& sets) {
+            node::NodeArgs args;
+            args.config = path;
+            args.overrides.env = std::move(env);
+            args.overrides.sets = sets;
+            NodeSetup setup;
+            std::string error;
+            check(node::load_node_config(args, setup.config, setup.manifest, error), error);
+            return setup;
+          },
+          nb::arg("path"), nb::arg("env") = nb::none(),
+          nb::arg("sets") = std::vector<std::string>{})
+      .def_static(
+          "load_run",
+          [](const std::string& directory) {
+            NodeSetup setup;
+            std::string error;
+            check(node::load_run_config(directory, setup.config, error), error);
+            return setup;
+          },
+          nb::arg("directory"))
+      .def_prop_ro("node_id", [](const NodeSetup& s) { return s.config.node.id; })
+      .def_prop_ro(
+          "env", [](const NodeSetup& s) { return std::string{node::to_string(s.config.node.env)}; })
+      .def_prop_ro("seed", [](const NodeSetup& s) { return s.config.node.seed; })
+      .def_prop_ro("strict_determinism",
+                   [](const NodeSetup& s) { return s.config.node.strict_determinism; })
+      .def_prop_ro("config_hash",
+                   [](const NodeSetup& s) { return node::hex(node::config_hash(s.config)); })
+      .def_prop_ro("strategies",
+                   [](const NodeSetup& s) {
+                     nb::list out;
+                     for (const node::StrategyConfig& e : s.config.strategies) {
+                       out.append(entry_dict(e));
+                     }
+                     return out;
+                   })
+      .def("run", &run_node, nb::arg("strategies"), nb::arg("out") = nb::none(),
+           "Runs the node over its [data] with `strategies` (Python objects and NativeSpec) and "
+           "returns the run summary.")
+      .def("replay", &replay_node, nb::arg("directory"), nb::arg("strategies"),
+           nb::arg("until") = nb::none(), nb::arg("dump_state") = false,
+           "Replays a run directory with `strategies` and returns the report.");
+
+  mod.def(
+      "parse_args",
+      [](const std::vector<std::string>& args) {
+        node::NodeArgs parsed;
+        std::string error;
+        if (!node::parse_node_args(args, parsed, error)) {
+          throw nb::value_error(error.c_str());
+        }
+        nb::dict out;
+        out["config"] = parsed.config;
+        out["env"] = parsed.overrides.env;
+        out["sets"] = parsed.overrides.sets;
+        out["out"] = parsed.out;
+        out["replay"] = parsed.replay;
+        out["until"] = parsed.until;
+        out["dump_state"] = parsed.dump_state;
+        out["help"] = parsed.help;
+        return out;
+      },
+      nb::arg("args"), "Parses the node command line (the same one node_main uses).");
+  mod.def(
+      "usage", [](std::string_view program) { return node::node_usage(program); },
+      nb::arg("program"));
+  mod.def(
+      "registered_strategies", []() { return node::StrategyRegistry::instance().names(); },
+      "Names of the C++ strategies registered in this build.");
+}
+
+} // namespace jarvis::py

@@ -340,18 +340,25 @@ public:
   }
 
   void fail(StrategyIndex strategy, core::Status status) noexcept {
-    // FNV-1a of the status name: a stable id of the failure reason.
-    std::uint64_t h = 0xcbf29ce484222325ULL;
-    for (const char c : core::to_string(status)) {
-      h = (h ^ static_cast<std::uint8_t>(c)) * 0x100000001b3ULL;
-    }
+    fail(strategy, model::StrategyErrorKind::Exception, failure_hash(core::to_string(status)));
+  }
+  // The first failure of a strategy in a step wins; later ones in the same step are dropped.
+  void fail(StrategyIndex strategy, model::StrategyErrorKind kind,
+            std::uint64_t message_hash) noexcept {
     for (std::size_t i = 0; i < failures.size(); ++i) {
       if (failures[i].strategy == strategy) {
-        return; // one failure per strategy per step is enough
+        return;
       }
     }
-    static_cast<void>(
-        failures.push_back(StrategyFailure{strategy, model::StrategyErrorKind::Exception, h}));
+    static_cast<void>(failures.push_back(StrategyFailure{strategy, kind, message_hash}));
+  }
+  // FNV-1a of a failure reason (a Status name, a Python exception type): a stable id of it.
+  [[nodiscard]] static constexpr std::uint64_t failure_hash(std::string_view text) noexcept {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    for (const char c : text) {
+      h = (h ^ static_cast<std::uint8_t>(c)) * 0x100000001b3ULL;
+    }
+    return h;
   }
 
   // ---- state (written by the engine) --------------------------------------------------------
@@ -521,6 +528,13 @@ public:
   [[nodiscard]] core::Status feature(const data::FeatureSpec& spec, data::Cadence cadence,
                                      model::FeatureId& id) {
     return k_->declare_feature(self_, spec, cadence, id);
+  }
+
+  // Reports a failure of this strategy with its own reason id; the node records it as a
+  // StrategyError input after the step and applies risk.on_strategy_error. A callback that
+  // returns a non-Ok Status reports one implicitly.
+  void report_error(model::StrategyErrorKind kind, std::uint64_t message_hash) noexcept {
+    k_->fail(self_, kind, message_hash);
   }
 
   [[nodiscard]] core::Status record(std::string_view tag, model::Decimal value) noexcept {

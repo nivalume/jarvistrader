@@ -200,6 +200,7 @@ if(JARVIS_BUILD_PYTHON)
     python/src/bind_values.cpp
     python/src/bind_events.cpp
     python/src/bind_log.cpp
+    python/src/bind_node.cpp
     python/src/generated/enums.cpp
   )
   target_include_directories(

@@ -446,5 +446,6 @@ void bind_generated_enums(nb::module_& mod);
 void bind_values(nb::module_& mod);
 void bind_events(nb::module_& mod);
 void bind_log(nb::module_& mod);
+void bind_node(nb::module_& mod);
 
 } // namespace jarvis::py
