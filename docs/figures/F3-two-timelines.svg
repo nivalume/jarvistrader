@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 440" width="1000" height="440" role="img" aria-label="双时间线：venue 在 ts_event 动作，策略在 ts_init 观察，命令带 L_out 延迟到达时簿已再次变化，回执再带 L_in 返回；所有延迟来自以身份为键的 counter-based RNG" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1000" height="440" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- lanes -->
+  <text x="30" y="106" font-size="12">Venue</text>
+  <text x="30" y="122" font-size="10" fill="#57606a">（撮合在 ts_event）</text>
+  <line x1="130" y1="110" x2="960" y2="110" stroke="#57606a"/>
+  <text x="30" y="296" font-size="12">Strategy</text>
+  <text x="30" y="312" font-size="10" fill="#57606a">（观察在 ts_init）</text>
+  <line x1="130" y1="300" x2="960" y2="300" stroke="#57606a"/>
+
+  <!-- time axis -->
+  <line x1="130" y1="380" x2="960" y2="380" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="965" y="384" font-size="11">时间</text>
+  <text x="130" y="400" text-anchor="middle" font-size="10" fill="#57606a">t0</text>
+  <text x="300" y="400" text-anchor="middle" font-size="10" fill="#57606a">t1</text>
+  <text x="400" y="400" text-anchor="middle" font-size="10" fill="#57606a">t2</text>
+  <text x="500" y="400" text-anchor="middle" font-size="10" fill="#57606a">t1 + L_out</text>
+  <text x="700" y="400" text-anchor="middle" font-size="10" fill="#57606a">t1 + L_out + L_in</text>
+  <line x1="130" y1="375" x2="130" y2="385" stroke="#57606a"/>
+  <line x1="300" y1="375" x2="300" y2="385" stroke="#57606a"/>
+  <line x1="400" y1="375" x2="400" y2="385" stroke="#57606a"/>
+  <line x1="500" y1="375" x2="500" y2="385" stroke="#57606a"/>
+  <line x1="700" y1="375" x2="700" y2="385" stroke="#57606a"/>
+
+  <!-- U1: venue book update at t0 -->
+  <circle cx="130" cy="110" r="5" fill="#57606a"/>
+  <text x="130" y="78" text-anchor="middle" font-size="11">U1：簿更新</text>
+  <text x="130" y="94" text-anchor="middle" font-size="10" fill="#57606a">ts_event = t0</text>
+  <line x1="134" y1="114" x2="236" y2="296" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="178" y="215" text-anchor="end" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">L_feed(seed, seq)</text>
+  <circle cx="240" cy="300" r="5" fill="#57606a"/>
+  <text x="240" y="322" text-anchor="middle" font-size="11">on_quote(U1)</text>
+  <text x="240" y="336" text-anchor="middle" font-size="10" fill="#57606a">ts_init = t0 + L_feed</text>
+
+  <!-- SubmitOrder at t1 -->
+  <circle cx="300" cy="300" r="5" fill="#57606a"/>
+  <text x="300" y="352" text-anchor="middle" font-size="11">SubmitOrder(cid)</text>
+  <text x="300" y="366" text-anchor="middle" font-size="10" fill="#57606a">按 U1 的簿定价</text>
+  <line x1="304" y1="296" x2="496" y2="114" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="378" y="215" text-anchor="end" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">L_out(seed, cid, hop=1)</text>
+
+  <!-- U2: venue book update at t2, before the order arrives (accent) -->
+  <circle cx="400" cy="110" r="5" fill="#0969da"/>
+  <text x="400" y="78" text-anchor="middle" font-size="11" fill="#0969da">U2：簿再次变化</text>
+  <text x="400" y="94" text-anchor="middle" font-size="10" fill="#0969da">发生在命令到达之前</text>
+  <line x1="404" y1="114" x2="536" y2="296" stroke="#0969da" stroke-dasharray="4 3" marker-end="url(#arrow-accent)"/>
+  <text x="514" y="250" font-size="10" fill="#0969da" font-family="ui-monospace, Menlo, Consolas, monospace">L_feed(seed, seq′)</text>
+  <circle cx="540" cy="300" r="5" fill="#0969da"/>
+  <text x="540" y="322" text-anchor="middle" font-size="11" fill="#0969da">on_quote(U2)</text>
+  <text x="540" y="336" text-anchor="middle" font-size="10" fill="#0969da">策略此时才知道簿已变</text>
+
+  <!-- order arrival and match at t1+L_out -->
+  <circle cx="500" cy="110" r="5" fill="#57606a"/>
+  <text x="500" y="52" text-anchor="middle" font-size="11">命令到达：在 U2 之后的簿上撮合</text>
+  <text x="500" y="66" text-anchor="middle" font-size="10" fill="#57606a">post-only 会吃单 → -5022 拒单；否则按队列位置挂单</text>
+  <line x1="504" y1="114" x2="696" y2="296" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="576" y="170" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">L_in(seed, cid, hop=2)</text>
+  <circle cx="700" cy="300" r="5" fill="#57606a"/>
+  <text x="700" y="322" text-anchor="middle" font-size="11">on_order_event(ack / fill / expired)</text>
+
+  <!-- side box -->
+  <rect x="740" y="130" width="220" height="130" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="850" y="150" text-anchor="middle" font-size="11">延迟不是随机调用序列的产物</text>
+  <text x="850" y="172" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">L = f(seed, identity, hop)</text>
+  <text x="850" y="192" text-anchor="middle" font-size="10" fill="#57606a">splitmix64 / Philox，键为身份</text>
+  <text x="850" y="214" text-anchor="middle" font-size="10" fill="#57606a">三类延迟事件全部进入同一个</text>
+  <text x="850" y="230" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">(ts, source_id, seq)</text>
+  <text x="850" y="246" text-anchor="middle" font-size="10" fill="#57606a">优先队列，全序不变</text>
+
+  <text x="30" y="424" font-size="11" fill="#57606a">backtest：三类延迟由 ReplayClock 虚拟推进；sandbox：同一份撮合代码，延迟改用真实定时器，其触发是记录事件。</text>
+</svg>

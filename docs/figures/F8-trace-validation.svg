@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 460" width="1080" height="460" role="img" aria-label="双向 trace validation：同一份 TLA+ 规约既由 TLC 生成行为去驱动 C++ step 做一致性比较，也用来检查从真实事件日志导出的 trace；改动文件经 MAP.toml 决定运行哪些规约" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="f8-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1080" height="460" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- lane labels -->
+  <text x="400" y="54" font-size="11" fill="#57606a">正向：规约生成行为，驱动实现</text>
+  <text x="400" y="304" font-size="11" fill="#57606a">反向：实现产生日志，由规约检查</text>
+
+  <!-- selector -->
+  <rect x="20" y="180" width="160" height="64" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="100" y="202" text-anchor="middle" font-size="11">改动文件</text>
+  <text x="100" y="218" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">select.py</text>
+  <text x="100" y="234" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">specs/tla/MAP.toml</text>
+  <line x1="180" y1="212" x2="218" y2="212" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <text x="199" y="204" text-anchor="middle" font-size="10" fill="#57606a">受影响</text>
+
+  <!-- spec (accent) -->
+  <rect x="220" y="180" width="150" height="64" rx="4" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
+  <text x="295" y="204" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">X.tla</text>
+  <text x="295" y="222" text-anchor="middle" font-size="10" fill="#0969da">唯一真相来源</text>
+  <text x="295" y="236" text-anchor="middle" font-size="10" fill="#57606a">C++ 转移表由它核对</text>
+
+  <!-- forward lane -->
+  <path d="M295,180 L295,100 L398,100" fill="none" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <text x="303" y="140" font-size="10" fill="#57606a">生成</text>
+  <rect x="400" y="72" width="140" height="56" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="470" y="96" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">TLC</text>
+  <text x="470" y="114" text-anchor="middle" font-size="10" fill="#57606a">-simulate / -dump</text>
+  <line x1="540" y1="100" x2="578" y2="100" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="580" y="72" width="140" height="56" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="650" y="96" text-anchor="middle" font-size="11">行为 JSON</text>
+  <text x="650" y="114" text-anchor="middle" font-size="10" fill="#57606a">动作序列 + 状态</text>
+  <line x1="720" y1="100" x2="758" y2="100" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="760" y="72" width="140" height="56" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="830" y="96" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">trace_driver</text>
+  <text x="830" y="114" text-anchor="middle" font-size="10" fill="#57606a">specs/map/*_actions.hpp</text>
+  <line x1="900" y1="100" x2="938" y2="100" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="940" y="72" width="120" height="56" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="1000" y="96" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Engine.step</text>
+  <text x="1000" y="114" text-anchor="middle" font-size="10" fill="#57606a">逐步投影比较</text>
+  <text x="1000" y="152" text-anchor="middle" font-size="10">偏差 → 失败</text>
+  <text x="1000" y="166" text-anchor="middle" font-size="10" fill="#57606a">报告 seq 与动作</text>
+
+  <!-- backward lane -->
+  <rect x="400" y="322" width="140" height="56" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="470" y="346" text-anchor="middle" font-size="11">事件日志（WAL）</text>
+  <text x="470" y="364" text-anchor="middle" font-size="10" fill="#57606a">golden · soak · testnet</text>
+  <line x1="540" y1="350" x2="578" y2="350" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="580" y="322" width="140" height="56" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="650" y="346" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">trace-export</text>
+  <text x="650" y="364" text-anchor="middle" font-size="10" fill="#57606a">按规约变量投影</text>
+  <line x1="720" y1="350" x2="758" y2="350" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="760" y="322" width="140" height="56" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="830" y="346" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Trace.tla</text>
+  <text x="830" y="364" text-anchor="middle" font-size="10" fill="#57606a">日志即一条行为</text>
+  <line x1="900" y1="350" x2="938" y2="350" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <rect x="940" y="322" width="120" height="56" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="1000" y="346" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">TLC</text>
+  <text x="1000" y="364" text-anchor="middle" font-size="10" fill="#57606a">精化 + 不变量</text>
+  <text x="1000" y="400" text-anchor="middle" font-size="10">非法转移 → 失败</text>
+
+  <path d="M295,244 L295,420 L1000,420 L1000,380" fill="none" stroke="#57606a" marker-end="url(#f8-arrow)"/>
+  <text x="640" y="414" text-anchor="middle" font-size="10" fill="#57606a">作为被精化的规约</text>
+
+  <text x="20" y="448" font-size="11" fill="#57606a">PR：只跑受影响规约，正向 + golden 日志反向。nightly：全部规约 + 最近一次 soak 日志反向。核心路径的改动必须过这一层。</text>
+</svg>

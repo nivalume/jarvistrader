@@ -39,3 +39,20 @@ kernel state exists; the current CI does not report an empty trace as proof of d
 
 The project supports GCC, Clang, and AppleClang on Linux and macOS. MSVC is outside the supported
 platform set because `__int128` is a deliberate kernel requirement.
+
+## Amendments
+
+The following amendments are recorded in [docs/architecture.md](../architecture.md), section 20.1.
+The rest of this ADR stands unchanged.
+
+- **Decision 1 (numeric representation), amended by D01 on 2026-09-26.** Prices, quantities, and
+  money use the nautilus_trader fixed-point representation: `Price { raw: int64, precision: uint8 }`,
+  `Quantity { raw: uint64, precision: uint8 }`, `Money { raw: int64, currency }`, with `raw` always on
+  the global 1e9 scale. Kernel state remains all-integer and floating point remains forbidden.
+  Products are computed through `__int128` intermediates and truncated toward zero. The order book
+  and matching engine may still normalize prices to per-instrument tick indices internally.
+- **Decision 2 (event ordering), amended by D02 on 2026-09-26.** The strict total-order key becomes
+  `(ts, source_id, seq)`, generalizing `row` to `seq`. In backtest, `seq` is the row within a
+  source. In sandbox and live, the total order is the core thread's ingestion order: the core assigns
+  `seq` when it dequeues an event and records the event in the log. Live determinism therefore means
+  that replaying the recorded ingestion log reproduces the outputs byte for byte.

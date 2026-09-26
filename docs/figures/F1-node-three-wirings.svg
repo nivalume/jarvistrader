@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 610" width="980" height="610" role="img" aria-label="一个 Node：策略、Context 与 Engine.step 在三个环境中完全相同，只有 EventSource、venue/CommandSink、Clock 三条边随 env 切换" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="f1-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="f1-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="610" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- legend -->
+  <rect x="20" y="20" width="14" height="14" fill="#ffffff" stroke="#57606a"/>
+  <text x="40" y="31" font-size="11">kernel：jarvis::kernel，header-only，freestanding，无异常</text>
+  <rect x="20" y="42" width="14" height="14" fill="#e6eaef" stroke="#57606a"/>
+  <text x="40" y="53" font-size="11">shell：jarvis_shell / _core，内部可用异常，边界翻译为 Status</text>
+
+  <!-- Node core (accent: the part that never changes) -->
+  <rect x="340" y="120" width="300" height="320" rx="6" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
+  <text x="352" y="140" font-size="11" fill="#0969da">Node：三个环境中逐字节相同</text>
+
+  <rect x="360" y="156" width="260" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="490" y="174" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Strategy（Python 或 C++）</text>
+  <text x="490" y="190" text-anchor="middle" font-size="11" fill="#57606a">on_trade · on_quote · on_order_event</text>
+  <line x1="490" y1="200" x2="490" y2="224" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <text x="498" y="216" font-size="11" fill="#57606a">只经 Context 读写</text>
+
+  <rect x="360" y="226" width="260" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="490" y="244" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Context</text>
+  <text x="490" y="260" text-anchor="middle" font-size="11" fill="#57606a">没有任何环境专属成员</text>
+  <line x1="490" y1="270" x2="490" y2="294" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+
+  <rect x="360" y="296" width="260" height="76" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="490" y="316" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Engine.step(S, e) → (S′, out[])</text>
+  <text x="490" y="336" text-anchor="middle" font-size="11" fill="#57606a">Router · Gate A/B · ExecAlgorithm</text>
+  <text x="490" y="352" text-anchor="middle" font-size="11" fill="#57606a">OMS · Portfolio · 纯函数</text>
+
+  <text x="352" y="400" font-size="11" fill="#0969da">Event in</text>
+  <text x="628" y="400" text-anchor="end" font-size="11" fill="#0969da">Command out</text>
+  <text x="490" y="428" text-anchor="middle" font-size="11" fill="#0969da">Clock in</text>
+  <circle cx="340" cy="334" r="5" fill="#0969da"/>
+  <circle cx="640" cy="334" r="5" fill="#0969da"/>
+  <circle cx="490" cy="440" r="5" fill="#0969da"/>
+
+  <!-- EventSource options (left) -->
+  <text x="30" y="196" font-size="11" fill="#57606a">EventSource（按 env 选一）</text>
+  <text x="30" y="212" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">→ Event(ts, source_id, seq)</text>
+  <rect x="30" y="228" width="210" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="135" y="246" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">ReplaySource</text>
+  <text x="135" y="262" text-anchor="middle" font-size="11" fill="#57606a">backtest：解码事件日志目录</text>
+  <rect x="30" y="312" width="210" height="44" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="135" y="330" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">RingSource</text>
+  <text x="135" y="346" text-anchor="middle" font-size="11" fill="#57606a">sandbox：实盘行情 IO 线程</text>
+  <rect x="30" y="396" width="210" height="44" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="135" y="414" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">RingSource</text>
+  <text x="135" y="430" text-anchor="middle" font-size="11" fill="#57606a">live：行情 + 用户流 + admin</text>
+  <line x1="240" y1="250" x2="270" y2="250" stroke="#57606a"/>
+  <line x1="240" y1="334" x2="270" y2="334" stroke="#57606a"/>
+  <line x1="240" y1="418" x2="270" y2="418" stroke="#57606a"/>
+  <line x1="270" y1="250" x2="270" y2="418" stroke="#57606a"/>
+  <line x1="270" y1="334" x2="333" y2="334" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <text x="302" y="326" text-anchor="middle" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">Event</text>
+
+  <!-- CommandSink options (right) -->
+  <text x="740" y="196" font-size="11" fill="#57606a">venue / CommandSink（按 env 选一）</text>
+  <text x="740" y="212" font-size="11" fill="#57606a">回执经 EventSource 回到 Event in</text>
+  <rect x="740" y="228" width="210" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="845" y="246" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">SimulatedExchange</text>
+  <text x="845" y="262" text-anchor="middle" font-size="11" fill="#57606a">backtest：in-loop，虚拟延迟</text>
+  <rect x="740" y="312" width="210" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="845" y="330" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">SimulatedExchange</text>
+  <text x="845" y="346" text-anchor="middle" font-size="11" fill="#57606a">sandbox：延迟用真实定时器</text>
+  <rect x="740" y="396" width="210" height="44" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="845" y="414" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">SenderSink → Binance</text>
+  <text x="845" y="430" text-anchor="middle" font-size="11" fill="#57606a">live：WS API 主通道，REST 兜底</text>
+  <line x1="646" y1="334" x2="710" y2="334" stroke="#57606a"/>
+  <line x1="710" y1="250" x2="710" y2="418" stroke="#57606a"/>
+  <line x1="710" y1="250" x2="738" y2="250" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <line x1="710" y1="334" x2="738" y2="334" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <line x1="710" y1="418" x2="738" y2="418" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <text x="678" y="326" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">Order</text>
+  <text x="678" y="350" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">Command</text>
+
+  <!-- Clock options (bottom) -->
+  <line x1="490" y1="490" x2="490" y2="447" stroke="#57606a" marker-end="url(#f1-arrow)"/>
+  <text x="480" y="470" text-anchor="end" font-size="11" fill="#57606a">Clock（按 env 选一）</text>
+  <text x="500" y="470" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">now() · schedule(ts, key)</text>
+  <line x1="250" y1="490" x2="730" y2="490" stroke="#57606a"/>
+  <line x1="250" y1="490" x2="250" y2="510" stroke="#57606a"/>
+  <line x1="490" y1="490" x2="490" y2="510" stroke="#57606a"/>
+  <line x1="730" y1="490" x2="730" y2="510" stroke="#57606a"/>
+  <rect x="150" y="510" width="200" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="250" y="528" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">ReplayClock</text>
+  <text x="250" y="544" text-anchor="middle" font-size="11" fill="#57606a">backtest：推进到事件 ts</text>
+  <rect x="390" y="510" width="200" height="44" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="490" y="528" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">MonotonicClock</text>
+  <text x="490" y="544" text-anchor="middle" font-size="11" fill="#57606a">sandbox：单调钟 + 启动偏移</text>
+  <rect x="630" y="510" width="200" height="44" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="730" y="528" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">MonotonicClock</text>
+  <text x="730" y="544" text-anchor="middle" font-size="11" fill="#57606a">live：同 sandbox</text>
+
+  <text x="20" y="586" font-size="11" fill="#57606a">定时器触发、批次边界、生命周期转移都是记录事件。testnet 不是 sandbox：testnet = live + endpoint="testnet"。</text>
+</svg>

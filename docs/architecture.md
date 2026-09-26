@@ -1,0 +1,1546 @@
+# jarvistrader 架构设计
+
+- 状态：Accepted（第 13 节网络栈中的 io_uring 路径与第 20 节标为 Proposed 的条目除外）
+- 日期：2026-09-26
+- 范围：`jarvis` 的全部模块，从确定性内核到 Binance 实盘适配器、Python 宿主与测试门禁
+- 领域模型对齐目标：nautilus_trader `develop` 分支，提交 `cd417b80`（v2.0.0rc6），以 Rust `crates/model` 为准
+- 实现计划：[plan.md](plan.md)
+
+本文是 jarvis 的唯一架构文档。它记录已经做出的决策、决策背后的机制，以及尚未决定的问题和推荐默认值。代码级约束仍以 [ADR 0001](adr/0001-deterministic-kernel.md) 和 [C++ 子集规范](cpp-subset.md) 为准，本文第 20 节列出对 ADR 0001 的两处修订。
+
+## 目录
+
+1. [目标、非目标与 v1.0](#1-目标非目标与-v10)
+2. [设计原则与 nautilus 的关系](#2-设计原则与-nautilus-的关系)
+3. [系统总览](#3-系统总览)
+4. [Node：一个文件，三个环境](#4-node一个文件三个环境)
+5. [事件模型与时间](#5-事件模型与时间)
+6. [领域模型：nautilus 兼容契约](#6-领域模型nautilus-兼容契约)
+7. [运行时与策略宿主](#7-运行时与策略宿主)
+8. [订单生命周期与 OMS](#8-订单生命周期与-oms)
+9. [命令链、两道风控闸与策略 API](#9-命令链两道风控闸与策略-api)
+10. [风控引擎](#10-风控引擎)
+11. [成本模型、Portfolio、组合构建与执行算法](#11-成本模型portfolio组合构建与执行算法)
+12. [回测撮合器与 sandbox](#12-回测撮合器与-sandbox)
+13. [网络栈与 Codec](#13-网络栈与-codec)
+14. [Binance USDⓈ-M 适配器](#14-binance-usd-m-适配器)
+15. [Reconciliation](#15-reconciliation)
+16. [数据与持久化](#16-数据与持久化)
+17. [测试 harness 与变更门禁](#17-测试-harness-与变更门禁)
+18. [形式化验证](#18-形式化验证)
+19. [运维与分片](#19-运维与分片)
+20. [决策记录与开放问题](#20-决策记录与开放问题)
+21. [附录](#21-附录)
+
+---
+
+## 1. 目标、非目标与 v1.0
+
+### 目标
+
+- 一个 C++20 + Python 的量化交易系统，先做加密资产，先接 Binance。
+- 正确性优先。订单状态机、对账协议、风控状态、撮合不变量、订单簿同步这五个核心对象都有 TLA+ 规约，并用 trace validation 与 C++ 实现互相校验。
+- 确定性。同一份输入日志在任何受支持的编译器、优化级别和平台上产生逐字节相同的输出。
+- 生产级。实盘节点具备对账、风控、崩溃恢复、可观测性、优雅关停和 venue 侧死人开关。
+- 系统在不触碰硬件（不做 kernel bypass、FPGA）的前提下，能承载 HFT 与做市类策略。系统提供能力，不内置这类策略。
+- Python 是主要的策略语言，回测和实盘都是。对延迟最敏感的特定策略用 C++ 写，两者使用同一套回调 API。
+- 同一个策略文件可以在回测、sandbox、实盘三个环境运行，只换配置。
+
+### 非目标
+
+- 不内置交易策略。系统内置的是执行算法与风控规则。示例策略放在 `examples/`，只供测试与 soak 使用，不进 wheel。
+- 单次回测内部不做多线程，也不做乐观并行。
+- 内核不写 SIMD intrinsics。
+- 不做数据下载服务与可视化。系统只提供把已有归档（nautilus Parquet、data.binance.vision）转换成事件日志的转换器。
+- v1.0 不做条件单（STOP、TAKE_PROFIT、TRAILING）、组合保证金、期权。
+
+### v1.0 的定义
+
+v1.0 的完成标准是"同一个策略文件在三个环境运行，且下列保证全部成立"，而不是"交付某个做市策略"。
+
+| 维度 | v1.0 范围 |
+| --- | --- |
+| Venue | Binance USDⓈ-M 永续（one-way 模式）。Spot 是 v1.x 的第二个 venue |
+| 环境 | `backtest`、`sandbox`（实盘行情 + 模拟撮合）、`live`（含 testnet） |
+| 行情数据 | `TradeTick`（aggTrade）、`QuoteTick`（bookTicker）、`OrderBookDeltas`（depth@100ms 快照同步）、`Bar`（kline 与内核聚合）、`MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate` |
+| Trade tick 全链路 | aggTrade 解码 → `TradeTick` → 策略 `on_trade` → 录制 → 回放 → 撮合器的队列位置成交模型消费成交流 |
+| 订单 | `MARKET`、`LIMIT` 配 `GTC / IOC / FOK / GTX`、`reduceOnly`、自成交保护（STP） |
+| 策略宿主 | Python 启动的混合节点（Python 策略与注册的 C++ 策略共存）、纯 C++ 节点 |
+| 内置执行算法 | `PeggedQuote`、`PassiveThenAggressive` |
+| 保证 | 确定性回放、对账、两道风控闸、KillSwitch、`countdownCancelAll`、WAL 与恢复、指标、健康检查、优雅关停 |
+| 形式化验证 | 五个规约全部进入 CI |
+| 验收 | `examples/` 中的 Python 与 C++ 示例在 testnet 连续运行 72 小时，穿越强制断线与 listenKey 过期；录制日志回放逐字节一致 |
+
+---
+
+## 2. 设计原则与 nautilus 的关系
+
+### 原则
+
+1. **确定性是产品属性。** 内核是纯函数 `step(S, e) → (S′, out[])`。它不读墙钟、不读全局随机状态、不依赖指针值和无序容器的迭代顺序。所有非确定性来源（网络到达顺序、定时器触发时刻、Python 回调超时）都在内核之外被转成带序号的事件记录下来。
+2. **规约先于实现。** 五个核心对象先写 TLA+ 规约，C++ 转移表由规约核对。改动核心路径必须重新通过形式化验证。
+3. **单写者。** 引擎状态只有 core 线程写。其他线程只通过 SPSC 环与它交换事件和命令，不存在锁。
+4. **同一代码，三个环境。** 回测、sandbox、实盘运行同一个 `Engine`，只替换事件源、venue 与时钟三条边。
+5. **Python 优先，热路径可下沉。** Python 是一等公民。系统提供订阅节流、内核内特征计算和批量回调，让 Python 策略远离逐 tick 的热循环；仍不够快的策略用 C++ 写，接口不变。
+6. **生产级是默认值。** 对账、限速、死人开关、WAL、指标不是可选插件。
+
+### 与 nautilus_trader 的关系
+
+jarvis 只在领域模型类型上与 nautilus 对齐，引擎和算法是自有设计。
+
+| 对齐（兼容契约，见第 6 节） | 自有设计（见附录 B 的逐项对照） |
+| --- | --- |
+| 标识符及其字符串格式 | 事件路由：`Router` 与订阅矩阵，不用字符串 topic 的消息总线 |
+| `Price`、`Quantity`、`Money`、`Currency` 的定点表示 | 状态存储：`EngineState` 竞技场，不设第二份缓存 |
+| 行情数据类型与字段 | 生命周期：每个 Node 一个状态机，组件没有各自的生命周期 |
+| Instrument 类型与字段 | 节点装配：`Node<StrategySet>` 模板与静态接线 |
+| 枚举的整数值与字符串 | 风控：两道闸与共享的预留敞口 |
+| 订单事件、仓位事件、账户事件 | 执行算法：内核内的确定性算法，受令牌预算约束 |
+| `OrderStatus` 的状态与转移语义 | 对账：以 WAL 事件表达，可被规约反向检查 |
+| Parquet 目录布局与 Arrow schema | 配置、`ClientOrderId` 编码、撮合与成交模型、网络栈 |
+
+jarvis 自己的组件不使用 `Actor`、`MessageBus`、`Cache`、`Trader`、`Kernel` 这些名字，避免读者误以为机制相同。
+
+---
+
+## 3. 系统总览
+
+![F1 一个 Node，三种接线](figures/F1-node-three-wirings.svg)
+
+*F1：策略只通过 `Context` 与引擎交互。三个环境之间只有事件源、venue 与时钟三条边不同，中间的 Node 逐字节相同。*
+
+### 内核与外壳
+
+- **kernel**（`jarvis::kernel`）：header-only，经 `jarvis_kernel_freestanding` 以 `-fno-exceptions -fno-rtti` 编译守门。包含 `core`、`model`、`data`、`cost`、`portfolio`、`risk`、`execution`、`strategy`、`engine`、`backtest`。错误用 `enum class Status` 加输出参数表达。
+- **shell**（`jarvis_shell` 静态库与 `_core` 绑定模块）：`network`、`adapter/binance`、`live`、`python`。内部可以使用异常与第三方库，跨入内核前翻译成 `Status`。
+
+### 分层与依赖规则
+
+依赖只能从上往下。`tools/check-layering.py` 在 CI 中检查 include 关系；freestanding 目标只能拦住 `throw`，拦不住分层违规，所以两者都需要。
+
+| 层 | 目录 | 归属 | 允许 include |
+| --- | --- | --- | --- |
+| core | `jarvis/core` | kernel | 标准库子集 |
+| model | `jarvis/model` | kernel | core |
+| data、cost | `jarvis/data`、`jarvis/cost` | kernel | core、model |
+| portfolio、risk、execution | `jarvis/portfolio`、`jarvis/risk`、`jarvis/execution` | kernel | 以上各层 |
+| strategy | `jarvis/strategy` | kernel | 以上各层，不得 include backtest、live、adapter |
+| engine | `jarvis/engine` | kernel | 以上各层 |
+| backtest | `jarvis/backtest` | kernel | 以上各层 |
+| network | `jarvis/network` | shell | core；Asio、OpenSSL、picohttpparser |
+| adapter | `jarvis/adapter/binance` | shell | network 与全部 kernel 层；simdjson、SBE 生成代码 |
+| live | `jarvis/live` | shell | adapter 与全部 kernel 层 |
+| python | `python/src`、`python/jarvis` | shell | 全部；nanobind |
+| examples | `examples/py`、`examples/cpp` | 使用方 | 只允许公开 API，不得 include live、backtest、adapter 内部头 |
+
+### 目录结构
+
+```
+jarvis/
+  core/         Status, FixedVector, Arena/Handle, Rng, UnixNanos, EventKey, PriorityQueue, Clock
+  model/        identifiers, types (Price/Quantity/Money/Currency), data, instruments, enums, events
+  data/         Router, SubscriptionMatrix, book/ (L1/L2), bars/, features/ (FeatureGraph)
+  cost/         FeeModel, SlippageModel, ImpactModel, LatencyModel
+  portfolio/    Portfolio, MarginModel, attribution ledger
+  risk/         RiskRule catalog, Gate A/B, TradingState, TokenBucket, monitors
+  execution/    OrderCore, order_fsm, OMS, ExecutionEngine, algorithms/, reconcile/
+  strategy/     Strategy concept, Context, StrategySet (Static/Dynamic), registry
+  engine/       Engine<StrategySet>, EventSource/CommandSink concepts, EngineState
+  backtest/     ReplaySource, ReplayClock, matching/ (SimulatedExchange, fill models)
+  network/      Transport, WsClient (RFC 6455), HttpClient, Signer
+  adapter/binance/  codec/ (json, sbe/gen), streams, user_stream, ws_api, rest, instruments
+  live/         Node wiring, rings, threads, persist, telemetry, admin, health
+python/
+  src/          nanobind bindings, PyStrategyHost
+  jarvis/       Strategy, Node, main(), NodeConfig, determinism guard, converters
+examples/       py/ 与 cpp/ 示例策略（仅测试与 soak 使用）
+specs/
+  tla/          OrderLifecycle, Reconciliation, TradingState, Matching, DepthSync, MAP.toml
+  map/          规约动作 → 内核事件的映射头文件
+  sbe/binance/  钉版本的 SBE XML schema
+tests/          cpp/、golden/、fuzz/
+benchmarks/     hot/（门禁）、report/（只报告）、thresholds.toml
+tools/          check-layering.py, bench_compare.py, tla/, core-paths.txt
+```
+
+---
+
+## 4. Node：一个文件，三个环境
+
+Node 是组合根。它拥有一个 `Engine`、一份事件日志，以及由 `env` 在运行时选定的一套接线。策略能接触到的一切在三个环境中完全相同，只有接线不同。
+
+### 4.1 环境接线
+
+| env | EventSource | venue / CommandSink | Clock | 对账来源 | 录制 |
+| --- | --- | --- | --- | --- | --- |
+| `backtest` | `ReplaySource`，读取解码后的事件日志目录 | `SimulatedExchange`，in-loop，虚拟延迟 | `ReplayClock`，推进到下一事件的 `ts` | `SimulatedExchange` 的快照，瞬时完成 | 可选 |
+| `sandbox` | `RingSource`，实盘行情 IO 线程 | `SimulatedExchange`，延迟用真实定时器，触发是记录事件 | `MonotonicClock` | 同上 | 解码日志 + 原始帧 |
+| `live` | `RingSource`，行情、用户流、回执、admin | `SenderSink` → `BinanceClient`，WS API 为主，REST 兜底 | `MonotonicClock` | REST 快照协议（第 15 节） | 解码日志 + 原始帧 |
+
+testnet 不是 sandbox。testnet 是 `env = "live"` 加上 `endpoint = "testnet"`。sandbox 的意义是用真实行情和真实时钟检验策略与撮合模型，不向任何交易所发单。
+
+### 4.2 NodeConfig
+
+配置是类型化 TOML，解析为 C++ 结构体。未知键直接报错。命令行的 `--env` 与 `--set a.b=c` 覆盖之后的最终配置被规范化并计算 hash，hash 写入事件日志头，回放时据此确认配置一致。
+
+```toml
+[node]
+id = "mm01"
+env = "backtest"                  # backtest | sandbox | live
+seed = 42
+strict_determinism = true
+capacity = { orders = 4096, instruments = 64, batch = 1024, timers = 256, strategies = 8 }
+
+[data]                            # backtest 使用
+catalog = "runs/2026-09/"
+range = { start = "2026-09-01T00:00:00Z", end = "2026-09-02T00:00:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker", "depth@100ms", "markPrice@1s"]
+codec = "json"                    # json | sbe（venue 支持时）
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+endpoint = "prod"                 # prod | testnet
+credentials = "env:BINANCE_USDM_KEY"   # 只存引用，不存密钥
+account_mode = "one_way"          # one_way | hedge，与交易所不一致则拒绝启动
+oms = "netting"                   # 必须与 account_mode 匹配
+
+[venues.sim]                      # backtest 与 sandbox 使用
+fill_model = "queue_position"     # queue_position | top_of_book
+latency = { feed_ns = 800000, out_ns = 1500000, in_ns = 1500000, jitter_ns = 300000 }
+fee = { schedule = "binance_usdm_vip0" }
+
+[[strategies]]
+id = "mm-001"
+impl = "py:MyMM"                  # py:<类名> | cpp:<注册名>
+instruments = ["BTCUSDT-PERP.BINANCE"]
+params = { spread_bps = 2, size = "0.010" }
+
+[risk]
+initial_state = "active"
+max_order_notional = "50000 USDT"
+daily_loss_limit = "2000 USDT"
+countdown_cancel_all_ms = 120000
+on_strategy_error = "halt_strategy"    # halt_strategy | halt_node | ignore
+
+[python]
+callback_budget_us = 2000
+overrun_limit = 50
+
+[persistence]
+mode = "async"                    # none | async | barrier
+dir = "runs/{node_id}/{run_id}"
+snapshot_every = 1000000
+raw_frames = true                 # true | false | sampled
+
+[telemetry]
+prometheus = "0.0.0.0:9100"
+jsonl = true
+
+[admin]
+socket = "unix:///run/jarvis/{node_id}.sock"
+```
+
+### 4.3 组成
+
+```cpp
+template <StrategySet SS>
+class Node {
+    NodeConfig  cfg_;
+    EngineState state_;
+    Engine<SS>  engine_;
+    Recorder    recorder_;
+    Telemetry   telemetry_;
+    Admin       admin_;
+    std::variant<BacktestWiring, SandboxWiring, LiveWiring> wiring_;
+public:
+    Status wire();                       // Init → Wired：分配竞技场，构造 source/sink，不做 I/O
+    Status run();                        // 阻塞；开头 visit 一次 wiring_，之后执行单态循环
+    Status request_stop(StopMode mode);  // 可由信号或 admin 线程调用，只入队一个事件
+};
+```
+
+`run()` 只在开始时对 `wiring_` 做一次 `std::visit`，随后进入该接线类型的静态循环。`env` 是运行时选择，但热路径上没有虚调用。
+
+### 4.4 生命周期状态机
+
+`Init → Wired → Starting → Syncing → Running ⇄ Degraded → Stopping → Stopped`，另有终态 `Faulted`。
+
+| 状态 | backtest | sandbox / live | 由谁推动 |
+| --- | --- | --- | --- |
+| `Init → Wired` | 解析配置并计算 hash，分配竞技场，打开数据目录 | 同左，并构造 IO 线程（尚未启动） | 主线程，在 `run()` 之前 |
+| `Starting` | 打开日志，写日志头 | 连接行情、用户流、WS API，启动 IO 线程；TradingState 置为 `Halted` | core 线程 |
+| `Syncing` | 对 `SimulatedExchange` 跑同一套对账代码，瞬时完成 | 完整对账协议（第 15 节）；完成后 TradingState 置为配置初值 | core 线程 |
+| `Running` | 消费到 `ReplaySource` 结束 | 消费入站环；readiness = 已同步 ∧ 行情新鲜 ∧ 用户流心跳正常 | core 线程 |
+| `Degraded` | 不适用 | readiness 为假（行情陈旧、断线重连中）；按策略把 TradingState 降为 `Reducing`；重连成功后回到 `Syncing` | core 线程，依据 `Health*` 事件 |
+| `Stopping` | 写最终快照与报告 | 默认 `cancel_all_then_exit`：撤单、确认、排空出站环、关闭连接 | core 线程，依据 EOF 或 `Shutdown` 事件 |
+| `Faulted` | 保留日志，非零退出 | KillSwitch（尽力撤全单），非零退出 | core 线程，依据 `step` 返回错误、容量耗尽、日志写失败、Python 致命错误 |
+
+- 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它。
+- 只有 core 线程推动状态。IO、admin、信号处理只入队事件。
+- 组件没有自己的生命周期，它们是 `EngineState` 中的数据。策略收到 `on_start` / `on_stop`，这两个回调本身也是记录事件。
+- `TradingState`（`Active / Reducing / Halted`）与 Node 生命周期正交，由第 10 节描述。
+
+### 4.5 单文件入口
+
+Python：
+
+```python
+# my_mm.py：完整的可部署单元
+import jarvis
+from jarvis import Strategy, Cadence
+
+class MyMM(Strategy):
+    params = {"spread_bps": 2, "size": "0.010"}
+
+    def on_start(self, ctx):
+        iid = "BTCUSDT-PERP.BINANCE"
+        ctx.subscribe_trades(iid)
+        ctx.subscribe_quotes(iid, cadence=Cadence.CONFLATED)
+        self.mp = ctx.feature(jarvis.features.Microprice(iid), cadence=Cadence.sampled_ms(100))
+
+    def on_trade(self, ctx, t): ...
+    def on_quote(self, ctx, q): ...
+    def on_feature(self, ctx, fid, value, ts): ...
+    def on_order_event(self, ctx, ev): ...
+    def on_timer(self, ctx, key, ts): ...
+    def on_stop(self, ctx): ...
+
+if __name__ == "__main__":
+    jarvis.main(MyMM)
+```
+
+```sh
+python my_mm.py --env backtest --config node.toml
+python my_mm.py --env sandbox  --config node.toml
+python my_mm.py --env live     --config node.toml --set venues.0.endpoint=testnet
+```
+
+`jarvis.main(cls)` 等价于 `Node(NodeConfig.load(argv)).add_strategy(cls, ...).run()`。显式写法 `node.add_native_strategy("PeggedMM", ...)` 可以把注册过的 C++ 策略加入同一个 Python 启动的节点。
+
+C++：
+
+```cpp
+struct MyMM {                                     // 满足 jarvis::Strategy concept，无基类
+    struct Params { std::int32_t spread_bps; Quantity size; };
+    Status on_start(Context& ctx);
+    Status on_trade(Context& ctx, const TradeTick& t);
+    Status on_quote(Context& ctx, const QuoteTick& q);
+    Status on_order_event(Context& ctx, const OrderEvent& ev);
+    Status on_timer(Context& ctx, TimerKey key, UnixNanos ts);
+    Status on_stop(Context& ctx);
+};
+static_assert(jarvis::Strategy<MyMM>);
+
+int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); }   // 同一套命令行参数
+```
+
+### 4.6 "三环境一套代码"如何保证
+
+1. `Context` 没有任何环境专属的成员或方法。策略无法得知自己处于哪个环境。
+2. 分层检查禁止 `strategy`、`examples`、`python/jarvis` include `live`、`backtest`、`adapter` 的内部头。
+3. **环境等价测试**进入 CI：录制一段 sandbox 会话的解码日志，用同一个策略文件以 backtest 接线回放（回放模式见第 5.2 节），两次的命令流必须逐字节相同。它验证的是接线差异不会泄漏到策略与引擎。每个示例策略都跑这项测试。
+4. 三个环境之间唯一不同的配置段是 `[data]`、`[venues]`、`[persistence]`，策略读不到它们。
+
+---
+
+## 5. 事件模型与时间
+
+### 5.1 事件分类
+
+内核的输入是一个封闭的 `Event` variant。封闭意味着新增事件类型必须修改 variant 定义，所有 `std::visit` 在编译期检查穷尽。
+
+| 类别 | 事件 | 来源 |
+| --- | --- | --- |
+| 行情 | `TradeTick`、`QuoteTick`、`OrderBookDeltas`、`Bar`、`MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate`、`InstrumentStatus`、`LiquidationOrder`（扩展类型） | md-io 线程或 `ReplaySource` |
+| venue | 订单事件（Accepted、Rejected、Canceled、Expired、Updated、Filled 等）、`AccountState`、`VenueSnapshot`、`RateLimitFeedback` | ud-io、order-sender 的回执、`SimulatedExchange` |
+| 时间 | `TimerFired`、`BatchEnd` | timer 线程、core 线程 |
+| 控制 | `AdminCommand`、`Shutdown`、`ParamUpdate`、`TargetPosition`（控制面）、`Health*` | admin 线程、控制面通道 |
+| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志 |
+
+### 5.2 全序键
+
+每个输入事件携带键 `(ts, source_id, seq)`，内核按此严格全序处理，不存在并列。
+
+- **backtest，历史数据**：`ReplaySource` 合并多个数据源，`ts` 为事件的 `ts_init`（由延迟模型合成，第 12 节），`source_id` 为数据源编号，`seq` 为源内行号。延迟模型产生的事件插入同一个优先队列。
+- **backtest，回放已录制的日志**（环境等价测试、实盘问题复现）：`ReplaySource` 按日志中的 `seq` 顺序投递，`ts_init`、定时器触发与批次边界全部取自日志，不再由延迟模型合成。
+- **sandbox 与 live**：全序就是 core 线程的**摄取顺序**。core 在从入站环取出事件时分配单调递增的 `seq`，并把事件连同 `seq` 写入日志。IO 线程打上的 `ts_init` 是元数据，不是排序键，因为多个 IO 线程之间不存在全局单调的时间戳。
+
+因此实盘确定性的精确含义是：**回放摄取日志，逐字节复现输出**。它不承诺"同样的网络包以任意线程交错到达也得到同样结果"，那是不可能的。
+
+ADR 0001 原文的键是 `(ts, source_id, row)`，本文把 `row` 推广为 `seq`，见第 20 节。
+
+### 5.3 两个时间戳
+
+- `ts_event`：事件在 venue 发生的时间，来自交易所字段（Binance JSON 为毫秒，SBE 为微秒，统一换算为纳秒）。
+- `ts_init`：事件在本地被创建的时间。实盘由 IO 线程用单调时钟加启动时的一次墙钟偏移打点；回测由延迟模型合成（第 12 节）。
+
+回测中 `Bar` 的 `ts_init` 等于收盘时间，这与 nautilus 的约定一致，避免未来函数。
+
+### 5.4 记录事件
+
+下列事件发生在内核之外或源自非确定性测量，它们被当作输入写入日志，回放时直接读取而不是重算：
+
+- 定时器触发 `TimerFired`（实盘的触发时刻不可复现）
+- 批次边界 `BatchEnd`（决定 `Conflated` 订阅的合并窗口）
+- Node 生命周期转移、策略错误（包括 Python 回调超时）
+- admin 命令、控制面事件
+- 限速反馈（`X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*`）
+
+### 5.5 排空优先级
+
+core 线程每轮按固定顺序排空入站环：`admin` > `回执 · ud-io` > `md-io` > `timer`。
+
+- admin 最先：halt 与 KillSwitch 不能排在行情后面。
+- 回执与用户流先于行情：基于过时仓位行动比基于过时价格行动更危险。
+- 顺序是语义决策，但它是确定性的，因为结果序列被写入日志。
+
+### 5.6 事件日志头
+
+日志头为定宽二进制，至少包含：格式版本、schema 版本、`NodeConfig` hash、`seed`、`PYTHONHASHSEED`、平台三元组、编译器与版本、jarvis 版本与提交号、Python 与 numpy 版本（Python 节点）、SBE schema `id:version`（使用时）。
+
+---
+
+## 6. 领域模型：nautilus 兼容契约
+
+本节是与 nautilus_trader 的兼容契约。对齐目标为 `develop` 分支提交 `cd417b80`（v2.0.0rc6）的 `crates/model`。实施 M1 时逐项与该提交的源码核对，偏差视为缺陷。v2 相对 v1 的变化（`NO_*` 枚举值移除、`OrderBookDepth10` 改为可变档数、费率移出 instrument、新增 `Voided` 状态与 `OrderFillVoided` 事件、`AggressorSide` 字符串改为 `BUY/SELL`）全部按 v2 处理。
+
+### 6.1 值类型与数值规则
+
+jarvis 采用 nautilus 的 standard precision 模式。
+
+| 常量或类型 | 值 |
+| --- | --- |
+| `FIXED_PRECISION` | 9 |
+| `FIXED_SCALAR` | 1e9 |
+| `Price` | `{ raw: int64, precision: uint8 }` |
+| `Quantity` | `{ raw: uint64, precision: uint8 }` |
+| `Money` | `{ raw: int64, currency: Currency }` |
+| `PRICE_MAX` / `PRICE_MIN` | ±9_223_372_036.0 |
+| `QUANTITY_MAX` / `QUANTITY_MIN` | 18_446_744_073.0 / 0 |
+| `PRICE_UNDEF` / `PRICE_ERROR` | `INT64_MAX` / `INT64_MIN` |
+| `QUANTITY_UNDEF` | `UINT64_MAX` |
+
+规则：
+
+- `raw` 始终按全局刻度 1e9 存储，与 `precision` 无关。例如 `Price(1.23, 2).raw = 1_230_000_000`。
+- `precision` 只影响显示与字符串格式。相等与比较只看 `raw`，所以 `Price(1.23, 2) == Price(1.230, 3)`。
+- 字符串：`Price`、`Quantity` 按 `precision` 位小数输出；解析时由小数位数推断精度。`Money` 的字符串是 `"{amount} {CODE}"`。
+- 内核中禁止浮点。乘法（价格 × 数量 × 乘数）用 `__int128` 中间量计算，结果**向零截断**到 `Money` 的刻度。向零截断保证系统永远不会凭舍入给账户记入不存在的金额。
+- 仓位的有符号数量用 `int64` raw 表示（nautilus 的 `Position.signed_qty` 是 `f64`，这是有意差异）。
+- 撮合器和订单簿内部把价格按 instrument 的 `price_increment` 归一为 tick 索引，便于用稠密数组表示价位。归一是内部表示，不进入跨模块接口。
+- standard 模式最多 9 位小数，覆盖 Binance USDⓈ-M 的全部合约。加载 instrument 时若 `tickSize` 或 `stepSize` 的精度超过 9，拒绝该 instrument 并告警。
+- 与 nautilus Parquet 互转时，Arrow 列是 `Decimal128(38, 16)`，与精度模式无关，因此 standard 与 high precision 数据可以无损互转（第 16 节）。
+
+`Currency` 为 `{ code, precision, iso4217, name, currency_type }`。`AccountBalance` 要求 `total == locked + free`。
+
+### 6.2 标识符
+
+| 标识符 | 格式与约束 | 示例 |
+| --- | --- | --- |
+| `Symbol` | 非空、非全空白、UTF-8；允许包含 `.` | `BTCUSDT-PERP` |
+| `Venue` | 非空、非全空白、ASCII | `BINANCE` |
+| `InstrumentId` | `"{symbol}.{venue}"`，按**最后一个** `.` 拆分 | `BTCUSDT-PERP.BINANCE` |
+| `TraderId` | ASCII，必须含 `-`，按**最后一个** `-` 拆出 tag；`EXTERNAL-0` 保留 | `TESTER-001` |
+| `StrategyId` | 同 `TraderId`，另允许字面量 `EXTERNAL` | `MyMM-001` |
+| `AccountId` | ASCII，必须含 `-`，按**第一个** `-` 拆为 issuer 与账号 | `BINANCE-001` |
+| `ClientOrderId` | ASCII；`EXTERNAL` 保留；jarvis 的生成格式见第 8.4 节 | `mm01-0001Q2-00000G4K` |
+| `VenueOrderId`、`ClientId`、`ComponentId`、`ExecAlgorithmId`、`OrderListId` | ASCII | |
+| `PositionId` | UTF-8；NETTING 下固定为 `{instrument_id}-{strategy_id}` | `BTCUSDT-PERP.BINANCE-MyMM-001` |
+| `TradeId` | 非空 ASCII，最长 36 字符 | `4812765123` |
+| `UUID4` | RFC 4122 v4，36 字符 | |
+
+内核内部把 `InstrumentId` 在配置阶段 intern 为 `uint32` 槽位，字符串只存于侧表；`ClientOrderId`、`TradeId` 以定长内联数组存储。
+
+### 6.3 时间
+
+`UnixNanos` 为 `uint64` 纳秒，UTC。所有数据与事件携带 `ts_event` 与 `ts_init`。
+
+### 6.4 行情数据类型
+
+| 类型 | 字段 |
+| --- | --- |
+| `TradeTick` | `instrument_id, price, size, aggressor_side, trade_id, ts_event, ts_init` |
+| `QuoteTick` | `instrument_id, bid_price, ask_price, bid_size, ask_size, ts_event, ts_init` |
+| `BarSpecification` | `step, aggregation, price_type`；字符串 `"{step}-{AGG}-{PRICE_TYPE}"` |
+| `BarType` | 标准形式 `"{instrument_id}-{step}-{AGG}-{PRICE_TYPE}-{SOURCE}"`，例如 `BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL`；复合形式在其后追加 `@{step}-{AGG}-{SOURCE}` |
+| `Bar` | `bar_type, open, high, low, close, volume, ts_event, ts_init` |
+| `BookOrder` | `side（可空）, price, size, order_id: uint64` |
+| `OrderBookDelta` | `instrument_id, action, order, flags: uint8, sequence: uint64, ts_event, ts_init` |
+| `OrderBookDeltas` | `instrument_id, deltas[], flags, sequence（取最后一条）, ts_event, ts_init` |
+| `OrderBookDepth` | `instrument_id, bids[], asks[], bid_counts[], ask_counts[], flags, sequence, ts_event, ts_init`；前 10 档内联存储 |
+| `InstrumentStatus` | `instrument_id, action, ts_event, ts_init, reason?, trading_event?, is_trading?, is_quoting?, is_short_sell_restricted?` |
+| `MarkPriceUpdate`、`IndexPriceUpdate` | `instrument_id, value, ts_event, ts_init` |
+| `FundingRateUpdate` | `instrument_id, rate, interval?（分钟）, next_funding_ns?, ts_event, ts_init` |
+| `InstrumentClose` | `instrument_id, close_price, close_type, ts_event, ts_init` |
+
+- `RecordFlag`：`F_LAST = 128`、`F_TOB = 64`、`F_SNAPSHOT = 32`、`F_MBP = 16`。快照批次以 `CLEAR` 开头，末条带 `F_SNAPSHOT | F_LAST`。
+- `BookType`：`L1_MBP`、`L2_MBP`、`L3_MBO`。
+- nautilus 中 `FundingRateUpdate.rate` 是十进制数。jarvis 以定点整数存储费率（刻度 1e9），字符串形式与 nautilus 一致。
+- `LiquidationOrder`（来自 Binance `forceOrder` 流）是 jarvis 的扩展数据类型，按 nautilus 自定义数据的方式存储，不改动兼容类型。
+
+### 6.5 Instrument
+
+公共字段：`id, raw_symbol, asset_class, instrument_class, base_currency?, quote_currency, settlement_currency, is_inverse, price_precision, size_precision, price_increment, size_increment, multiplier, lot_size, max_quantity, min_quantity, max_notional, min_notional, max_price, min_price, margin_init, margin_maint, ts_event, ts_init`。
+
+校验：increment 与 multiplier 为正；`price_increment.precision == price_precision`，数量同理；`min_price ≤ max_price`。
+
+加密相关类型：
+
+| 类型 | 额外字段 | Binance 映射 |
+| --- | --- | --- |
+| `CurrencyPair` | 无 | Spot，`BTCUSDT.BINANCE` |
+| `CryptoPerpetual` | `settlement_currency, is_inverse` | USDⓈ-M 永续，`BTCUSDT-PERP.BINANCE` |
+| `CryptoFuture` | `underlying, activation_ns, expiration_ns` | USDⓈ-M 交割，保留 `_YYMMDD` 后缀 |
+| `CryptoOption` | 同上加 `option_kind, strike_price` | v1.0 不使用 |
+
+`exchangeInfo` 的 filters 映射：`PRICE_FILTER.tickSize → price_increment`，`LOT_SIZE.stepSize → size_increment / lot_size`，`minQty/maxQty`、`minPrice/maxPrice`、`MIN_NOTIONAL` 映射为对应限额。nautilus v2 已把 maker/taker 费率移出 instrument，jarvis 同样放在账户级 `FeeModel`（第 11 节）。
+
+### 6.6 枚举
+
+枚举保留 nautilus 的整数值与 `SCREAMING_SNAKE_CASE` 字符串，没有 `NO_*` 零值，"无值"用 `std::optional` 表达。
+
+| 枚举 | 值 |
+| --- | --- |
+| `OrderSide` | Buy=1, Sell=2 |
+| `OrderType` | Market=1, Limit=2, StopMarket=3, StopLimit=4, MarketToLimit=5, MarketIfTouched=6, LimitIfTouched=7, TrailingStopMarket=8, TrailingStopLimit=9 |
+| `TimeInForce` | Gtc=1, Ioc=2, Fok=3, Gtd=4, Day=5, AtTheOpen=6, AtTheClose=7 |
+| `OrderStatus` | Initialized=1, Denied=2, Emulated=3, Released=4, Submitted=5, Accepted=6, Rejected=7, Canceled=8, Expired=9, Triggered=10, PendingUpdate=11, PendingCancel=12, PartiallyFilled=13, Filled=14, Voided=15 |
+| `PositionSide` | Flat=1, Long=2, Short=3 |
+| `LiquiditySide` | NoLiquiditySide=0, Maker=1, Taker=2 |
+| `AggressorSide` | NoAggressor=0, Buy=1, Sell=2（字符串 `BUY` / `SELL`） |
+| `AssetClass` | FX=1, Equity=2, Commodity=3, Debt=4, Index=5, Cryptocurrency=6, Alternative=7 |
+| `InstrumentClass` | Spot=1, Swap=2, Future=3, FuturesSpread=4, Forward=5, Cfd=6, Bond=7, Option=8, OptionSpread=9, Warrant=10, SportsBetting=11, BinaryOption=12 |
+| `ContingencyType` | Oco=1, Oto=2, Ouo=3 |
+| `TriggerType` | Default=1, LastPrice=2, MarkPrice=3, IndexPrice=4, BidAsk=5, DoubleLast=6, DoubleBidAsk=7, LastOrBidAsk=8, MidPoint=9 |
+| `TrailingOffsetType` | Price=1, BasisPoints=2, Ticks=3, PriceTier=4 |
+| `OmsType` | Unspecified=0, Netting=1, Hedging=2 |
+| `AccountType` | Cash=1, Margin=2, Betting=3, Wallet=4 |
+| `BookType` | L1_MBP=1, L2_MBP=2, L3_MBO=3 |
+| `BookAction` | Add=1, Update=2, Delete=3, Clear=4 |
+| `AggregationSource` | External=1, Internal=2 |
+| `PriceType` | Bid=1, Ask=2, Mid=3, Last=4, Mark=5 |
+| `BarAggregation` | Tick=1 … Year=17, Renko=18（完整列表见 nautilus `enums.rs`） |
+| `MarketStatusAction` | None=0 … NotAvailableForTrading=15 |
+| `TradingState` | Active=1, Reducing=2, Halted=3 |
+| `CurrencyType` | Crypto=1, Fiat=2, CommodityBacked=3 |
+| `PositionAdjustmentType` | Commission=1, Funding=2 |
+
+### 6.7 订单、仓位、账户事件
+
+订单事件共 17 种：`OrderInitialized`、`OrderDenied`、`OrderEmulated`、`OrderReleased`、`OrderSubmitted`、`OrderAccepted`、`OrderRejected`、`OrderCanceled`、`OrderExpired`、`OrderTriggered`、`OrderPendingUpdate`、`OrderPendingCancel`、`OrderModifyRejected`、`OrderCancelRejected`、`OrderUpdated`、`OrderFilled`、`OrderFillVoided`。
+
+- 公共字段：`trader_id, strategy_id, instrument_id, client_order_id, event_id, ts_event, ts_init, causation_id?`，多数事件带 `reconciliation: bool`。
+- `OrderDenied.reason` 是 `CATEGORY_CONDITION` 形式的代码，例如 `NOTIONAL_EXCEEDS_MAX_PER_ORDER`、`RATE_LIMIT_EXCEEDED`、`TRADING_HALTED`。
+- `OrderRejected` 带 `due_post_only`，用于表达 post-only 单因会吃单而被拒。
+- `OrderFilled` 带 `venue_order_id, account_id, trade_id, order_side, order_type, last_qty, last_px, currency, liquidity_side, position_id?, commission?`。
+
+仓位事件：`PositionOpened`、`PositionChanged`、`PositionClosed`、`PositionAdjusted`（资金费、以基础币种支付的佣金）。
+
+账户：`AccountState{ account_id, account_type, base_currency?, balances[], margins[], is_reported, event_id, ts_event, ts_init }`；`MarginBalance{ initial, maintenance, currency, instrument_id? }`。
+
+### 6.8 有意差异
+
+| 项目 | nautilus | jarvis | 原因 |
+| --- | --- | --- | --- |
+| 仓位数量与均价 | `f64` | 定点 raw 整数 | ADR 0001 禁止内核浮点 |
+| 费率位置 | 账户级 `MakerTakerFeeSchedule` | 账户级 `FeeModel`（含档位、BNB 折扣、资金费） | 同一模型供撮合器、执行算法、组合构建使用 |
+| 订单句柄 | 无 | `OrderHandle`：32 位竞技场索引加代际 | nautilus 的 `OrderId` 是 venue 的 64 位 ID，避免同名 |
+| `ClientOrderId` 生成 | 含墙钟时间 | `{node_tag}-{epoch}-{seq}`，可解码 | 无墙钟；对账时可识别上一 epoch 的遗留订单 |
+| `BarType` 内部表示 | 运行期解析的字符串 | 保留字符串用于互操作，内部为 `BarKey(uint32)` | 热路径不做字符串解析 |
+| 虚拟仓位 | NETTING venue 上可按策略拆分 | v1 不做，改为按 `strategy_id` 的归因账本 | 保持"Portfolio 仓位 == venue 仓位"这一对账不变量 |
+| `OrderStatus` 转移 | 见第 8 节 | 在 nautilus 转移表上增加一条边 | Binance 的两条独立连接使该边成为常态 |
+
+---
+
+## 7. 运行时与策略宿主
+
+### 7.1 实盘线程拓扑
+
+![F2 实盘线程拓扑](figures/F2-live-thread-topology.svg)
+
+*F2：引擎状态只有 core 线程一个写者。其他线程只通过 SPSC 环与它交换数据。Python 节点只在一批事件的处理期间持有 GIL。*
+
+- 每个 md-io 线程拥有一个或多个行情连接，在本线程完成 TLS、WebSocket 解帧、`Codec` 解码，推入环的是归一化后的定点事件。
+- order-sender 线程拥有 WS API 连接。它从出站环取命令发出，并把回执与错误码推入自己的回执环。
+- persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
+- core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
+
+### 7.2 路由
+
+`Router` 由封闭的 `Event` variant 与 `SubscriptionMatrix` 组成。`SubscriptionMatrix` 以 `(instrument_slot, EventKind)` 为下标，值是一个 `FixedVector<StrategyIdx>`。投递是一次数组访问加一次按固定顺序的遍历，没有字符串、哈希或内存分配，投递顺序在回放中不变。
+
+订阅是类型化的 `Subscription{ slot, kind, cadence }`，在 `on_start` 中声明，也可以在运行中增删；增删本身发生在 `step` 内，因此可回放。
+
+### 7.3 StrategySet：静态与动态分发
+
+`Engine<SS>` 以 `StrategySet` concept 为参数，该 concept 只要求 `Status dispatch(Context&, const Event&)`。
+
+| 实现 | 用于 | 分发方式 |
+| --- | --- | --- |
+| `StaticStrategySet<S...>` | 纯 C++ 节点，`node_main<S>` | 编译期展开，完全内联 |
+| `DynamicStrategySet<PyStrategyHost>` | Python 启动的混合节点 | `FixedVector<std::variant<NativeBox, PyStrategyHost>>`；`NativeBox{ void* self; const StrategyVTable* vt; }` |
+
+- `StrategyVTable` 是由 `make_vtable<S>()` 生成的纯函数指针结构体。C++ 策略通过 `JARVIS_REGISTER_STRATEGY(Name, Type)` 在 `jarvis_shell` 中按名注册，Python 侧用 `node.add_native_strategy("Name", params)` 加入。
+- Python 节点的策略集合在编译期不可知，每次回调一次间接调用不可避免。它的代价约 1–2 ns，相对于至少 1 µs 的 Python 回调可以忽略。这是 C++ 子集规范中唯一被批准的间接分发，`docs/cpp-subset.md` 需要补一条例外说明（plan.md M0）。
+- 纯 C++ 节点不链接 Python，也不承担间接调用。
+- 两种策略集实例化同一个 `Engine<>` 模板，所以内核测试、基准与规约映射同时覆盖两者。
+
+### 7.4 GIL 策略
+
+- Python 启动的节点里，主线程就是 core 线程。`Node.run()` 进入时释放 GIL，所有 IO 线程都是 C++ 线程，从不触碰 Python。
+- core 每排空一批事件，仅当这批事件中有路由到 `PyStrategyHost` 的事件时获取一次 GIL，处理完释放。释放发生在排空出站环和写日志之前。
+- 空闲时不持有 GIL。`on_idle(ctx)` 钩子按 `idle_hook_ms` 的节奏在持有 GIL 的情况下运行，默认做 `gc.collect(0)`。
+- 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。
+- `on_start` 结束后调用 `gc.freeze()`，第二代回收只在 `on_idle` 中进行。
+
+### 7.5 让 Python 远离逐 tick 热循环
+
+| 机制 | 作用 |
+| --- | --- |
+| 订阅节奏 `Cadence` | `Every`（逐条）、`Conflated`（每批只投递最新状态）、`SampledNs(p)`（按周期采样）、`OnBatch`（每批一次）。批次边界是记录事件，回放按同样的边界合并 |
+| 内核特征图 `FeatureGraph` | EMA、VWAP、盘口失衡、microprice、实现波动率、bar 聚合等，在 `jarvis/data/features` 中以定点实现，满足 `Indicator` concept。策略在 `on_start` 中声明，声明进入配置 hash；在 `step` 内计算，以 `FeatureUpdate` 事件按所选节奏投递 |
+| 批量回调 `on_batch` | 以列式（`ts`、`price_raw`、`size_raw`、`side`）只读 `nb::ndarray` 视图交付一批事件，视图只在回调期间有效，debug 构建用代际计数检查视图是否逃逸 |
+| 单事件拷贝 | 单个事件以 48–64 字节的 POD 按值拷贝给 Python，比创建视图加引用计数更便宜 |
+
+跨越 Python 边界的永远是值，不是竞技场句柄或指针。`ctx.position(iid)` 之类的查询返回拷贝。
+
+### 7.6 异常与超时
+
+- `PyStrategyHost` 捕获 Python 异常，截断格式化到 4 KiB，产生记录事件 `StrategyError{ strategy_id, kind = Exception, hash }`。`risk.on_strategy_error` 决定后果：撤掉该策略的订单并停用该策略（默认）、停止整个节点，或忽略。
+- 回放时 `StrategyError` 从日志读取，不重新抛出。回放中如果 Python 在该 `seq` 没有抛异常，视为偏差。
+- 超时不抢占。Node 在 `step` 之外测量回调耗时，超过 `callback_budget_us` 记为遥测；连续 `overrun_limit` 次超限产生 `StrategyError{ kind = Overrun }`，按同一策略处置。测量本身不确定，但它的后果是事件，`step` 仍然是纯函数。
+
+### 7.7 Python 策略的确定性守卫
+
+Python 代码运行在 `step` 之内，所以 ADR 0001 的纯函数约束同样适用于它。
+
+1. **哈希种子。** `jarvis.main` 在 `PYTHONHASHSEED` 未设置时以 `seed` 派生值重新执行自身，并把该值写入日志头，使 `set` 与字符串哈希的迭代顺序可复现。
+2. **禁止的调用。** 回调执行期间，`time.time`、`time.monotonic`、`datetime.now`、`random.*`、`uuid.uuid4`、`os.urandom` 抛出 `NondeterminismError`。由 `jarvis.determinism.guard()` 实现，宿主在回调前后开关；backtest 与 `strict_determinism = true` 的实盘默认开启。合法来源是 `ctx.now()` 与 `ctx.rng(key)`（counter-based splitmix64）。
+3. **浮点。** Python 中允许浮点，但进入命令的数值必须经 `Price.from_float(x, precision)` 等方法量化（round half to even）。同一平台上比特级可复现；跨平台比特级可复现只对 C++ 策略承诺，因为 numpy 的 SIMD 归约在不同平台上可能不同。日志头记录平台与 numpy 版本。
+4. **并发。** 策略状态只能在 core 线程的回调中修改，不允许线程或 asyncio 修改策略状态。
+5. **偏差检测。** 回放时逐步比较重新产生的命令流与日志中记录的命令流，第一处不一致产生 `ReplayDivergence{ seq }`。
+6. **快照。** 策略可实现 `__getstate__`；快照时保存其哈希用于偏差检测，不可 pickle 的策略从日志开头回放。
+
+### 7.8 性能预算与何时改用 C++
+
+| 项目 | 估计值 |
+| --- | --- |
+| C++ 到 Python 的一次回调（POD 参数）的开销 | 0.5–1 µs |
+| 最简单的 `on_quote` | 1–3 µs |
+| 计算并提交或修改订单的回调 | 5–20 µs，每次 `ctx.*` 调用约 0.3 µs |
+| 单核 50% 占用下可持续的 Python 回调速率 | 约 3–6 万次/秒 |
+| Binance USDⓈ-M 单个活跃合约的 `bookTicker + aggTrade` 峰值 | 约 1000–5000 条/秒 |
+
+这些是设计阶段的估计值，M2 的 `py/callback_on_quote` 基准会给出实测值并替换本表。按估计，逐条节奏的 Python 策略能覆盖 1–5 个合约；更多合约应使用 `Conflated` 或内核特征。出现下列任一情况时，策略应改用 C++：要求 tick 到命令的延迟低于 20 µs；需要响应每一条 L2 增量；Python 路由的事件持续超过每秒 2 万条。
+
+---
+
+## 8. 订单生命周期与 OMS
+
+![F4 订单状态机](figures/F4-order-fsm.svg)
+
+*F4：每条边标注"内部事件 / Binance 来源"。蓝色虚线是回执与用户数据流走两条独立连接时的常态捷径，其中一条是 jarvis 在 nautilus 转移表上新增的边。*
+
+### 8.1 状态与转移
+
+- 状态枚举保留 nautilus v2 的全部 15 个值。v1.0 不做本地订单模拟与条件单，所以 `Emulated`、`Released`、`Triggered` 不会进入，`Voided` 仅在交易所撤销成交时出现。
+- 转移表以 nautilus 的 `OrderStatus::transition`（`crates/model/src/orders/mod.rs`）为基线，并保留其 `apply` 阶段的二次修正：
+  - `OrderFilled` 之后按数量决定 `PartiallyFilled`、`Filled` 或 `Voided`；若订单处于 `Pending*`，状态保持不变，并把 `PartiallyFilled` 记为 `previous_status`。
+  - `OrderModifyRejected`、`OrderCancelRejected`、从 `Pending*` 出发的 `OrderUpdated` 都恢复 `previous_status`。
+  - 同一个 `trade_id` 的第二次成交被拒绝（`DuplicateFill`）。
+- nautilus 的表已经包含 `Submitted → Filled`、`PendingCancel → Filled`、`Canceled → Filled` 这些"真实世界可能发生"的边。F4 把前两条画成蓝色虚线，因为在 Binance 上它们是常态：WS API 回执与用户数据流是两条独立连接，成交或终态事件可能先于下单回执到达。
+- jarvis 新增一条边：`Submitted → Expired`。Binance 对 IOC 余量和自成交保护都回报 `EXPIRED`，它同样可能先于回执到达。nautilus 的表只有 `Submitted → Canceled`（用于 IOC/FOK）。新增边只扩大允许集合，不改变任何已有状态或事件的语义。
+- C++ 转移表由 TLA+ 规约 `OrderLifecycle` 核对（第 18 节）。修改转移表必须同时修改规约并通过形式化验证。
+
+### 8.2 Binance 事件映射
+
+| Binance 来源 | 内部事件 | 说明 |
+| --- | --- | --- |
+| WS API `order.place` 成功回执，或用户流 `x=NEW` | `OrderAccepted` | 两者谁先到用谁，后到的一条幂等忽略 |
+| WS API 错误码 | `OrderRejected` | `-5022`（post-only 会吃单）设置 `due_post_only = true`；`-5021` 为 FOK 无法全部成交 |
+| 用户流 `x=TRADE` | `OrderFilled` | `X` 为 `PARTIALLY_FILLED` 或 `FILLED` |
+| 用户流 `x=CALCULATED` | `OrderFilled`，`info` 标记强平或自动减仓 | 与普通成交走同一路径 |
+| 用户流 `x=CANCELED` | `OrderCanceled` | 包括 `countdownCancelAll` 触发的撤单 |
+| 用户流 `x=EXPIRED`，`X=EXPIRED` 或 `EXPIRED_IN_MATCH` | `OrderExpired` | IOC 余量、STP、GTD 到期 |
+| 用户流 `x=AMENDMENT` | `OrderUpdated` | `order.modify` 生效 |
+| WS API `order.modify` 错误 | `OrderModifyRejected` | |
+| WS API `order.cancel` 错误 `-2011` | `OrderCancelRejected` | 订单已不在簿上，等待或查询其终态事件 |
+| `TRADE_LITE` | `OrderFilled` 的快速版本 | 见 8.3 |
+
+### 8.3 幂等与去重
+
+- 成交按 `(symbol, orderId, tradeId)` 去重。
+- `TRADE_LITE` 比 `ORDER_TRADE_UPDATE` 更早到达，但不含手续费与已实现盈亏。第一条到达的回报产生 `OrderFilled` 并更新仓位与敞口；同一 `tradeId` 的第二条回报只补充手续费、`rp` 与累计数量，不重复记成交。
+- 订单状态回报按 `(orderId, updateTime)` 单调推进，旧于当前状态的回报丢弃并计数。
+
+### 8.4 ClientOrderId
+
+格式：`{node_tag}-{epoch}-{seq}`。
+
+- `node_tag`：配置中的节点标签，最多 8 字符。
+- `epoch`：持久化计数器，每次节点启动加一，Base32 编码 6 字符。
+- `seq`：本 epoch 内单调递增，Base32 编码 8 字符。
+- 总长不超过 24 字符，满足 Binance `newClientOrderId` 的正则 `^[\.A-Z\:/a-z0-9_-]{1,36}$`。
+- 不含墙钟时间，在回放中确定。Binance 只保证未完成订单之间的 `clientOrderId` 唯一，jarvis 通过 epoch 保证永不复用。
+- 可解码：对账时遇到本节点上一 epoch 留下的订单，可以识别为自己的遗留订单，而不是外部订单。
+- 分片部署时 `node_tag` 包含分片编号（第 19 节）。
+
+### 8.5 OMS 与账户模式
+
+Binance USDⓈ-M 的持仓模式（`dualSidePosition`）是账户级设置，并改变下单参数：hedge 模式必须传 `positionSide = LONG | SHORT`，且不能使用 `reduceOnly`。
+
+- OMS 类型由账户模式决定，不由策略选择：one-way ⇔ `Netting`，hedge ⇔ `Hedging`。
+- 启动时读取 `GET /fapi/v1/positionSide/dual`，与配置不一致则拒绝启动。jarvis 从不自动切换账户模式（有持仓时交易所也会拒绝）。
+- v1.0 默认 one-way。hedge 模式在 v1.x 实现。
+- 仓位标识：netting 为 `{instrument_id}-{strategy_id}`，hedging 为 `(instrument_id, LONG | SHORT)`。
+- 多个策略共用一个 NETTING 账户时，Portfolio 仍只有一个 venue 仓位；按 `strategy_id` 的归因账本从成交事件中计算每个策略的贡献，供报告与风控使用。
+
+### 8.6 改单
+
+`order.modify` 在 Binance USDⓈ-M 上只适用于 LIMIT 单。改单保留 `orderId`，但按交易所规则可能失去队列优先级。`PeggedQuote` 在"改单"与"撤单重下"之间按令牌预算与队列位置估计选择（第 11 节）。
+
+---
+
+## 9. 命令链、两道风控闸与策略 API
+
+![F5 两道风控闸](figures/F5-two-risk-gates.svg)
+
+*F5：Gate A 在执行算法之前按意图检查，代价低、拒绝早；Gate B 在子单进入 OMS 之前检查，有约束力。两道闸读取同一份风控状态，其中预留敞口包含父单剩余量。*
+
+### 9.1 命令链
+
+`Strategy →（可选 PortfolioConstruction）→ Gate A → ExecAlgorithm → Gate B → OMS → Adapter → Venue`
+
+回程：`Venue → Adapter → ExecutionEngine（推进 FSM）→ Portfolio → Strategy`。
+
+- 策略可以直接提交订单意图，也可以提交父单交给执行算法。直接下单的意图同样经过两道闸，此时执行算法为直通。
+- 两道闸都在 `step` 内同步执行，没有风控线程。
+- 被拒绝的意图或子单产生 `OrderDenied{ reason }`，回到策略的 `on_order_event`。
+
+### 9.2 两道闸各查什么
+
+| 检查项 | Gate A（意图级） | Gate B（子单级） |
+| --- | --- | --- |
+| `TradingState` 是否允许该命令 | 是 | 是 |
+| 策略的 instrument 白名单、instrument 状态为可交易 | 是 | |
+| 意图名义（父单数量 × 参考价）对比限额，含预留敞口 | 是 | |
+| 价格与数量的精度、步长（`PRICE_FILTER`、`LOT_SIZE`） | | 是 |
+| 最小名义（`MIN_NOTIONAL`）、单笔最大名义 | | 是 |
+| 价格带（相对 mark 或 last 的偏离） | | 是 |
+| 未完成订单数上限 | | 是 |
+| 提交与改单速率（令牌桶） | | 是 |
+| `reduceOnly` / `positionSide` 与 OMS 模式一致 | | 是 |
+| 保证金占用、可用余额 | | 是 |
+| GTD 到期时间未过 | | 是 |
+
+nautilus RiskEngine 的检查集合（精度、正负、GTD、reduce-only、单笔最大名义、余额与保证金影响、提交与改单限速、TradingState）是 jarvis 内置规则的下界。
+
+### 9.3 预留敞口
+
+一个剩余 90% 的 TWAP 父单必须计入仓位限额，否则十个切片可以各自通过检查。`open_exposure()` 定义为：
+
+```
+open_exposure(instrument) = 当前持仓 + 在途子单（未成交部分） + 执行算法中父单的剩余量
+```
+
+两道闸都读取它。它在 `step` 内由 OMS、执行算法与 Portfolio 的输出维护，与任何时刻的状态一致。
+
+### 9.4 策略 API
+
+C++ 的 `Strategy` concept 要求以下成员函数中的任意子集，未实现的回调在编译期被省略：
+
+| 回调 | 触发 |
+| --- | --- |
+| `on_start(ctx)` / `on_stop(ctx)` | Node 进入 `Running` / `Stopping` |
+| `on_reconciled(ctx, outcome)` | 对账完成（第 15 节） |
+| `on_trade(ctx, TradeTick)` | 成交流 |
+| `on_quote(ctx, QuoteTick)` | 最优报价 |
+| `on_book(ctx, BookView)` / `on_book_deltas(ctx, OrderBookDeltas)` | 订单簿变化 |
+| `on_bar(ctx, Bar)` | K 线 |
+| `on_mark_price` / `on_index_price` / `on_funding_rate` | 永续合约相关 |
+| `on_feature(ctx, FeatureId, value, ts)` | 内核特征更新 |
+| `on_batch(ctx, Batch)` | `OnBatch` 节奏 |
+| `on_order_event(ctx, OrderEvent)` | 全部订单事件，含 `OrderDenied` |
+| `on_position_event(ctx, PositionEvent)` | 仓位开、变、平、调整 |
+| `on_timer(ctx, TimerKey, ts)` | 定时器 |
+| `on_error(ctx, StrategyError)` | 本策略的错误 |
+
+Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
+
+`Context` 的主要方法：
+
+| 类别 | 方法 |
+| --- | --- |
+| 时间与随机数 | `now()`、`rng(key)`、`set_timer(key, ts)`、`cancel_timer(key)` |
+| 订阅 | `subscribe_trades / quotes / book / bars / mark_price / funding(iid, cadence)`、`unsubscribe(...)`、`feature(spec, cadence)` |
+| 下单 | `submit(intent)`、`submit_parent(algo, params, intent)`、`modify(cid, price?, qty?)`、`cancel(cid)`、`cancel_all(iid?)` |
+| 查询（返回拷贝） | `instrument(iid)`、`book(iid)`、`position(iid)`、`orders(filter)`、`account()`、`exposure(iid)`、`trading_state()` |
+| 参数 | `params()`；`ParamUpdate` 控制面事件更新后触发 `on_params_changed` |
+
+订单意图 `OrderIntent` 由 `ctx.limit(iid, side, qty, price, tif, post_only=False, reduce_only=False)`、`ctx.market(...)` 等工厂方法构造，`ClientOrderId` 由内核分配。
+
+---
+
+## 10. 风控引擎
+
+### 10.1 规则目录
+
+规则是 `RiskRule` concept 的实现，在启动期组成固定的 `std::array`，每道闸一个。venue 相关规则在加载 instrument 时由 `exchangeInfo.filters` 生成，因此 instrument 加载器与风控共用一份 schema。
+
+| 规则 | 闸 | 参数来源 | `OrderDenied.reason` |
+| --- | --- | --- | --- |
+| `TradingStateRule` | A、B | TradingState | `TRADING_HALTED`、`TRADING_REDUCING_ONLY` |
+| `InstrumentWhitelistRule` | A | 策略配置 | `INSTRUMENT_NOT_ALLOWED` |
+| `InstrumentStatusRule` | A | `InstrumentStatus` | `INSTRUMENT_NOT_TRADING` |
+| `IntentNotionalRule` | A | `[risk]`，读 `open_exposure()` | `EXPOSURE_EXCEEDS_LIMIT` |
+| `PriceFilterRule` | B | `PRICE_FILTER` | `PRICE_INVALID_TICK`、`PRICE_OUT_OF_RANGE` |
+| `LotSizeRule` | B | `LOT_SIZE` | `QUANTITY_INVALID_STEP`、`QUANTITY_OUT_OF_RANGE` |
+| `MinNotionalRule` | B | `MIN_NOTIONAL` | `NOTIONAL_BELOW_MIN` |
+| `MaxOrderNotionalRule` | B | `[risk]` | `NOTIONAL_EXCEEDS_MAX_PER_ORDER` |
+| `PriceBandRule` | B | `[risk]`，参考 mark 或 last | `PRICE_OUTSIDE_BAND` |
+| `MaxOpenOrdersRule` | B | `MAX_NUM_ORDERS` 与 `[risk]` 取小 | `OPEN_ORDERS_EXCEEDED` |
+| `RateLimitRule` | B | 令牌桶（10.4） | `RATE_LIMIT_EXCEEDED` |
+| `PositionModeRule` | B | 账户模式 | `POSITION_SIDE_INVALID`、`REDUCE_ONLY_INVALID` |
+| `MarginRule` | B | Portfolio、`MarginModel` | `MARGIN_INSUFFICIENT` |
+| `GtdExpiryRule` | B | 时钟 | `GTD_ALREADY_EXPIRED` |
+
+撤单与查询不经过风控。
+
+### 10.2 TradingState
+
+| 状态 | 新开仓 | 减仓 | 改单 | 撤单 |
+| --- | --- | --- | --- | --- |
+| `Active` | 允许 | 允许 | 允许 | 允许 |
+| `Reducing` | 拒绝 | 允许（必须是减仓意图） | 只允许不增加敞口的改单 | 允许 |
+| `Halted` | 拒绝 | 拒绝 | 拒绝 | 允许 |
+
+能推动 TradingState 的角色是固定的：
+
+| 角色 | 推动 |
+| --- | --- |
+| 对账 | 启动与重连期间为 `Halted`，完成后恢复为配置初值 |
+| 日内亏损监控 | 超限 → `Reducing`；再超一个阈值 → `Halted` 并触发 KillSwitch |
+| 回撤监控 | 同上 |
+| `MARGIN_CALL` 用户流事件 | → `Reducing` |
+| Node `Degraded` | → `Reducing` |
+| admin 命令 | `halt`、`reduce`、`resume`，唯一能从 `Halted` 回到 `Active` 的途径 |
+
+TradingState 的转移是 TLA+ 规约 `TradingState` 的对象。
+
+### 10.3 KillSwitch 与 venue 侧死人开关
+
+- KillSwitch = 把 TradingState 置为 `Halted` + 撤销全部未完成订单 + 等待终态确认。触发者是监控、admin 命令或 `Faulted`。
+- Binance USDⓈ-M 没有"断线即撤单"。jarvis 在进入 `Synced` 后对每个有挂单的 symbol 调用 `POST /fapi/v1/countdownCancelAll`，`countdownTime = 120000` 毫秒，每 30 秒续期一次（这是交易所文档给出的推荐节奏，权重 10，交易所约每 10 毫秒检查一次）。节点失联超过两分钟，交易所会自行撤单。
+- 续期由内核定时器驱动，续期命令经 order-sender 发出，续期失败作为健康事件处理。
+- 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时。
+
+### 10.4 令牌桶与权重反馈
+
+- 限速状态在内核内，由定时器事件推进，所以回测与实盘按同样的规则限速。
+- USDⓈ-M 的桶：IP 请求权重（每分钟）、账户下单数（每 10 秒与每分钟）。容量与补充速率取自配置，默认值低于交易所上限，给重连与对账请求留出余量。
+- 适配器把响应头 `X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*` 与 WS API 响应中的 `rateLimits` 回灌为 `RateLimitFeedback` 事件，内核据此校正估计值。
+- 收到 HTTP 429 立即把相关桶清零并退避；收到 418（IP 封禁）进入 `Degraded` 并告警。
+- `PeggedQuote` 等执行算法在生成子单前查询剩余令牌，令牌不足时只更新移动了的一侧。
+
+### 10.5 事后监控
+
+事后监控在每次成交、mark price 更新和日切时运行：日内已实现加未实现亏损、从高点的回撤、保证金率、单策略连续被拒次数。监控只能产生 TradingState 转移与告警，不直接发单。
+
+---
+
+## 11. 成本模型、Portfolio、组合构建与执行算法
+
+### 11.1 成本模型
+
+`jarvis/cost` 定义三个 concept，撮合器、执行算法与组合构建共用同一份实现：
+
+| concept | 内容 | 使用者 |
+| --- | --- | --- |
+| `FeeModel` | maker/taker 费率档位、BNB 抵扣、资金费计算（按 `FundingRateUpdate` 与持仓在结算时刻产生 `PositionAdjusted`） | 撮合器、Portfolio、执行算法的成本估计 |
+| `SlippageModel` / `ImpactModel` | 吃单的预期滑点与冲击；v1.0 提供基于订单簿深度的静态模型 | 执行算法、组合构建、回测报告 |
+| `LatencyModel` | 行情延迟、命令延迟、回程延迟的分布，counter-based RNG 取样 | 仅撮合器 |
+
+实盘中手续费以交易所回报（`ORDER_TRADE_UPDATE` 的 `n`、`N`）为准；`FeeModel` 的估计值与实际值之差进入报告与指标。
+
+### 11.2 Portfolio
+
+`Portfolio` 是必需组件，在 `step` 内由 OMS 的输出更新。它维护：每个 instrument 的仓位（定点数量、开仓均价）、余额、保证金（初始与维持，经 `MarginModel` concept 计算）、已实现与未实现盈亏（未实现盈亏按 mark price 计）、敞口、按策略归因的账本。
+
+`ACCOUNT_UPDATE` 用户流事件与对账快照直接置位余额与仓位；置位与本地计算值的差异产生 `ReconciliationDiff` 事件。
+
+### 11.3 PortfolioConstruction（可选）
+
+```cpp
+template <typename P>
+concept PortfolioConstruction = requires(P p, const PortfolioView& view, const Signals& s,
+                                         FixedVector<OrderIntent>& out) {
+    { p.rebalance(view, s, out) } -> std::same_as<Status>;
+};
+```
+
+输入是目标仓位或权重，输出是订单意图，意图随后进入 Gate A。它运行在定时器或 bar 节奏上，不在热路径，因此允许 Python 实现。参考实现 `TargetPositionRebalancer` 在 v1.x 提供。HFT 与做市类策略直接下单，不经过它。
+
+### 11.4 执行算法
+
+```cpp
+template <typename A>
+concept ExecAlgorithm = requires(A a, AlgoState& st, AlgoContext& ctx, const Event& e) {
+    { a.on_parent(st, ctx) }      -> std::same_as<Status>;   // 收到父单
+    { a.on_event(st, ctx, e) }    -> std::same_as<Status>;   // 行情、成交、定时器
+    { a.on_cancel(st, ctx) }      -> std::same_as<Status>;   // 父单撤销
+};
+```
+
+- 执行算法运行在 `step` 内，状态保存在 `AlgoState` 竞技场中，是确定性的，并被规约 `Matching` 与 `TradingState` 的不变量覆盖。
+- 子单通过 `AlgoContext` 产生，自动经过 Gate B，并在生成前查询令牌预算。
+- 子单的 `ClientOrderId` 与普通订单一样由内核分配，父子关系记录在 `parent_order_id` 与 `exec_spawn_id` 中。
+
+内置算法：
+
+| 算法 | 版本 | 行为 |
+| --- | --- | --- |
+| `PeggedQuote` | v1.0 | 维持一张或一对相对参考价（最优价、microprice 或策略给定价）固定偏移的限价单；参考价移动超过阈值时按令牌预算与队列位置估计选择改单或撤单重下；默认 `GTX` |
+| `PassiveThenAggressive` | v1.0 | 先以被动限价挂单，超时或价格偏离后改为吃单；参数为超时、最大偏离、最大吃单比例 |
+| `TWAP` | v1.x | 生成确定性的时间切片计划 `Slice{ ts, qty }`，每个切片用 `PassiveThenAggressive` 执行，而不是直接市价 |
+| `POV` | v1.x | 以内核中的 `TradeFlowMeter`（基于 `TradeTick` 的成交量计量）驱动，维持目标参与率 |
+| `Iceberg` | v1.x | 只显示部分数量，成交后补单 |
+
+Binance 的 `priceMatch` 参数（交易所侧按对手价或队列价定价）可以减少追价延迟，作为 `PeggedQuote` 的可选模式在 v1.x 评估。
+
+---
+
+## 12. 回测撮合器与 sandbox
+
+![F3 双时间线](figures/F3-two-timelines.svg)
+
+*F3：venue 在 `ts_event` 动作，策略在 `ts_init` 才观察到；命令带着出站延迟到达时，簿可能已经再次变化。所有延迟都来自以身份为键的 counter-based RNG。*
+
+### 12.1 SimulatedExchange
+
+- `SimulatedExchange` 实现与实盘适配器相同的 `VenueClient` concept，包括快照查询，所以对账代码与规约 `Reconciliation` 的行为可以在回测中演练。
+- 它是 in-loop 组件：backtest 中由 `ReplayClock` 驱动，sandbox 中它的延迟事件通过真实定时器触发，触发时刻作为记录事件写入日志。两种环境运行同一份撮合代码。
+
+### 12.2 双时间线
+
+- 每条历史行情有 `ts_event`（venue 发生）与合成的 `ts_init = ts_event + L_feed(seed, seq)`（策略观察）。
+- 撮合器在 `ts_event` 上撮合挂单；策略在 `ts_init` 才看到这次更新。
+- 策略在 `t` 发出的命令在 `t + L_out(seed, cid, hop)` 到达撮合器，回执与成交在 `+ L_in(seed, cid, hop)` 后回到策略。
+- 所有延迟都由 counter-based RNG（splitmix64 或 Philox）按身份键取样，不依赖调用顺序，符合 ADR 0001 第 4 条。所有延迟事件插入同一个 `(ts, source_id, seq)` 优先队列，全序不变。事件数量约为原始行情的两倍，可以接受。
+
+### 12.3 成交模型
+
+成交模型是封闭的 variant：
+
+| 模型 | 所需数据 | 规则 |
+| --- | --- | --- |
+| `TopOfBookCross` | quote 或 bar | 限价单在对手最优价越过其价格时成交；bar 数据下按 OHLC 路径保守处理 |
+| `QueuePosition` | L2 增量 + `TradeTick` 成交流 | 挂单时记录同价位前方排队量；该价位的每笔成交（来自 `TradeTick`）从前方量中扣减；该价位数量减少时按比例扣减前方量；数量增加只加在队尾；前方量归零后，后续成交才吃到本单；对手价越过本单价格时立即成交 |
+| `Probabilistic` | 同上 | 对 `QueuePosition` 加入可配置的撤单位置分布；v1.x |
+
+`TradeTick` 是 `QueuePosition` 的必需输入，这也是 v1.0 要求 trade tick 全链路的原因之一。
+
+撮合器还实现：`GTX` 会吃单时拒单（对应实盘的 `-5022`）、`IOC` / `FOK` 余量过期、STP 的 `EXPIRE_TAKER / EXPIRE_MAKER / EXPIRE_BOTH`、按 `FeeModel` 计算手续费、按资金费率在结算时刻产生资金费。强平模拟在 v1.x 提供。
+
+### 12.4 数据来源与局限
+
+- 历史数据由 Python 转换器从 data.binance.vision（aggTrades、bookTicker、klines、markPrice 等）与 nautilus Parquet 目录转换为解码事件日志（第 16 节）。
+- Binance 不提供 USDⓈ-M 的历史 L2 增量。jarvis 在 M4 提供录制器，自行录制 depth 流。在积累足够的录制数据之前，做市类回测只能基于 `bookTicker + aggTrade` 与 `TopOfBookCross` 或保守参数的 `QueuePosition`，回测报告必须标注所用的数据与模型。
+- sandbox 的意义就在这里：它用真实行情检验成交模型的假设，并同时积累录制数据。
+
+---
+
+## 13. 网络栈与 Codec
+
+### 13.1 选型
+
+网络栈属于 shell，不进入内核，位于 `Transport` concept 之后，可以替换。候选方案的定性评分（1 最差，5 最好）：
+
+| 方案 | 成熟度 | 延迟与拷贝 | 依赖重量（对照 CPM 小依赖策略） | macOS | io_uring | 工作量 | 合计 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Boost.Asio + Beast + OpenSSL | 5 | 3 | 1 | 5 | 3 | 5 | 22 |
+| **standalone Asio + OpenSSL + 自写 RFC 6455 帧层 + picohttpparser** | 4 | 4 | 4 | 5 | 4 | 3 | **24** |
+| libuv + 自写帧层 | 5 | 3 | 3 | 5 | 1 | 2 | 19 |
+| libwebsockets | 4 | 2 | 2 | 4 | 1 | 3 | 16 |
+| uWebSockets / uSockets | 3 | 4 | 3 | 4 | 2 | 2 | 18 |
+| 自研 epoll / io_uring reactor | 1 | 5 | 5 | 2 | 5 | 1 | 19 |
+
+**决策：standalone Asio + OpenSSL 3 + 自写 WebSocket 客户端帧层 + picohttpparser，不引入 Boost。**
+
+Boost 不合适的原因要说准确：
+
+- Asio 本身没有问题。standalone Asio 与 Boost.Asio 是同一作者、同一份源码，header-only，可以按 tag 钉版本。
+- 问题在 Beast。它的 WebSocket 实现围绕动态缓冲与可组合异步操作设计，要做到接收路径零分配、零拷贝，需要自定义分配器与缓冲；它还带有 jarvis 用不到的 permessage-deflate 协商层。这些正好落在行情解码的延迟路径上，而 jarvis 需要的客户端帧层只有约 450 行。
+- 通过 CPM 引入 Boost 源码包会破坏 `cmake/Dependencies.cmake` 当前"少量小依赖、逐个钉提交"的策略，也接近 `init-project.md` 中切换到 vcpkg 的触发条件。
+
+Asio 的 io_uring 路径：Linux 默认使用 epoll；定义 `ASIO_HAS_IO_URING` 后文件类操作走 io_uring；再定义 `ASIO_DISABLE_EPOLL` 则全部异步操作走 io_uring。macOS 使用 kqueue。v1.0 使用 epoll 路径，io_uring 在 M7 作为实验项评估（Proposed）。
+
+也要说清楚的一点：Binance 只提供 TLS 连接，端到端延迟由网络往返主导，reactor 本身不是瓶颈。从第一天自研 reactor 得不偿失。
+
+### 13.2 Transport 与帧层
+
+```cpp
+template <typename T>
+concept Transport = requires(T t, std::span<const std::byte> bytes) {
+    { t.connect(Endpoint{}) } -> std::same_as<Status>;
+    { t.send(bytes) }         -> std::same_as<Status>;
+    { t.close() }             -> std::same_as<Status>;
+    // 收到的完整消息通过构造时注入的 on_frame(std::span<const std::byte>) 回调交付
+};
+```
+
+- 每个 IO 线程一个 `asio::io_context`，每个连接一块预分配的 64 KiB 接收缓冲。服务端发来的帧不加掩码，可以原地解帧，零拷贝交给 `Codec`。
+- 自写部分约 450 行，全部有 libFuzzer 目标：
+  - RFC 6455 客户端：握手、仅对出站帧加掩码、分片重组、ping/pong/close，不实现 permessage-deflate。
+  - HTTP/1.1 客户端：keep-alive 请求构造，响应与 chunked 编码由 picohttpparser 解析。
+- TLS 使用 `asio::ssl::stream` 与系统 OpenSSL 3。Ed25519 签名经 `EVP_DigestSign` 实现，封装在 `Signer` 接口后（第 19 节）。
+- 连接管理：24 小时强制断线按计划重连处理；服务端 ping 自动回 pong；断线指数退避，退避期间 Node 进入 `Degraded`。
+
+### 13.3 Codec
+
+```cpp
+template <typename C>
+concept Codec = requires(C c, std::span<const std::byte> frame, ConnCtx& conn, EventEmitter& out) {
+    { c.decode(frame, conn, out) } -> std::same_as<Status>;
+};
+```
+
+- `JsonCodec`：simdjson on-demand 解析，数值字符串直接解析为定点 raw，不经过浮点。
+- `SbeCodec`：由 Real Logic `sbe-tool` 从 `specs/sbe/binance/*.xml` 生成 C++ 解码器，生成物入库；`just sbe-check` 在 CI 中重新生成并比对。每条消息校验头部的 schema `id:version`；未知模板返回 `Status::UnsupportedMessage` 并计数，原始帧保留在原始帧文件中。SBE 的十进制以 mantissa 与 exponent 分开编码，由 `Price::from_mantissa_exp` 转换。交易所的弃用信号（REST 的 `X-MBX-SBE-DEPRECATED` 响应头、WS API 的 `sbeSchemaIdVersionDeprecated` 字段）转为遥测告警与 readiness 警告，可配置为立即失败。
+- 两种 Codec 都在 IO 线程运行，产出同样的归一化定点事件。环中传递的是归一化事件，内核不知道线上格式。
+
+Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
+
+| 产品与通道 | JSON | SBE |
+| --- | --- | --- |
+| USDⓈ-M 行情流 | 有 | 文档未提供 |
+| USDⓈ-M 用户数据流、WS API、REST | 有 | 文档未提供 |
+| Spot 行情流 | 有 | 有：`wss://stream-sbe.binance.com:9443`，需 Ed25519 API key；`<symbol>@trade`、`<symbol>@bestBidAsk`、`<symbol>@depth`（20ms）、`<symbol>@depth20`（50ms）；时间戳为微秒 |
+| Spot REST | 有 | 有：`Accept: application/sbe` 与 `X-MBX-SBE: <id>:<version>` |
+| Spot WS API | 有 | 有：连接参数 `responseFormat=sbe&sbeSchemaId=&sbeSchemaVersion=` |
+
+因此 USDⓈ-M 在 v1.0 使用 `JsonCodec`，`SbeCodec` 随 Spot venue 在 v1.x 交付。若 USDⓈ-M 开放 SBE，只需新增 schema 与生成代码，内核与策略不受影响。
+
+### 13.4 录制：原始帧与解码事件都保留
+
+- **解码事件日志**：归一化事件，即 WAL，回放只读这一份（第 16 节）。
+- **原始帧文件**：每个连接一份，记录 `(recv_ts, conn_id, len, bytes)`，由 IO 线程写入。`persistence.raw_frames` 可设为 `true`、`false` 或 `sampled`。
+
+只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis redecode raw.bin --codec sbe@<id>:<ver>` 可以从原始帧重建解码日志用于研究。
+
+---
+
+## 14. Binance USDⓈ-M 适配器
+
+### 14.1 连接拓扑
+
+| 连接 | 地址 | 内容 | 线程 |
+| --- | --- | --- | --- |
+| 行情（高频） | `wss://fstream.binance.com/public/stream?streams=...` | `@depth@100ms`、`@bookTicker` | md-io |
+| 行情（常规） | `wss://fstream.binance.com/market/stream?streams=...` | `@aggTrade`、`@markPrice@1s`、`@kline_*`、`@forceOrder` | md-io |
+| 用户数据流 | listenKey 连接 | `ORDER_TRADE_UPDATE`、`TRADE_LITE`、`ACCOUNT_UPDATE`、`MARGIN_CALL`、`ACCOUNT_CONFIG_UPDATE`、`listenKeyExpired` | ud-io |
+| WS API | `wss://ws-fapi.binance.com/ws-fapi/v1` | `session.logon`、`order.place`、`order.modify`、`order.cancel`、`order.status` | order-sender |
+| REST | `https://fapi.binance.com` | `exchangeInfo`、`listenKey`、`positionSide/dual`、快照、`countdownCancelAll`、下单兜底 | order-sender 与启动阶段 |
+
+- 流在 `/public` 与 `/market` 之间的归属按交易所当前文档划分，实施时逐条核对。
+- 单个行情连接最多 1024 个流、24 小时有效；客户端发往服务端的消息每秒不超过 10 条，ping、pong 帧与订阅类控制消息都计入；服务端每 3 分钟发 ping，10 分钟无 pong 即断开。
+- WS API 连接同样 24 小时有效；`session.logon` 只接受 Ed25519 key，登录后请求无需逐条签名。`ORDERS` 限额与 REST 共享，`REQUEST_WEIGHT` 按 IP 单独计算。
+- 用户数据流不能通过 WS API 连接接收，需要单独连接。
+
+### 14.2 流与事件的映射
+
+| 流 | 字段 | 事件 |
+| --- | --- | --- |
+| `<s>@aggTrade` | `a` → `trade_id`；`p`、`q` → 定点价格与数量；`T` → `ts_event`；`m`（买方是 maker）为真 → `aggressor_side = SELL`，否则 `BUY` | `TradeTick` |
+| `<s>@bookTicker` | `b`、`B`、`a`、`A`；`T` → `ts_event`；`u` 用于去重 | `QuoteTick` |
+| `<s>@depth@100ms` | `U`、`u`、`pu`、`b`、`a`；同步后才产出 | `OrderBookDeltas` |
+| `<s>@markPrice@1s` | `p`、`i`、`r`、`T`（下次资金费时间） | `MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate` |
+| `<s>@kline_<interval>` | 只取已收盘（`x = true`）的 K 线；`ts_event` 为收盘时间 | `Bar`（`...-EXTERNAL`） |
+| `<s>@forceOrder` | 强平订单 | `LiquidationOrder`（扩展类型） |
+
+USDⓈ-M 的 `aggTrade` 把同一 taker 订单在同一价位的多笔成交聚合为一条，`TradeTick.size` 是聚合量，`trade_id` 是聚合 ID。
+
+### 14.3 订单簿同步
+
+![F6 depth 同步状态机](figures/F6-depth-sync.svg)
+
+*F6：先缓冲增量，再取快照，丢弃过旧事件，要求首条事件覆盖快照 ID 且后续事件首尾相接，否则回到缓冲重新同步。*
+
+规则（按交易所文档）：
+
+1. 订阅 `<s>@depth@100ms`，缓存收到的每条事件。
+2. `GET /fapi/v1/depth?symbol=<S>&limit=1000` 取快照，记 `lastUpdateId = L`。请求在途时继续缓存。
+3. 丢弃 `u < L` 的事件。
+4. 第一条被应用的事件必须满足 `U ≤ L ≤ u`。
+5. 之后每条事件的 `pu` 必须等于上一条的 `u`，否则回到第 2 步。
+6. 事件中的数量是该价位的绝对数量，数量为 0 表示删除该价位；删除本地不存在的价位是正常情况。
+
+jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `OrderBookDeltas`，末条带 `F_SNAPSHOT | F_LAST`；断链或重连时发出 `CLEAR` 并把该簿标记为不可用，策略在此期间看不到这本簿。该状态机是规约 `DepthSync` 的对象。快照请求消耗 REST 权重，重同步受专门的令牌桶约束，避免断链风暴耗尽权重。
+
+### 14.4 下单通道
+
+- 主通道是 WS API：连接后 `session.logon`（Ed25519），之后 `order.place / order.modify / order.cancel` 无需逐条签名。
+- WS API 不可用时退回 REST 下单，同样签名，同样受令牌桶约束。
+- 每个命令先写入 WAL（`barrier` 模式下等待落盘）再发送；发出而未收到回执的命令组成 in-flight 集合，是对账的输入。
+- `timestamp` 与 `recvWindow`（默认 5000 毫秒）按服务器时间偏移校正；偏移与 `-5028`（超出撮合引擎 recvWindow）作为指标监控。
+
+### 14.5 用户数据流
+
+- `POST /fapi/v1/listenKey` 获取，每 30 分钟 `PUT` 续期（listenKey 有效期 60 分钟），收到 `listenKeyExpired` 或续期失败时重新获取并重连，然后走对账流程。
+- 事件处理：`ORDER_TRADE_UPDATE` 与 `TRADE_LITE` 见第 8 节；`ACCOUNT_UPDATE` 置位余额与仓位，原因为 `FUNDING_FEE` 时产生 `PositionAdjusted(Funding)`；`MARGIN_CALL` 推动 TradingState；`ACCOUNT_CONFIG_UPDATE` 更新杠杆与多资产模式，与配置不符时告警。
+
+### 14.6 启动检查与 instrument 加载
+
+启动时依次完成，任一失败则拒绝启动：
+
+1. `exchangeInfo`：构造 `CryptoPerpetual`，由 filters 生成 Gate B 规则；`status ≠ TRADING` 的 instrument 标记为不可交易。
+2. `positionSide/dual`：与 `account_mode` 一致。
+3. 每个 instrument 的杠杆与保证金模式：与配置一致（默认 USDT 单资产、全仓）。
+4. API key 权限与 IP 白名单：key 必须具备交易权限、不具备提现权限。
+5. 服务器时间偏移在阈值内。
+
+运行中 `exchangeInfo` 的变化（tick size、状态）以 `InstrumentStatus` 或 instrument 更新事件进入内核。
+
+### 14.7 限速
+
+默认的自限速低于交易所上限：请求权重每分钟 2400、订单每 10 秒 300、每分钟 1200。具体数值取自配置，并由 `RateLimitFeedback` 事件校正（第 10.4 节）。HTTP 429 立即退避，418 进入 `Degraded`。
+
+---
+
+## 15. Reconciliation
+
+![F7 对账时序](figures/F7-reconciliation.svg)
+
+*F7：先订阅用户流并只缓冲，再取快照，逐单比对并合成漏掉的成交，只应用比快照更新的缓冲事件，最后才进入 Synced 并武装 `countdownCancelAll`。*
+
+### 15.1 会话状态
+
+`Disconnected → Buffering → Snapshotting → Reconciling → Synced`。进入 `Synced` 之前 TradingState 固定为 `Halted`。
+
+朴素做法"先取快照、再订阅"会丢失两者之间的事件，所以顺序必须是先订阅、后快照。
+
+### 15.2 步骤
+
+1. 连接用户数据流并缓冲，不应用。
+2. 取快照：账户（余额、仓位）、`openOrders`、`positionRisk`，记录快照的 `updateTime = T_s`。
+3. 对每个本地非终态订单（含 in-flight 集合中的命令）：
+   - 在 `openOrders` 中：采纳交易所的 `executedQty` 与状态。
+   - 不在：`GET /fapi/v1/order?origClientOrderId=...` 查询终态并补发对应事件；返回 `-2013` 且超过宽限期，判为 `Denied(LOST)`。
+   - 对有成交的 symbol 调用 `userTrades`，从最后已知的 `tradeId` 开始，合成漏掉的 `OrderFilled`（含手续费与已实现盈亏）。
+4. 交易所有、本地没有的订单：若 `ClientOrderId` 可解码为本节点上一 epoch，按遗留订单处理；否则视为外部订单。按配置 adopt（纳入管理）或 cancel。
+5. 仓位与余额以快照**置位**，不做增量推导；与本地计算值的差异写成 `ReconciliationDiff` 事件并进入指标。
+6. 回放缓冲：只应用 `updateTime > T_s` 的事件，成交按 `(symbol, orderId, tradeId)` 去重。
+7. 产出 `ReconcileOutcome`，策略收到 `on_reconciled`，随后 `on_start`（首次启动）；TradingState 恢复为配置初值；为有挂单的 symbol 武装 `countdownCancelAll`。
+
+### 15.3 重连与持续对账
+
+- 断线重连走同一流程（Node 从 `Degraded` 回到 `Syncing`）。
+- 24 小时强制断线与 listenKey 过期是计划内事件，同样走该流程，不作为故障告警。
+- 运行中每 60 秒做一次轻量对账：本地在途订单集合对比 `openOrders`，仓位对比 `positionRisk`。发现差异时产生 `ReconciliationDiff`，差异超过阈值则把 TradingState 降为 `Reducing` 并告警。
+
+### 15.4 记录形式
+
+`VenueSnapshot`、`ReconciliationDiff`、`ReconcileOutcome` 都是 WAL 事件。规约 `Reconciliation` 的反向验证直接读取它们（第 18 节）。协议的正确性性质是：进入 `Synced` 时，本地订单集合与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏。
+
+---
+
+## 16. 数据与持久化
+
+### 16.1 事件日志
+
+事件日志同时是 WAL、回放输入和 ADR 0001 第 6 条要求的确定性 trace。
+
+- 文件按段滚动：`runs/{node_id}/{run_id}/events-{segment}.jlog`，每段开头是日志头（第 5.6 节）。
+- 记录采用显式编码的定宽字段、小端序，从不序列化结构体填充、指针或容器容量：
+
+```
+seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | crc32c: u32
+```
+
+- `payload` 按 `kind` 有固定布局；变长类型（如 `OrderBookDeltas`）为定长头加定长元素数组。
+- 输入事件与内核输出的命令都写入日志，输出记录携带引起它的输入的 `seq`。回放以输入重算，以输出比对。
+- 原始帧文件另存（第 13.4 节）。
+
+提议（Proposed）：用 SBE XML 定义日志记录 schema，其他语言的读取器由代码生成而不是手写。
+
+### 16.2 持久化模式
+
+| 模式 | 行为 | 适用 |
+| --- | --- | --- |
+| `none` | 不写日志 | 研究型回测 |
+| `async` | persist 线程批量追加并 `fdatasync`，core 不等待 | 默认；本地状态丢失由对账协议恢复 |
+| `barrier` | order-sender 发送命令前等待 `persisted_seq ≥ cmd.seq` | 需要"发出的命令一定在本地有记录"的场景 |
+
+默认选 `async` 的理由是：对账协议本来就要处理本地状态丢失（崩溃、磁盘故障），把它当作恢复机制比让每个命令等待落盘更合理。
+
+### 16.3 快照与恢复
+
+- 每 `snapshot_every` 条事件写一次 `EngineState` 快照（同样是定宽显式编码），包含策略状态哈希；之后可截断更早的日志段。
+- 恢复 = 最近快照 + 日志尾部回放 + 对账。
+
+### 16.4 命令行工具
+
+| 命令 | 作用 |
+| --- | --- |
+| `jarvis replay <log> [--until seq] [--dump-state]` | 回放日志，可停在某个 `seq` 输出状态 |
+| `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
+| `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
+| `jarvis trace-export <log> --spec <X>` | 按规约变量投影日志，生成 `Trace.tla`（第 18 节） |
+
+### 16.5 Parquet 互转
+
+- 与 nautilus 数据目录的互转只在 Python 中实现（pyarrow），Arrow C++ 不进入内核构建（`init-project.md` 把引入 Arrow C++ 列为切换依赖管理方式的触发条件）。
+- 布局：`{root}/data/{type_dir}/{identifier}/{start}_{end}.parquet`；价格、数量、金额为 `Decimal128(38, 16)`；时间戳为 `Timestamp(ns, UTC)`；枚举为 `Dictionary(Int8, Utf8)`；schema 元数据含 `instrument_id`、`price_precision`、`size_precision`。
+- 转换器同时支持 data.binance.vision 的 CSV 归档到解码日志的转换。
+
+---
+
+## 17. 测试 harness 与变更门禁
+
+### 17.1 三层与门禁顺序
+
+任何改动先过功能测试，再做性能对比；触及核心路径的改动还必须通过形式化验证。
+
+| 层 | 内容 | 何时必须通过 |
+| --- | --- | --- |
+| 功能 | 单元与性质测试、pytest、golden trace 回放、环境等价测试、确定性指纹、sanitizer、零分配门、分层门、freestanding 门 | 每个改动 |
+| 性能 | 同一台机器上 merge-base 与 head 的 A/B 基准对比 | 每个改动，功能层通过之后 |
+| 形式化 | 受影响规约的 TLC 检查、正向与反向 trace validation | 改动触及核心路径时，功能层通过之后 |
+
+### 17.2 功能层
+
+- **C++ 单元与性质测试**：doctest，每层一个测试二进制（`tests/cpp/test_<layer>.cpp`）以控制编译时间；ctest 标签 `unit`、`property`、`conformance`、`golden`。性质测试使用 `jarvis::testkit::Gen`（splitmix64），由 `JARVIS_PROP_SEED` 与 `JARVIS_PROP_ITERS` 控制，CI 用三个固定种子。
+- **pytest**（`python/tests`）：nautilus 字符串格式往返、`Node` 与 `Strategy` API、Python 策略回放、确定性守卫。
+- **golden trace**：`tests/golden/<case>/{input.jlog, expected.commands.jlog, expected.sha256}`，`jarvis replay` 的输出与期望逐字节比较；`just golden-update` 重新生成，变更在 review 中可见。
+- **环境等价测试**：sandbox 录制 → 同一策略文件的 backtest 回放，命令流逐字节相同（第 4.6 节）。
+- **确定性指纹**：现有 CI 的 determinism job 从占位变为真实检查，比较 `rel` 与 `det-o0` 两个构建在 golden 用例上的输出。
+- **sanitizer**：现有 `dev` preset（ASan + UBSan）× gcc-13 / clang-18 / AppleClang 矩阵；新增 `tsan` preset 覆盖 shell 中的环与 IO 线程；新增 `fuzz` preset（`-fsanitize=fuzzer`）覆盖 Codec、WebSocket 帧层、HTTP 解析，语料入库，PR 中每个目标 60 秒，nightly 10 分钟。
+- **零分配门**：debug 构建替换 `operator new` 计数，`step` 内发生任何分配即测试失败。
+- **分层门**：`tools/check-layering.py`。
+- **freestanding 门**：`jarvis_kernel_freestanding` include 全部内核头。
+
+### 17.3 性能层
+
+- 基准分为 `benchmarks/hot/`（门禁）与 `benchmarks/report/`（只报告）。
+- 门禁基准：
+
+| 基准 | 测什么 |
+| --- | --- |
+| `step/quote_to_command` | 一条报价进入到 C++ 策略产出命令 |
+| `step/trade_to_strategy` | 一条成交进入到策略回调 |
+| `book/apply_l2_delta` | 订单簿应用一条增量 |
+| `oms/apply_order_event` | OMS 应用一个订单事件 |
+| `risk/gate_a`、`risk/gate_b` | 两道闸各自的耗时 |
+| `codec/json_aggTrade`、`codec/json_bookTicker`、`codec/json_depth` | JSON 解码 |
+| `codec/sbe_trade` | SBE 解码（Spot 上线后） |
+| `log/append_record` | 日志记录编码 |
+| `ring/spsc_roundtrip` | SPSC 环往返 |
+| `sim/match_top_of_book`、`sim/match_queue_position` | 撮合 |
+| `py/callback_on_quote` | 一次 Python 回调 |
+
+- 只报告的基准：完整回测吞吐、Python 端到端回放、对账耗时、启动耗时。
+- **对比方法**：`tools/bench_compare.py base.json head.json --thresholds benchmarks/thresholds.toml`。阈值文件为每个基准定义 `max_regression_pct`、`gating`、`abs_floor_ns`（绝对值低于该下限的变化忽略）。取 `--benchmark_repetitions=10 --benchmark_min_time=0.5s --benchmark_enable_random_interleaving=true` 的中位数比较。
+- **降噪**：从不与另一台虚拟机产生的 JSON 比较。PR job 用 `git worktree` 同时构建 merge-base 与 head，在同一台 runner 上用 `taskset` 绑核交替运行；回归必须在三轮 A/B 中复现两轮才判定。GitHub 托管 runner 上阈值为 10%；自托管 runner（`isolcpus`、performance 调速器、关闭 SMT）就绪后，核心路径阈值 3%，其他 5%。`main` 分支的基准结果归档为构件，只用于趋势图。
+
+### 17.4 形式化层
+
+- 规约位于 `specs/tla/`，TLC 使用钉定 SHA-256 的 `tla2tools.jar`，runner 安装 Temurin 17。
+- `specs/tla/MAP.toml` 把规约映射到源码路径，CI 据此判断一个改动影响哪些规约：
+
+```toml
+[OrderLifecycle]
+paths = ["jarvis/execution/order_fsm.hpp", "jarvis/execution/order_core.hpp",
+         "jarvis/model/events/order_*.hpp", "jarvis/model/enums/order_status.hpp"]
+forward = true
+backward = true
+budget_min = 10
+
+[Reconciliation]
+paths = ["jarvis/execution/reconcile/**", "jarvis/live/sync*.hpp",
+         "jarvis/adapter/binance/user_stream*.hpp"]
+forward = true
+backward = true
+budget_min = 20
+
+[TradingState]
+paths = ["jarvis/risk/trading_state.hpp", "jarvis/risk/token_bucket.hpp", "jarvis/risk/monitors/**"]
+forward = true
+backward = false
+budget_min = 5
+
+[Matching]
+paths = ["jarvis/backtest/matching/**", "jarvis/execution/algorithms/**"]
+forward = true
+backward = false
+budget_min = 15
+
+[DepthSync]
+paths = ["jarvis/adapter/binance/depth_sync*.hpp", "jarvis/data/book/**"]
+forward = true
+backward = false
+budget_min = 5
+
+[global]
+always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"]   # 触及即运行全部规约
+```
+
+- `tools/tla/select.py --base <merge-base>` 输出受影响的规约列表；改动 `.tla` 文件本身也会触发该规约；每周运行一次全量。
+
+### 17.5 核心路径的机械定义
+
+```
+核心路径 = MAP.toml 中所有 paths
+        ∪ jarvis/core/** ∪ jarvis/engine/** ∪ jarvis/execution/** ∪ jarvis/risk/**
+        ∪ jarvis/backtest/matching/** ∪ jarvis/data/book/**
+        ∪ specs/**
+```
+
+该集合生成到 `tools/core-paths.txt`，`select.py` 与 PR 标签机器人共用。触及核心路径的 PR 自动打上 `core` 标签，形式化层成为必需检查，性能阈值收紧。
+
+### 17.6 CI 作业图
+
+```
+lint ──┐
+       ├─ functional（dev 矩阵：ctest + pytest + golden + zero-alloc + layering）
+       │      ├─ determinism（rel 对比 det-o0）
+       │      ├─ bench-compare（A/B，依赖 functional）
+       │      └─ formal（依赖 functional；仅当触及核心路径）
+       └────────────── gate（必需检查，依赖以上全部）
+
+nightly：fuzz 10 分钟 · tsan · 全部规约 · 最近一次 soak 日志的反向验证 · 1 小时 sandbox soak
+main：   bench-archive
+```
+
+bench-compare 与 formal 都依赖 functional，两者并行运行以节省时间。功能层不通过，后两层不会开始，门禁顺序得以保持。
+
+### 17.7 just 配方
+
+| 配方 | 作用 |
+| --- | --- |
+| `just check` | 推送前的本地全套：`lint`、`test`、`golden`、`fp`、`bench-compare`、`tla-changed` |
+| `just test` / `just test-rel` | 构建并运行 ctest 与 pytest |
+| `just golden` / `just golden-update` | golden 回放比较 / 重新生成 |
+| `just fp` | 确定性指纹比较 |
+| `just zero-alloc` / `just layering` | 零分配门 / 分层门 |
+| `just bench` / `just bench-compare base=main` | 基准 / A/B 对比 |
+| `just tla spec=<name>` / `just tla-changed` | 运行指定规约 / 运行受影响规约 |
+| `just trace-forward spec=<name>` / `just trace-backward log=<path> spec=<name>` | 正向 / 反向 trace validation |
+| `just fuzz target=<name> time=60` | 运行 fuzz 目标 |
+| `just soak env=sandbox hours=1` | soak 测试 |
+| `just sbe-regen` / `just sbe-check` | 重新生成 / 校验 SBE 代码 |
+
+---
+
+## 18. 形式化验证
+
+![F8 双向 trace validation](figures/F8-trace-validation.svg)
+
+*F8：同一份规约既由 TLC 生成行为去驱动 C++ `step` 做逐步比较，也用来检查从真实事件日志导出的 trace。改动的文件经 `MAP.toml` 决定运行哪些规约。*
+
+### 18.1 规约清单
+
+每个规约控制在 300 行以内。
+
+| 规约 | 对象 | 主要不变量与性质 | 验证方式 |
+| --- | --- | --- | --- |
+| `OrderLifecycle` | 订单状态机（第 8 节） | 状态转移属于允许集合；`filled_qty ≤ quantity`；`leaves_qty = quantity − filled_qty`；同一 `trade_id` 不重复计入；`Pending*` 期间的成交保留 `previous_status` | TLC 模型检查；正向与反向 trace validation |
+| `Reconciliation` | 对账协议（第 15 节） | 交易所被建模为会重排、重复、延迟用户流消息，并可在任意时刻给出快照的进程；进入 `Synced` 时本地订单与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏；`Synced` 之前 TradingState 为 `Halted` | TLC 模型检查；正向与反向 trace validation |
+| `TradingState` | 风控状态与令牌桶（第 10 节） | 只有列出的角色能转移状态；`Halted → Active` 只能经 admin；`Halted` 下没有提交通过；令牌数不为负；任一窗口内通过的提交数不超过容量 | TLC 模型检查；不变量加生成行为 |
+| `Matching` | 回测撮合器与执行算法（第 11、12 节） | 价格—时间优先；成交守恒（taker 成交量等于各 maker 成交量之和）；撮合后簿不交叉；`GTX` 从不吃单；排队位置单调不增 | TLC 模型检查；不变量加生成行为 |
+| `DepthSync` | 订单簿同步（第 14.3 节） | 只有在事件链连续时才应用；`Synced` 状态下本地簿等于交易所簿（交易所簿抽象建模）；每次断链都导致重新同步；策略从不看到未同步的簿 | TLC 模型检查；不变量加生成行为 |
+
+### 18.2 正向与反向验证
+
+- **正向**：`tools/tla/behaviours.py` 用 TLC 的模拟与导出模式生成行为（动作序列与状态），输出 JSON。`trace_driver` 经 `specs/map/<spec>_actions.hpp` 把规约动作映射为内核事件，逐步调用 `step`，并在每一步比较实现状态在规约变量上的投影。第一处偏差即失败，报告 `seq` 与动作。
+- **反向**：`jarvis trace-export <log> --spec <X>` 把事件日志投影为规约变量上的一条行为 `Trace.tla`，由 TLC 检查它是否是规约的合法行为（精化）以及是否满足不变量。PR 中对 golden 日志运行，nightly 对最近一次 soak 日志运行。
+
+### 18.3 规约与代码的同步规则
+
+1. 规约是转移关系的唯一来源。C++ 中的订单状态转移表、TradingState 转移表由规约核对，核对失败即构建失败。
+2. 修改 `MAP.toml` 中的任一路径，必须运行对应规约（CI 自动执行）。
+3. 修改规约的动作集合，必须同步修改 `specs/map/` 中的映射头；映射头用 `static_assert` 检查动作数量一致。
+4. 新增核心对象时，先写规约并加入 `MAP.toml`，再写实现。
+
+---
+
+## 19. 运维与分片
+
+### 19.1 配置与密钥
+
+- `NodeConfig` 的 hash 写入日志头。testnet 与 prod 是不同的 endpoint 配置值，不存在默认指向 prod 的布尔开关。
+- 密钥只以引用形式出现在配置中（`env:` 或权限为 0600 的文件路径）。签名经 `Signer` 接口实现，Ed25519 使用 OpenSSL 3。启动时校验 key 的权限（有交易权限、无提现权限）与 IP 白名单。
+
+### 19.2 可观测性
+
+内核只产出整数编码的 `LogRecord{ code, args }` 与计数器，写入遥测环；shell 负责格式化为 JSON lines 并以 Prometheus 文本格式暴露。每条订单相关日志以 `client_order_id` 作为追踪 ID。
+
+必备指标：
+
+| 指标 | 用途 |
+| --- | --- |
+| 各环的深度与高水位 | 发现 core 处理不过来 |
+| `step` 耗时直方图（整数分桶） | 内核延迟 |
+| tick 到命令、命令到 socket 的延迟 | 端到端延迟 |
+| 重连次数、行情陈旧时长 | 连接健康 |
+| 对账差异数 | 本地与交易所的一致性 |
+| 各令牌桶余量、429/418 次数 | 限速 |
+| 按原因分类的拒单数 | 风控行为 |
+| TradingState、Node 状态 | 当前运行状态 |
+| 敞口与限额之比 | 风险 |
+| Python 回调耗时与超限次数 | 策略性能 |
+| 手续费估计与实际之差 | 成本模型偏差 |
+
+### 19.3 健康检查与 admin
+
+- readiness = 已同步 ∧ 行情新鲜 ∧ 用户流心跳正常。liveness = core 线程在规定时间内推进了 `seq` 或处于空闲。
+- admin 命令经 Unix socket 进入，作为记录事件处理，因此可审计、可回放：`halt`、`reduce`、`resume`、`cancel_all`、`set_param`、`snapshot`、`shutdown`。
+
+### 19.4 关停
+
+`SIGTERM` → `Shutdown{ mode }` 事件。默认模式 `cancel_all_then_exit`：TradingState 置 `Halted`，撤销全部订单，等待用户流确认终态（带超时），排空出站环与 persist 环，以 `countdownTime = 0` 解除 `countdownCancelAll`，写最终快照，退出。超时未确认时保留 `countdownCancelAll`，由交易所兜底。
+
+### 19.5 分片
+
+单个 core 线程处理一个事件约 1–5 µs，只要 TLS、解码与流过滤在 IO 线程完成，可以覆盖数十个 USDⓈ-M 合约的 `bookTicker + depth@100ms + aggTrade`。需要扩展时按 instrument 分片：
+
+- 一个分片 = 一个 Node（一个 Engine、自己的环、order-sender 与日志），拥有不相交的 instrument 集合。
+- 账户级限额（保证金、日内亏损、总名义）按分片分配静态预算，由慢速控制面事件再平衡。不使用跨分片共享的原子变量，因为它不确定、不可回放。
+- `ACCOUNT_UPDATE` 扇出到每个分片，各分片只处理自己的 instrument。跨 instrument 的策略必须位于同一分片。
+- 分片编号从第一天起进入 `ClientOrderId` 的 `node_tag`、日志文件名和指标标签。
+
+### 19.6 部署
+
+生产实盘只支持 Linux；macOS 支持开发、回测与 testnet。建议：core 线程绑定到 `isolcpus` 隔离的核；IO 线程与 core 位于同一 NUMA 节点；关闭透明大页的自动合并；网卡中断绑到非 core 核；chrony 同步时钟，服务器时间偏移作为指标监控；以 systemd 管理进程，`SIGTERM` 超时后才 `SIGKILL`。
+
+---
+
+## 20. 决策记录与开放问题
+
+### 20.1 决策记录
+
+| 编号 | 决策 | 状态 | 放弃的方案 | 影响 |
+| --- | --- | --- | --- | --- |
+| D01 | 价格、数量、金额采用 nautilus 定点表示（raw 按 1e9 刻度，附 precision）；乘法用 `__int128`，向零截断 | Accepted，**修订 ADR 0001 第 1 条** | tick/lot 计数（原 ADR 0001 文字）；int128 高精度模式 | 与 nautilus 数据直接互通；仍是全整数；订单簿内部另做 tick 归一 |
+| D02 | 全序键为 `(ts, source_id, seq)`；实盘的全序是 core 的摄取顺序 | Accepted，**修订 ADR 0001 第 2 条** | 以 IO 线程时间戳排序 | 实盘确定性定义为"回放摄取日志逐字节复现输出" |
+| D03 | 确定性单写者内核 + IO 外壳 | Accepted | 多线程共享状态加锁 | 规约可建模；回测与实盘共用内核 |
+| D04 | Node 抽象；backtest、sandbox、live 三套接线；v1.0 含 sandbox | Accepted | 回测与实盘两套引擎 | 同一策略文件三环境运行；环境等价测试 |
+| D05 | Python 优先；Python 启动的混合节点 + 纯 C++ 节点 | Accepted | 只支持 Python；Python 与 C++ 严格分进程 | Python 与 C++ 策略可在同一节点共存 |
+| D06 | 热路径只用 concept 与封闭 variant；唯一例外是 `DynamicStrategySet` 的函数指针表 | Accepted | 虚函数接口 | 需修订 `cpp-subset.md` |
+| D07 | 只对齐 nautilus 的领域模型类型，引擎与算法自有设计 | Accepted | 移植 nautilus 架构 | 见附录 B |
+| D08 | 两道风控闸 + 共享预留敞口 | Accepted | 单一风控引擎位于执行引擎之前 | 执行算法无法绕过限额 |
+| D09 | OMS 类型由账户持仓模式决定；v1 无虚拟仓位 | Accepted | 策略自选 OMS 类型 | 对账不变量简单；默认 one-way |
+| D10 | 订单状态机以 nautilus 转移表为基线，新增 `Submitted → Expired` | Accepted | 自定义状态集合 | 事件与状态保持兼容 |
+| D11 | 撮合器是 in-loop 的 `VenueClient`，双时间线，成交模型为封闭 variant | Accepted | 撮合器作为独立进程 | 对账与规约可在回测中演练 |
+| D12 | 网络栈：standalone Asio + OpenSSL 3 + 自写帧层 + picohttpparser | Accepted | Boost.Beast、libuv、libwebsockets、uWebSockets、自研 reactor | 不引入 Boost |
+| D13 | io_uring 传输实现 | Proposed（M7） | | 需要实测收益 |
+| D14 | `Codec` 抽象；USDⓈ-M 用 JSON（simdjson），Spot 用 SBE | Accepted | 只支持 JSON | 线上格式变化不影响内核 |
+| D15 | 录制解码日志与原始帧两份 | Accepted | 只录其一 | 可重解码，可生成 fuzz 语料 |
+| D16 | 事件日志 = WAL = 确定性 trace；默认 `async` 持久化 | Accepted | 默认 `barrier` | 本地状态丢失由对账恢复 |
+| D17 | 日志记录 schema 用 SBE XML 定义 | Proposed | 手写读写代码 | 多语言读取器由生成得到 |
+| D18 | Parquet 互转只在 Python | Accepted | 内核链接 Arrow C++ | 内核构建保持轻量 |
+| D19 | 五个 TLA+ 规约 + 双向 trace validation | Accepted | 只写规约不做 trace validation | 规约与实现的偏差可被发现 |
+| D20 | 三层门禁顺序；核心路径按路径机械定义 | Accepted | 人工判断是否需要形式化验证 | 门禁可自动执行 |
+| D21 | 自托管基准 runner | Proposed | 只用托管 runner | 阈值可从 10% 收紧到 3–5% |
+| D22 | 不内置策略；示例只在 `examples/` 中供测试使用 | Accepted | 内置做市策略 | v1.0 的验收对象是系统能力 |
+| D23 | Binance USDⓈ-M 优先；WS API 为主通道；启用 `countdownCancelAll` | Accepted | Spot 优先；只用 REST | 做市类场景优先；有 venue 侧兜底 |
+| D24 | 内存：固定容量、竞技场、代际句柄、`OrderHandle`、零分配门 | Accepted | 动态分配 | 容量耗尽以 `Status` 报告；需修订 `cpp-subset.md` 中的 `OrderId` 命名 |
+
+对 ADR 0001 的修订（D01、D02）在 ADR 0001 文末的 Amendments 小节中登记。
+
+### 20.2 开放问题
+
+| 问题 | 推荐默认 | 何时决定 |
+| --- | --- | --- |
+| 是否增加第六个规约 `NodeLifecycle` | 增加，150 行以内；Node 状态机同样写入 WAL，可以直接做反向验证 | M5 之前 |
+| USDⓈ-M 是否会提供 SBE | 每个里程碑开始时核对官方文档；一旦提供就把 `SbeCodec` 前移 | 持续 |
+| 行情流在 `/public` 与 `/market` 路由间的划分、用户数据流的连接地址 | 按实施时的官方文档逐条核对，写入适配器配置 | M4 开始时 |
+| 自托管基准 runner | M3 之前准备一台隔离核的机器；此前使用 10% 阈值 | M3 之前 |
+| 两个节点共用一个账户 | 推荐使用子账户；必须共用时 instrument 集合不相交，由风控白名单强制 | M5 |
+| 延迟目标 | M5 实测后设定；暂定 C++ 策略一次报价更新的 `step` p99 低于 20 µs，tick 到 socket p99 低于 200 µs | M5 |
+| Python free-threading | M7 实验；GIL 策略在 free-threaded 解释器下仍然正确，只是加锁变为空操作 | M7 |
+| hedge 模式 | v1.x 实现，接口从 v1.0 起预留 `positionSide` | M6 |
+| testnet 的真实性 | testnet 只用于协议一致性；成交质量用生产环境小资金验证 | M5 |
+| 保证金模式 | 默认单资产 USDT、全仓；启动检查拒绝不一致 | M4 |
+| `priceMatch` | v1.x 作为 `PeggedQuote` 的可选模式评估 | M6 |
+
+---
+
+## 21. 附录
+
+### A. 术语表
+
+| 术语 | 含义 |
+| --- | --- |
+| Node | 组合根；一个 Engine、一份日志、一套接线 |
+| Engine | 确定性内核，`step(S, e) → (S′, out[])` |
+| EngineState | 内核的全部状态，存于竞技场 |
+| Context | 策略访问内核的唯一接口 |
+| Router / SubscriptionMatrix | 事件到策略的投递机制 |
+| StrategySet | 一组策略的分发方式，静态或动态 |
+| Gate A / Gate B | 意图级与子单级风控闸 |
+| open_exposure | 持仓 + 在途子单 + 父单剩余 |
+| TradingState | `Active / Reducing / Halted` |
+| KillSwitch | Halted + 撤全单 + 等待确认 |
+| in-flight 集合 | 已写 WAL、未收回执的命令 |
+| WAL | 事件日志，同时是回放输入与确定性 trace |
+| 摄取顺序 | 实盘中 core 线程从入站环取出事件的顺序 |
+| 双时间线 | venue 的 `ts_event` 与策略的 `ts_init` |
+| sandbox | 实盘行情 + 模拟撮合 + 真实时钟 |
+| 核心路径 | 必须通过形式化验证的源码路径集合 |
+
+### B. 与 nautilus 的差异表
+
+| 领域 | nautilus | jarvis | 为什么 |
+| --- | --- | --- | --- |
+| 事件路由 | `MessageBus`：字符串 topic、通配订阅、处理器列表 | `Router`：封闭 variant + `SubscriptionMatrix` 位图 | O(1)、无分配、编译期穷尽、投递顺序固定 |
+| 状态访问 | `Cache`：订单、仓位的第二份拷贝 | `EngineState` 竞技场 + `Context` 视图 | 单一事实来源，快照即竞技场拷贝 |
+| 组件 | `Actor`、`Component` 各自有生命周期状态机 | `Strategy` concept + 单一 Node 状态机，`on_start/on_stop` 是记录事件 | 只需验证一个状态机，不存在半启动的组件 |
+| 节点装配 | 运行时组装 `Trader` 与各引擎 | `Node<StrategySet>` 模板 + 静态接线 variant | 纯 C++ 节点零间接 |
+| 配置 | 嵌套字典 | 类型化 TOML，未知键报错，hash 写入日志 | 配置可复现 |
+| 订阅 | topic 加元数据字典 | 类型化 `Subscription{ slot, kind, cadence }` + `FeatureGraph` | 合并与采样是内核语义，可回放 |
+| 风控与执行 | RiskEngine 位于 ExecutionEngine 之前 | Gate A（意图）与 Gate B（子单），共享预留敞口 | 执行算法无法绕过；venue filters 在生效处检查 |
+| 执行算法 | 通过消息总线派生子单的 actor | concept、`AlgoState` 竞技场、在 `step` 内运行、感知令牌预算 | 确定性，被规约覆盖 |
+| 生命周期 | 每个组件 `PRE_INITIALIZED … FAULTED` | 每个 Node `Init … Stopped / Faulted`，转移是 WAL 事件 | 可回放，可做 TLA+ 检查 |
+| `ClientOrderId` | 含墙钟时间的格式 | `{node_tag}-{epoch}-{seq}`，可解码 | 无墙钟；遗留订单可识别 |
+| `BarType` | 运行时解析字符串 | 字符串用于互操作，内部为 `BarKey(uint32)` | 热路径不解析字符串 |
+| TWAP | 等分市价切片 | 确定性切片计划 × 每片 `PassiveThenAggressive` | 更低的吃单成本，建立在经过测试的原语上 |
+| 对账 | `ExecutionMassStatus` 与各类 `*StatusReport` | `VenueSnapshot`、`ReconciliationDiff`、`ReconcileOutcome` WAL 事件 | 规约反向验证直接读取 |
+| Portfolio | 消息总线订阅者，收到事件后重算 | 在 `step` 内由 OMS 输出更新，`MarginModel` concept | 每一步结束时都一致 |
+| 撮合与成交模型 | 撮合引擎 + 成交模型 | 双时间线、counter-based 延迟、以成交流驱动的队列位置模型 | 延迟与排队可复现 |
+| 网络 | Rust tokio 生态 | standalone Asio + 自写帧层 + Codec 抽象 | C++20 生态下的低拷贝路径 |
+
+### C. nautilus 源码速查
+
+对齐目标提交 `cd417b80` 中的权威位置：
+
+| 内容 | 路径 |
+| --- | --- |
+| 定点常量与值类型 | `crates/model/src/types/{fixed,price,quantity,money,currency}.rs` |
+| 标识符 | `crates/model/src/identifiers/*.rs` |
+| 行情数据类型 | `crates/model/src/data/*.rs` |
+| Instrument | `crates/model/src/instruments/*.rs` |
+| 枚举 | `crates/model/src/enums.rs` |
+| 订单与状态转移 | `crates/model/src/orders/mod.rs`（`OrderStatus::transition`） |
+| 订单事件 | `crates/model/src/events/order/*.rs` |
+| 仓位 | `crates/model/src/position.rs` |
+| 账户 | `crates/model/src/accounts/`、`crates/model/src/events/account/state.rs` |
+| 费率 | `crates/model/src/fees.rs` |
+| Arrow schema | `crates/serialization/src/arrow/*.rs` |
+
+### D. 外部事实出处
+
+以下事实于 2026-09-26 按官方文档核对，实施对应里程碑时须再次核对：
+
+- Binance USDⓈ-M 通用信息、限速、签名：<https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info>
+- Binance USDⓈ-M WS API：<https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/websocket-api>
+- Binance USDⓈ-M 行情流连接规则：<https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Connect>
+- Binance USDⓈ-M 本地订单簿维护：<https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/How-to-manage-a-local-order-book-correctly>
+- Binance USDⓈ-M 用户数据流：<https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams>
+- Binance USDⓈ-M 下单参数与错误码：<https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api>、<https://developers.binance.com/docs/derivatives/usds-margined-futures/error-code>
+- Binance USDⓈ-M `countdownCancelAll`：<https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Auto-Cancel-All-Open-Orders>
+- Binance Spot SBE 行情流与 SBE FAQ：<https://developers.binance.com/docs/binance-spot-api-docs/sbe-market-data-streams>、<https://developers.binance.com/docs/binance-spot-api-docs/faqs/sbe_faq>
+- Asio 实现说明（epoll、io_uring、kqueue）：<https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/implementation.html>

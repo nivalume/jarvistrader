@@ -46,5 +46,6 @@ uv pip install --python .venv/bin/python --reinstall .
 - `testkit/`: compile-only freestanding guard
 - `tests/`: future C++ tests
 - `benchmarks/`: future benchmarks
-- `docs/`: deterministic-kernel constraints and C++ subset
+- `docs/`: deterministic-kernel constraints and C++ subset; the system design is in
+  [`docs/architecture.md`](docs/architecture.md) and the milestone plan in [`docs/plan.md`](docs/plan.md)
 - `cmake/`: vendored CPM.cmake and pinned dependency declarations

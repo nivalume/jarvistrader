@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 520" width="1080" height="520" role="img" aria-label="两道风控闸：Gate A 在执行算法之前按意图检查，便宜且早；Gate B 在子单进入 OMS 之前检查，有约束力；两者读取同一份风控状态，其中预留敞口包含父单剩余量" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="f5-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="f5-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1080" height="520" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- PortfolioConstruction (optional) -->
+  <rect x="170" y="30" width="120" height="44" rx="4" fill="#ffffff" stroke="#57606a" stroke-dasharray="4 3"/>
+  <text x="230" y="48" text-anchor="middle" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">Portfolio</text>
+  <text x="230" y="64" text-anchor="middle" font-size="11" font-family="ui-monospace, Menlo, Consolas, monospace">Construction</text>
+  <text x="298" y="42" font-size="10" fill="#57606a">可选</text>
+
+  <!-- command chain -->
+  <rect x="30" y="110" width="110" height="60" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="85" y="136" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Strategy</text>
+  <text x="85" y="154" text-anchor="middle" font-size="10" fill="#57606a">Python / C++</text>
+
+  <rect x="310" y="110" width="130" height="60" rx="4" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+  <text x="375" y="128" text-anchor="middle" font-weight="600">Gate A · 意图级</text>
+  <text x="375" y="144" text-anchor="middle" font-size="10" fill="#57606a">TradingState · 白名单</text>
+  <text x="375" y="158" text-anchor="middle" font-size="10" fill="#57606a">名义含预留敞口</text>
+
+  <rect x="470" y="110" width="120" height="60" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="530" y="136" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">ExecAlgorithm</text>
+  <text x="530" y="154" text-anchor="middle" font-size="10" fill="#57606a">父单 → 子单</text>
+
+  <rect x="620" y="110" width="130" height="60" rx="4" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+  <text x="685" y="128" text-anchor="middle" font-weight="600">Gate B · 子单级</text>
+  <text x="685" y="144" text-anchor="middle" font-size="10" fill="#57606a">filters · 令牌桶</text>
+  <text x="685" y="158" text-anchor="middle" font-size="10" fill="#57606a">positionSide · 保证金</text>
+
+  <rect x="780" y="110" width="110" height="60" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="835" y="136" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">OMS · FSM</text>
+  <text x="835" y="154" text-anchor="middle" font-size="10" fill="#57606a">OrderInitialized</text>
+
+  <rect x="920" y="110" width="130" height="60" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="985" y="136" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Venue</text>
+  <text x="985" y="154" text-anchor="middle" font-size="10" fill="#57606a">Binance 或模拟撮合</text>
+
+  <!-- chain arrows -->
+  <line x1="110" y1="110" x2="170" y2="72" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="112" y="84" text-anchor="end" font-size="10" fill="#57606a">目标仓位</text>
+  <line x1="290" y1="72" x2="340" y2="108" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="322" y="84" font-size="10" fill="#57606a">意图</text>
+  <line x1="140" y1="140" x2="308" y2="140" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="224" y="132" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">OrderIntent</text>
+  <line x1="440" y1="140" x2="468" y2="140" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="454" y="186" text-anchor="middle" font-size="10" fill="#57606a">父单</text>
+  <line x1="590" y1="140" x2="618" y2="140" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="604" y="186" text-anchor="middle" font-size="10" fill="#57606a">子单</text>
+  <line x1="750" y1="140" x2="778" y2="140" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="764" y="186" text-anchor="middle" font-size="10" fill="#57606a">通过</text>
+  <line x1="890" y1="140" x2="918" y2="140" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="904" y="186" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">Command</text>
+
+  <!-- timer loop on ExecAlgorithm -->
+  <path d="M505,110 C505,82 555,82 555,108" fill="none" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="530" y="74" text-anchor="middle" font-size="10" fill="#57606a">TimerFired：下一片</text>
+
+  <!-- venue events back into OMS (top loop) -->
+  <path d="M985,110 L985,86 L860,86 L860,108" fill="none" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="922" y="78" text-anchor="middle" font-size="10" fill="#57606a">ack · fill · cancel</text>
+
+  <!-- denial lane -->
+  <line x1="375" y1="170" x2="375" y2="222" stroke="#57606a"/>
+  <line x1="685" y1="170" x2="685" y2="222" stroke="#57606a"/>
+  <line x1="685" y1="222" x2="110" y2="222" stroke="#57606a"/>
+  <line x1="110" y1="222" x2="110" y2="172" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="230" y="238" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">OrderDenied{reason}</text>
+
+  <!-- OMS -> Portfolio -->
+  <line x1="870" y1="170" x2="870" y2="298" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="878" y="240" font-size="10" fill="#57606a">OrderFilled</text>
+  <rect x="860" y="300" width="180" height="44" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="950" y="318" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Portfolio</text>
+  <text x="950" y="334" text-anchor="middle" font-size="10" fill="#57606a">持仓 · 余额 · 保证金 · PnL</text>
+
+  <!-- shared risk state bar -->
+  <rect x="310" y="380" width="510" height="64" rx="4" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
+  <line x1="500" y1="380" x2="500" y2="444" stroke="#0969da" stroke-dasharray="3 3"/>
+  <text x="405" y="398" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">TradingState</text>
+  <text x="405" y="414" text-anchor="middle" font-size="10" fill="#57606a">Active · Reducing · Halted</text>
+  <text x="405" y="430" text-anchor="middle" font-size="10" fill="#57606a">由事后监控与 admin 推动</text>
+  <text x="660" y="398" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">open_exposure()</text>
+  <text x="660" y="414" text-anchor="middle" font-size="10" fill="#57606a">= 持仓 + 在途子单 + 父单剩余</text>
+  <text x="660" y="430" text-anchor="middle" font-size="10" fill="#57606a">十个 TWAP 切片不能各自过闸</text>
+
+  <!-- inputs into risk state -->
+  <line x1="530" y1="170" x2="530" y2="378" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="538" y="300" font-size="10" fill="#57606a">父单剩余</text>
+  <line x1="800" y1="170" x2="800" y2="378" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="792" y="300" text-anchor="end" font-size="10" fill="#57606a">在途子单</text>
+  <path d="M950,344 L950,412 L822,412" fill="none" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="958" y="380" font-size="10" fill="#57606a">持仓 · PnL</text>
+
+  <!-- gates read risk state (accent) -->
+  <line x1="375" y1="380" x2="375" y2="174" stroke="#0969da" marker-end="url(#f5-arrow-accent)"/>
+  <text x="367" y="300" text-anchor="end" font-size="10" fill="#0969da">读取</text>
+  <line x1="685" y1="380" x2="685" y2="174" stroke="#0969da" marker-end="url(#f5-arrow-accent)"/>
+  <text x="677" y="300" text-anchor="end" font-size="10" fill="#0969da">读取</text>
+
+  <!-- events back to strategy -->
+  <path d="M1030,344 L1030,480 L60,480 L60,172" fill="none" stroke="#57606a" marker-end="url(#f5-arrow)"/>
+  <text x="540" y="472" text-anchor="middle" font-size="10" fill="#57606a">OrderEvent · PositionEvent → Strategy.on_order_event / on_position</text>
+
+  <text x="20" y="508" font-size="11" fill="#57606a">两道闸都在 step 内同步执行；风控规则集是启动期固定的数组，热路径上没有虚函数。</text>
+</svg>

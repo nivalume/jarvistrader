@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 400" width="1060" height="400" role="img" aria-label="Binance USDⓈ-M 本地订单簿同步状态机：先缓冲 diff，再取 REST 快照，丢弃过旧事件，要求首条事件覆盖快照 ID 且后续 pu 与上一条 u 连续，断链则回到缓冲重同步" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="f6-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="f6-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1060" height="400" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- states -->
+  <rect x="30" y="150" width="110" height="44" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="85" y="177" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Idle</text>
+  <rect x="220" y="150" width="130" height="44" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="285" y="177" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Buffering</text>
+  <rect x="440" y="150" width="170" height="44" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="525" y="177" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">SnapshotRequested</text>
+  <rect x="700" y="150" width="130" height="44" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="765" y="177" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Validating</text>
+  <rect x="910" y="150" width="120" height="44" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
+  <text x="970" y="177" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">Synced</text>
+
+  <!-- forward edges -->
+  <line x1="140" y1="172" x2="218" y2="172" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="179" y="140" text-anchor="middle" font-size="10">订阅</text>
+  <text x="179" y="154" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">@depth@100ms</text>
+
+  <line x1="350" y1="172" x2="438" y2="172" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="394" y="140" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">GET /fapi/v1/depth</text>
+  <text x="394" y="154" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">limit=1000</text>
+
+  <line x1="610" y1="172" x2="698" y2="172" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="654" y="140" text-anchor="middle" font-size="10">快照到达</text>
+  <text x="654" y="154" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">lastUpdateId=L</text>
+
+  <line x1="830" y1="172" x2="908" y2="172" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="869" y="126" text-anchor="middle" font-size="10">首条满足</text>
+  <text x="869" y="140" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">U ≤ L ≤ u</text>
+  <text x="869" y="154" text-anchor="middle" font-size="10" fill="#57606a">应用快照 + 它</text>
+
+  <!-- buffering continues -->
+  <path d="M265,150 C265,110 305,110 305,148" fill="none" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="285" y="100" text-anchor="middle" font-size="10" fill="#57606a">每条 diff 入缓冲</text>
+  <path d="M505,150 C505,110 545,110 545,148" fill="none" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="525" y="100" text-anchor="middle" font-size="10" fill="#57606a">请求在途，继续缓冲</text>
+
+  <!-- validating drops stale -->
+  <path d="M745,194 C745,232 785,232 785,196" fill="none" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="765" y="248" text-anchor="middle" font-size="10">丢弃 u &lt; L</text>
+
+  <!-- synced self loop -->
+  <path d="M950,150 C950,108 990,108 990,148" fill="none" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="970" y="70" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">pu == 上一条 u</text>
+  <text x="970" y="84" text-anchor="middle" font-size="10" fill="#57606a">应用：绝对数量，0 删档</text>
+  <text x="970" y="98" text-anchor="middle" font-size="10" fill="#57606a">→ OrderBookDeltas</text>
+
+  <!-- validating fails -> buffering -->
+  <path d="M740,194 L740,290 L300,290 L300,196" fill="none" stroke="#57606a" marker-end="url(#f6-arrow)"/>
+  <text x="520" y="284" text-anchor="middle" font-size="10">缓冲中没有覆盖 L 的事件（快照太旧或太新）→ 重取快照</text>
+
+  <!-- gap -> buffering (accent) -->
+  <path d="M970,194 L970,340 L270,340 L270,196" fill="none" stroke="#0969da" stroke-dasharray="5 4" marker-end="url(#f6-arrow-accent)"/>
+  <text x="620" y="334" text-anchor="middle" font-size="10" fill="#0969da">pu ≠ 上一条 u（断链）或连接重建 → 发出 CLEAR，标记簿不可用，回到缓冲</text>
+
+  <text x="20" y="378" font-size="11" fill="#57606a">进入 Synced 时发出 CLEAR + 快照档位，末条带 F_SNAPSHOT | F_LAST；此前策略看不到这本簿。该状态机是 TLA+ 规约 DepthSync 的对象。</text>
+</svg>

@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" width="1080" height="700" role="img" aria-label="对账时序：先订阅用户流并只缓冲，再取 REST 快照，逐单比对并合成漏掉的成交，只应用比快照更新的缓冲事件，最后才进入 Synced 并武装 countdownCancelAll" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="f7-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="f7-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1080" height="700" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- lane headers -->
+  <rect x="200" y="24" width="160" height="36" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="280" y="47" text-anchor="middle">Local OMS（core）</text>
+  <rect x="450" y="24" width="160" height="36" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="530" y="47" text-anchor="middle">User stream</text>
+  <rect x="700" y="24" width="160" height="36" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="780" y="47" text-anchor="middle">REST / WS API</text>
+  <rect x="900" y="24" width="150" height="36" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="975" y="47" text-anchor="middle">Strategy</text>
+
+  <!-- lifelines -->
+  <line x1="280" y1="60" x2="280" y2="660" stroke="#8c959f" stroke-dasharray="2 4"/>
+  <line x1="530" y1="60" x2="530" y2="660" stroke="#8c959f" stroke-dasharray="2 4"/>
+  <line x1="780" y1="60" x2="780" y2="660" stroke="#8c959f" stroke-dasharray="2 4"/>
+  <line x1="975" y1="60" x2="975" y2="660" stroke="#8c959f" stroke-dasharray="2 4"/>
+
+  <!-- left state rail -->
+  <text x="24" y="100" font-size="10" fill="#57606a">Node: Syncing</text>
+  <text x="24" y="114" font-size="10" fill="#57606a">TradingState: Halted</text>
+  <line x1="24" y1="124" x2="24" y2="566" stroke="#8c959f"/>
+  <text x="24" y="600" font-size="10" fill="#0969da">Node: Running</text>
+  <text x="24" y="614" font-size="10" fill="#0969da">TradingState: 配置初值</text>
+
+  <!-- in-flight note -->
+  <rect x="30" y="250" width="160" height="96" rx="4" fill="#ffffff" stroke="#57606a"/>
+  <text x="40" y="268" font-size="10">in-flight 集合</text>
+  <text x="40" y="284" font-size="10" fill="#57606a">已写 WAL、未收回执</text>
+  <text x="40" y="298" font-size="10" fill="#57606a">的命令；第 3 步对它们</text>
+  <text x="40" y="312" font-size="10" fill="#57606a">逐一按 cid 查询。</text>
+  <text x="40" y="330" font-size="10" fill="#57606a">cid 编码 node·epoch·seq</text>
+
+  <!-- step 1 -->
+  <text x="204" y="94" font-size="11" font-weight="600">1</text>
+  <line x1="280" y1="98" x2="528" y2="98" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="404" y="90" text-anchor="middle" font-size="10">连接并订阅（listenKey）</text>
+  <path d="M530,106 L546,106 L546,122 L532,122" fill="none" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="552" y="118" font-size="10" fill="#57606a">事件只缓冲，不应用</text>
+
+  <!-- step 2 -->
+  <text x="204" y="152" font-size="11" font-weight="600">2</text>
+  <line x1="280" y1="156" x2="778" y2="156" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="148" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">account · openOrders · positionRisk</text>
+  <line x1="780" y1="184" x2="282" y2="184" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="200" text-anchor="middle" font-size="10">快照，记下 updateTime = T_s</text>
+
+  <!-- step 3: per-order decision -->
+  <text x="204" y="240" font-size="11" font-weight="600">3</text>
+  <path d="M280,222 L314,244 L280,266 L246,244 z" fill="#ffffff" stroke="#57606a"/>
+  <text x="320" y="236" font-size="10">逐个本地非终态订单：</text>
+  <text x="320" y="250" font-size="10">在 openOrders 中？</text>
+  <text x="320" y="264" font-size="10" fill="#57606a">是 → 采纳 executedQty 与状态</text>
+  <line x1="280" y1="292" x2="778" y2="292" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="284" text-anchor="middle" font-size="10">否 → GET order?origClientOrderId</text>
+  <line x1="780" y1="318" x2="282" y2="318" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="334" text-anchor="middle" font-size="10">终态 → 按终态补事件；-2013 且超宽限期 → Denied(LOST)</text>
+  <line x1="280" y1="360" x2="778" y2="360" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="352" text-anchor="middle" font-size="10">userTrades since 最后已知 tradeId</text>
+  <line x1="780" y1="386" x2="282" y2="386" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="402" text-anchor="middle" font-size="10">合成漏掉的 OrderFilled（含费用与实现盈亏）</text>
+
+  <!-- step 4 -->
+  <text x="204" y="438" font-size="11" font-weight="600">4</text>
+  <rect x="290" y="424" width="330" height="24" rx="3" fill="#ffffff" stroke="#57606a"/>
+  <text x="300" y="440" font-size="10">venue 有、本地无的订单 → 按配置 adopt 或 cancel</text>
+
+  <!-- step 5 -->
+  <text x="204" y="478" font-size="11" font-weight="600">5</text>
+  <rect x="290" y="464" width="330" height="24" rx="3" fill="#ffffff" stroke="#57606a"/>
+  <text x="300" y="480" font-size="10">仓位、余额按快照置位；差异写成 ReconciliationDiff 事件</text>
+
+  <!-- step 6 (accent) -->
+  <text x="204" y="520" font-size="11" font-weight="600" fill="#0969da">6</text>
+  <line x1="530" y1="524" x2="282" y2="524" stroke="#0969da" marker-end="url(#f7-arrow-accent)"/>
+  <text x="406" y="516" text-anchor="middle" font-size="10" fill="#0969da">回放缓冲：只应用 updateTime &gt; T_s 的事件</text>
+  <text x="406" y="540" text-anchor="middle" font-size="10" fill="#57606a">成交按 (symbol, orderId, tradeId) 去重</text>
+
+  <!-- step 7 -->
+  <text x="204" y="582" font-size="11" font-weight="600">7</text>
+  <line x1="280" y1="586" x2="973" y2="586" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="627" y="578" text-anchor="middle" font-size="10">ReconcileOutcome → on_reconciled，随后 on_start</text>
+  <line x1="280" y1="626" x2="778" y2="626" stroke="#57606a" marker-end="url(#f7-arrow)"/>
+  <text x="530" y="618" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">countdownCancelAll(symbol, 120000)</text>
+  <text x="530" y="642" text-anchor="middle" font-size="10" fill="#57606a">每 30 秒续期；这是 venue 侧的死人开关</text>
+
+  <text x="20" y="684" font-size="11" fill="#57606a">断线重连走同一流程（Degraded → Syncing）；运行中每 60 秒做一次轻量对账：本地在途订单 vs openOrders，仓位 vs positionRisk。</text>
+</svg>

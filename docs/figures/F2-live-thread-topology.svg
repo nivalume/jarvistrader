@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 600" width="1100" height="600" role="img" aria-label="实盘节点线程拓扑：只有 core 线程写引擎状态，其他线程只经 SPSC 环与它交换事件与命令；Python 回调只在 core 线程的一批 drain 内持有 GIL" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="12" fill="#1f2328">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1100" height="600" fill="#f8f9fb" stroke="#d0d7de"/>
+
+  <!-- column headers -->
+  <text x="130" y="60" text-anchor="middle" font-size="11" fill="#57606a">生产者线程（shell）</text>
+  <text x="340" y="60" text-anchor="middle" font-size="11" fill="#57606a">入站 SPSC 环</text>
+  <text x="590" y="60" text-anchor="middle" font-size="11" fill="#57606a">唯一写者</text>
+  <text x="830" y="60" text-anchor="middle" font-size="11" fill="#57606a">出站与回执 SPSC 环</text>
+  <text x="1005" y="60" text-anchor="middle" font-size="11" fill="#57606a">消费者线程（shell）</text>
+
+  <!-- producers -->
+  <rect x="30" y="110" width="200" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="130" y="129" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">md-io ×N</text>
+  <text x="130" y="146" text-anchor="middle" font-size="11" fill="#57606a">WS 帧 → Codec → 归一化事件</text>
+  <rect x="30" y="200" width="200" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="130" y="219" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">ud-io</text>
+  <text x="130" y="236" text-anchor="middle" font-size="11" fill="#57606a">用户数据流 → OrderEvent</text>
+  <rect x="30" y="290" width="200" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="130" y="309" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">timer</text>
+  <text x="130" y="326" text-anchor="middle" font-size="11" fill="#57606a">到期 → TimerFired</text>
+  <rect x="30" y="380" width="200" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="130" y="399" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">admin</text>
+  <text x="130" y="416" text-anchor="middle" font-size="11" fill="#57606a">Unix socket / SIGTERM → 事件</text>
+
+  <!-- inbound rings -->
+  <text x="340" y="108" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">TradeTick · QuoteTick · BookDeltas</text>
+  <rect x="280" y="116" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="340" y="138" text-anchor="middle" font-size="11">SPSC</text>
+  <text x="340" y="198" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">OrderEvent · AccountUpdate</text>
+  <rect x="280" y="206" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="340" y="228" text-anchor="middle" font-size="11">SPSC</text>
+  <text x="340" y="288" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">TimerFired</text>
+  <rect x="280" y="296" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="340" y="318" text-anchor="middle" font-size="11">SPSC</text>
+  <text x="340" y="378" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">AdminCommand · Shutdown</text>
+  <rect x="280" y="386" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="340" y="408" text-anchor="middle" font-size="11">SPSC</text>
+
+  <!-- producer -> ring -> core arrows -->
+  <line x1="230" y1="134" x2="280" y2="134" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="400" y1="134" x2="460" y2="134" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="230" y1="224" x2="280" y2="224" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="400" y1="224" x2="460" y2="224" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="230" y1="314" x2="280" y2="314" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="400" y1="314" x2="460" y2="314" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="230" y1="404" x2="280" y2="404" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="400" y1="404" x2="460" y2="404" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="430" y="126" text-anchor="middle" font-size="10" fill="#57606a">push</text>
+  <text x="430" y="216" text-anchor="middle" font-size="10" fill="#57606a">push</text>
+  <text x="430" y="306" text-anchor="middle" font-size="10" fill="#57606a">push</text>
+  <text x="430" y="396" text-anchor="middle" font-size="10" fill="#57606a">push</text>
+
+  <!-- core -->
+  <rect x="460" y="80" width="260" height="440" rx="6" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
+  <text x="590" y="104" text-anchor="middle" font-size="13" fill="#0969da">core 线程（pinned，唯一写者）</text>
+  <text x="590" y="130" text-anchor="middle" font-size="11">drain 顺序：admin &gt; 回执 · ud-io &gt; md-io &gt; timer</text>
+  <text x="590" y="150" text-anchor="middle" font-size="11">出队时分配 seq，记录 ts_init</text>
+  <text x="590" y="178" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">step(S, e) → (S′, out[])</text>
+  <text x="590" y="198" text-anchor="middle" font-size="11">无锁 · 无分配 · 不读墙钟 · 单写 EngineState</text>
+
+  <rect x="480" y="222" width="220" height="118" rx="4" fill="#ffffff" stroke="#0969da" stroke-dasharray="4 3"/>
+  <text x="590" y="242" text-anchor="middle" font-size="11" fill="#0969da">Python 节点的 GIL 区间</text>
+  <text x="590" y="262" text-anchor="middle" font-size="11">批内有事件路由到 PyStrategy 时</text>
+  <text x="590" y="280" text-anchor="middle" font-size="11">获取 GIL 一次 → 回调 → 释放</text>
+  <text x="590" y="298" text-anchor="middle" font-size="11">之后才 drain 出站环、写录制</text>
+  <text x="590" y="326" text-anchor="middle" font-size="11" fill="#57606a">纯 C++ 节点：不链接 Python</text>
+
+  <text x="590" y="372" text-anchor="middle" font-size="11">批次边界 BatchEnd 是记录事件</text>
+  <text x="590" y="392" text-anchor="middle" font-size="11">定时器触发也是记录事件</text>
+  <text x="590" y="412" text-anchor="middle" font-size="11">→ 回放按同样的批次切分</text>
+  <text x="590" y="448" text-anchor="middle" font-size="11" fill="#57606a">空闲：busy-poll 入站环，</text>
+  <text x="590" y="466" text-anchor="middle" font-size="11" fill="#57606a">on_idle 做 gc.collect(0)</text>
+
+  <!-- outbound rings and consumers -->
+  <text x="830" y="128" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">OrderCommand</text>
+  <rect x="770" y="136" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="830" y="158" text-anchor="middle" font-size="11">SPSC</text>
+  <rect x="920" y="130" width="170" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="1005" y="149" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">order-sender</text>
+  <text x="1005" y="166" text-anchor="middle" font-size="11" fill="#57606a">WS API/TLS · busy-poll</text>
+  <line x1="720" y1="154" x2="770" y2="154" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="890" y1="154" x2="920" y2="154" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="745" y="146" text-anchor="middle" font-size="10" fill="#57606a">emit</text>
+
+  <!-- WS API responses come back on the sender's own connection -->
+  <rect x="770" y="200" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="830" y="222" text-anchor="middle" font-size="11">SPSC</text>
+  <path d="M1040,178 L1040,218 L892,218" fill="none" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="770" y1="218" x2="722" y2="218" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="830" y="250" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">WS API 回执 · 错误码</text>
+
+  <text x="830" y="282" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">EventRecord(seq)</text>
+  <rect x="770" y="290" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="830" y="312" text-anchor="middle" font-size="11">SPSC</text>
+  <rect x="920" y="284" width="170" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="1005" y="303" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">persist</text>
+  <text x="1005" y="320" text-anchor="middle" font-size="11" fill="#57606a">append + fdatasync · WAL</text>
+  <line x1="720" y1="308" x2="770" y2="308" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="890" y1="308" x2="920" y2="308" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="745" y="300" text-anchor="middle" font-size="10" fill="#57606a">emit</text>
+
+  <text x="830" y="378" text-anchor="middle" font-size="10" font-family="ui-monospace, Menlo, Consolas, monospace">LogRecord · Counter</text>
+  <rect x="770" y="386" width="120" height="36" rx="18" fill="#ffffff" stroke="#57606a"/>
+  <text x="830" y="408" text-anchor="middle" font-size="11">SPSC</text>
+  <rect x="920" y="380" width="170" height="48" rx="4" fill="#e6eaef" stroke="#57606a"/>
+  <text x="1005" y="399" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace">telemetry</text>
+  <text x="1005" y="416" text-anchor="middle" font-size="11" fill="#57606a">JSON lines · Prometheus · 可丢</text>
+  <line x1="720" y1="404" x2="770" y2="404" stroke="#57606a" marker-end="url(#arrow)"/>
+  <line x1="890" y1="404" x2="920" y2="404" stroke="#57606a" marker-end="url(#arrow)"/>
+  <text x="745" y="396" text-anchor="middle" font-size="10" fill="#57606a">emit</text>
+
+  <text x="1005" y="470" text-anchor="middle" font-size="11" fill="#57606a">成交与订单状态经 ud-io 回到 core；</text>
+  <text x="1005" y="488" text-anchor="middle" font-size="11" fill="#57606a">下单回执经回执环回到 core</text>
+
+  <!-- bottom note -->
+  <text x="30" y="556" font-size="11" fill="#57606a">所有跨线程通道都是 SPSC 环（单生产者单消费者，无锁）；core 之外的线程永不触碰 EngineState。</text>
+  <text x="30" y="576" font-size="11" fill="#57606a">确定性含义：回放 persist 写出的摄取序日志，逐字节复现 order-sender 收到的命令流。</text>
+</svg>
