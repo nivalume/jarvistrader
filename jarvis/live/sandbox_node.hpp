@@ -60,8 +60,19 @@ struct SandboxPlan {
 [[nodiscard]] core::Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now,
                                         SandboxPlan& out, std::string& error);
 
-// SIGINT and SIGTERM set `flag` (the handlers only store to the atomic).
-void install_shutdown_signals(std::atomic<bool>& flag);
+// While alive, SIGINT and SIGTERM set `flag` (the handlers only store to the atomic); the
+// previous handlers (Python's, in a Python process) come back when it goes.
+class ShutdownSignals {
+public:
+  explicit ShutdownSignals(std::atomic<bool>& flag);
+  ~ShutdownSignals();
+  ShutdownSignals(const ShutdownSignals&) = delete;
+  ShutdownSignals& operator=(const ShutdownSignals&) = delete;
+
+private:
+  struct Saved;
+  std::unique_ptr<Saved> saved_;
+};
 
 // The driver's pump in real time: the node clock, the feed ring drained into the live source,
 // the idle hook, the stop request.

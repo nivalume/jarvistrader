@@ -124,7 +124,7 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 ## M4 网络、Binance USDⓈ-M 适配器、Codec 与录制，规约 e（sandbox 可用）
 
 - [x] task: build — 钉定 standalone Asio、picohttpparser、simdjson 的提交，OpenSSL 3 使用系统库，全部作为私有依赖链接到 `jarvis_network`（`JARVIS_BUILD_LIVE`；CI 在 Linux 安装 `libssl-dev`，macOS 用 Homebrew 的 `openssl@3`）
-- [ ] task: network — `Transport` concept 与 Asio + OpenSSL 实现，每个 IO 线程一个 `io_context`，每连接预分配接收缓冲（§13.2）
+- [ ] task: network — `Transport` concept 与 Asio + OpenSSL 实现，每个 IO 线程一个 `io_context`，每连接预分配接收缓冲（§13.2）：每个 IO 线程一个 `IoContext`、每连接预分配接收缓冲已随 `WsClient` 实现；`Transport` concept（SBE、测试替身共用的抽象）随 M6 的 SBE 传输
 - [x] task: network — RFC 6455 客户端帧层：握手、仅出站掩码、分片重组、ping/pong/close（`ws_frame`、`WsClient`，含 TLS 回环测试与 `on_close` 内重连测试）
 - [x] task: network — HTTP/1.1 keep-alive 客户端（picohttpparser 解析响应与 chunked；`HttpsClient` 阻塞式，超时与一次重试）
 - [x] task: network — `Signer` 接口：HMAC-SHA256 与 Ed25519（`EVP_DigestSign`），密钥引用 `env:`、`file:`
@@ -140,17 +140,17 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [x] task: adapter — REST 兜底下单与快照接口：`RestClient`（签名、时间偏移、listenKey、持仓模式与 positionRisk、depth 快照、下单改单撤单；4xx 带码为拒绝，5xx 与超时为结果未知），对脚本化 HTTPS 服务端测试
 - [ ] task: adapter — 权重与订单数令牌桶的 `RateLimitFeedback` 回灌，HTTP 429 退避与 418 处理（§14.7）：内核事件 `RateLimitFeedback` 与 `RateLimiter::feedback`、响应头与 `rateLimits` 解析、418 封禁期间快速失败已完成；把反馈接到内核随 M4-E 的运行时
 - [x] task: adapter — 核对行情流在 `/public` 与 `/market` 路由间的归属及用户数据流连接地址，写入适配器配置（开放问题）：路由已于 2026-09-27 实测并写入 `jarvis/adapter/binance/streams.hpp`（`/stream` 只剩 `/public` 的流）；用户数据流为 `/private/stream` 加 `SUBSCRIBE` listenKey，取自 Binance 官方 SDK 17.5.0，没有账户无法在线验证，由 testnet 契约测试补上
-- [ ] task: live — md-io、ud-io、timer、admin、order-sender 线程，入站、出站与回执 SPSC 环（§7.1）
-- [ ] task: live — 原始帧录制与解码日志录制，`jarvis redecode`（§13.4）
-- [ ] task: live — `SandboxWiring`：`RingSource`、`SimulatedExchange`（真实定时器，触发写入日志）、`MonotonicClock`
+- [ ] task: live — md-io、ud-io、timer、admin、order-sender 线程，入站、出站与回执 SPSC 环（§7.1）：`SpscRing`、`SpscByteRing`、md-io 线程（`MarketFeed`）与 core 实时循环（`Driver::run_realtime`）已完成；不设单独的 timer 线程（内核定时器由 core 循环按时钟触发，网络定时器在各 IO 线程上）；信号经 `ShutdownSignals` 变成停止请求；ud-io、order-sender 与出站、回执环随 M5 实盘接线
+- [x] task: live — 原始帧录制与解码日志录制，`jarvis redecode`（§13.4）：sandbox 运行目录含 `raw-frames.jraw`（WS API 快照请求与应答也写入，新增 `Sent` 记录）；`jarvis-capture redecode --check` 验证重解码的行情与运行日志的行情输入逐字节相同（生产 40 秒会话 2704 条全部相同）
+- [x] task: live — `SandboxWiring`：`RingSource`、`SimulatedExchange`（真实定时器，触发写入日志）、`MonotonicClock`：`run_sandbox`（`LiveSource`、`VenueLoop` 的 `live_feed`、`MonotonicClock`），C++ 入口 `live_node_main`，Python 入口在带 live shell 的构建中（`just install-live`）
 - [x] task: tools — 深度与成交流录制器可独立运行，用于积累 USDⓈ-M L2 数据（§12.4）：`jarvis-capture record` 写原始帧文件（断线自动重连），`decode` 离线解码核对；由原始帧重建解码日志随 M4-E 的 `jarvis redecode`。2026-09-27 实测：BTCUSDT、ETHUSDT 在 `/public` 与 `/market` 两个连接上采集 10 分钟，207,681 条消息离线解码为 196,539 个事件与 11,737 个 depth 差量，0 错误，depth 的 `pu` 链无缺口
-- [ ] task: python — `on_idle(ctx)` 钩子：空闲期按 `idle_hook_ms` 持 GIL 运行，默认 `gc.collect(0)`；`on_start` 后 `gc.freeze()`（§7.4）
+- [x] task: python — `on_idle(ctx)` 钩子：空闲期按 `idle_hook_ms` 持 GIL 运行，默认 `gc.collect(0)`；`on_start` 后 `gc.freeze()`（§7.4）：`python.idle_hook_ms`（默认 100）；`on_idle()` 不接收 ctx（在 step 之外运行，无法回放），运行结束时 `gc.unfreeze()`
 - [x] task: harness — Codec、WebSocket 帧层、HTTP 解析的 fuzz 目标：PR 每个 60 秒，nightly 10 分钟，语料入库（`fuzz_ws`、`fuzz_http`、`fuzz_json_codec`，种子取自实盘采集）
-- [ ] task: harness — `tsan` preset 覆盖环与 IO 线程
+- [x] task: harness — `tsan` preset 覆盖环与 IO 线程：nightly 的 tsan job 跑全部 ctest，包括环的跨线程压力测试、WS 会话与 sandbox 端到端测试
 - [ ] task: harness — testnet 契约测试（nightly）：每类流与每个 WS API 方法的往返
-- [ ] task: harness — 环境等价测试：sandbox 录制后以 backtest 回放同一策略文件，命令流逐字节相同（§4.6）
+- [x] task: harness — 环境等价测试：sandbox 录制后以 backtest 回放同一策略文件，命令流逐字节相同（§4.6）：`test_sandbox`（脚本化交易所）与内核层实时对 backtest 测试；生产行情上 C++ 与 Python 示例的回放均无偏差
 - [x] task: harness — `DepthSync` 的不变量与生成行为进入 CI：TLC 不变量、正向 trace validation（ctest 与 formal job、nightly 由 MAP.toml 决定规约清单），以及以内核 `OrderBook` 为观察者的随机交易所性质测试
-- [ ] task: harness — 热基准 `codec/json_aggTrade`、`codec/json_bookTicker`、`codec/json_depth`、`ring/spsc_roundtrip`：codec 三项已进 `bench_codec` 门禁组（本机 Release 中位数约 290 ns、330 ns、3.2 µs，depth 为 46 档的 1.5 KB 消息）；`ring/spsc_roundtrip` 随 M4-E
+- [x] task: harness — 热基准 `codec/json_aggTrade`、`codec/json_bookTicker`、`codec/json_depth`、`ring/spsc_roundtrip`：codec 三项已进 `bench_codec` 门禁组（本机 Release 中位数约 290 ns、330 ns、3.2 µs，depth 为 46 档的 1.5 KB 消息）；`ring/spsc_roundtrip` 与 `ring/byte_record` 在 `bench_live` 门禁组（本机约 690 ns 与 9 ns）
 - [ ] task: 验收 — `python examples/py/mm_quote.py --env sandbox` 连续运行 24 小时；录制日志回放逐字节一致；环境等价测试通过
 
 ## M5 实盘、对账、运维、内置执行算法与纯 C++ 节点，规约 b（发布 v1.0）

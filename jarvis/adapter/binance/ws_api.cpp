@@ -396,7 +396,7 @@ struct WsApiSession::Impl : std::enable_shared_from_this<Impl> {
   std::string next_id() { return "j" + std::to_string(++seq); }
 
   Status send(std::string_view method, Params params, Security security, Pending p,
-              std::string& error) {
+              std::string& error, std::string* sent = nullptr) {
     const auto it = conns.find(active);
     if (active == 0 || it == conns.end() || it->second.state != State::Ready) {
       error = "the WebSocket API is not connected";
@@ -424,6 +424,9 @@ struct WsApiSession::Impl : std::enable_shared_from_this<Impl> {
     p.deadline_ns = network::steady_ns() + timeout_ns();
     pending.emplace(id, std::move(p));
     ++stats.sent;
+    if (sent != nullptr) {
+      *sent = message;
+    }
     it->second.ws->send_text(std::move(message));
     arm_timeout();
     return Status::Ok;
@@ -502,10 +505,10 @@ Status WsApiSession::cancel(const model::CancelOrder& c, std::string_view symbol
 }
 
 Status WsApiSession::request(std::string_view method, Params params, Security security,
-                             Callback callback, std::string& error) {
+                             Callback callback, std::string& error, std::string* sent) {
   Impl::Pending p;
   p.callback = std::move(callback);
-  return impl_->send(method, std::move(params), security, std::move(p), error);
+  return impl_->send(method, std::move(params), security, std::move(p), error, sent);
 }
 
 } // namespace jarvis::adapter::binance

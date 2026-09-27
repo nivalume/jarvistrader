@@ -11,8 +11,10 @@ A strategy file is a complete deployable unit::
     if __name__ == "__main__":
         jarvis.main(MyStrategy)
 
-and runs as ``python my_strategy.py --config node.toml`` (this build runs backtests) or replays
-a run with ``python my_strategy.py --replay RUN_DIR``. ``Node`` is the same thing as an object.
+and runs as ``python my_strategy.py --config node.toml`` (a backtest, or with ``--env sandbox``
+a session on the venue's market data against the simulated exchange, in a build with the live
+shell) or replays a run with ``python my_strategy.py --replay RUN_DIR``. ``Node`` is the same
+thing as an object.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ class RunResult:
     first_ts: int
     last_ts: int
     strategies: tuple[StrategyStats, ...]
+    feed: Mapping[str, int] | None = None  # sandbox: the market data feed's counters
 
     @property
     def fingerprint(self) -> str:
@@ -85,6 +88,8 @@ class RunResult:
         if self.directory:
             digest, records = _log.fingerprint(self.directory, "all")
             lines.append(f"fingerprint: {digest} records={records}")
+        if self.feed is not None:
+            lines.append("feed: " + ", ".join(f"{k} {v}" for k, v in self.feed.items()))
         for s in self.strategies:
             mean = s.total_ns / s.calls / 1000 if s.calls else 0.0
             lines.append(
@@ -191,12 +196,13 @@ class Node:
         self._strategies.append(NativeSpec(name, id or f"{name.lower()}-001", dict(params or {})))
         return self
 
-    def run(self) -> RunResult:
-        """Runs the node over its [data] and writes the run directory."""
+    def run(self, *, run_for: float | None = None) -> RunResult:
+        """Runs the node and writes the run directory: a backtest over its [data], or a sandbox
+        session until SIGINT, SIGTERM or `run_for` seconds."""
         if not self._strategies:
             raise ValueError("the node has no strategies; add_strategy() first")
         with self._guard():
-            summary = self._setup.run(self._strategies, self._out)
+            summary = self._setup.run(self._strategies, self._out, run_for)
         stats = tuple(StrategyStats(**s) for s in summary.pop("strategies"))
         result = RunResult(strategies=stats, **summary)
         self._run_directory = result.directory or None
@@ -301,7 +307,7 @@ def run_main(classes: Sequence[type], argv: Sequence[str] | None = None) -> int:
             report = node.replay(until=parsed["until"], dump_state=parsed["dump_state"])
             print(report)
             return 3 if report.divergence is not None else 0
-        result = node.run()
+        result = node.run(run_for=parsed["run_for"])
     except (ValueError, OSError) as e:
         print(f"{program}: {e}", file=sys.stderr)
         return 1

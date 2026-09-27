@@ -13,6 +13,7 @@
 #include <doctest/doctest.h>
 
 #include "jarvis/live/raw_frames.hpp"
+#include "jarvis/live/redecode.hpp"
 #include "jarvis/live/sandbox_node.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/replay.hpp"
@@ -263,6 +264,20 @@ TEST_SUITE("unit") {
       frames += f.kind == live::RawKind::Message ? 1 : 0;
     }
     CHECK(frames >= 9);
+
+    // The raw frames rebuild the market data the run stepped, event for event.
+    live::SandboxPlan plan;
+    REQUIRE(live::plan_sandbox(request, UnixNanos{1}, plan, error) == Status::Ok);
+    live::RedecodeResult redecoded;
+    REQUIRE(live::redecode(result.directory + "/raw-frames.jraw", plan.feed.symbols, nullptr,
+                           redecoded, error) == Status::Ok);
+    CHECK(redecoded.decode_errors == 0);
+    CHECK(redecoded.snapshots >= 1);
+    std::size_t compared = 0;
+    INFO(error);
+    REQUIRE(live::check_market_inputs(result.directory, redecoded.events, compared, error) ==
+            Status::Ok);
+    CHECK(compared == result.summary.data_events);
 
     // The environment equivalence: the recorded session under the backtest wiring.
     st::StaticStrategySet<Tapper> fresh{Tapper{}};

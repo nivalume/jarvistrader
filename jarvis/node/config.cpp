@@ -580,6 +580,7 @@ void read_python(TableReader& root, PythonSection& py) {
   TableReader r{*t, "python", root.errors()};
   r.unsigned_int("callback_budget_us", py.callback_budget_us, std::uint64_t{1});
   r.unsigned_int("overrun_limit", py.overrun_limit, std::uint64_t{1});
+  r.unsigned_int("idle_hook_ms", py.idle_hook_ms);
   r.finish();
 }
 
@@ -1027,6 +1028,7 @@ std::string canonical_operational_text(const NodeConfig& config) {
     c.str(p + ".credentials", config.venues[i].credentials);
     c.str(p + ".exchange_info", config.venues[i].exchange_info);
   }
+  c.num("python.idle_hook_ms", config.python.idle_hook_ms);
   c.str("persistence.mode", name_of(kPersistenceNames, config.persistence.mode));
   c.str("persistence.dir", config.persistence.dir);
   c.num("persistence.snapshot_every", config.persistence.snapshot_every);

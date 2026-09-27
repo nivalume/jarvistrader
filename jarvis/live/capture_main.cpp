@@ -8,6 +8,7 @@
 //   jarvis-capture decode FILE --exchange-info JSON [--symbols A,B]
 //   jarvis-capture depth-check --exchange-info JSON --symbols SYMBOL --seconds N
 //   jarvis-capture ws-api-probe [--url URL] [--symbols SYMBOL]
+//   jarvis-capture redecode FILE --exchange-info JSON [--symbols A,B] [--out DIR] [--check RUN]
 //
 // `record` reconnects with backoff until the time is up. `dump --jsonl` prints the text
 // messages one per line; `--timed` prefixes each with its arrival time ("<recv_ns> <json>"),
@@ -18,7 +19,12 @@
 // the same stream; when both reach the same update id their top 100 levels per side must be
 // equal. It exits 1 on any mismatch or if no comparison was made. `ws-api-probe` checks the
 // WebSocket API session against the venue with its public methods (time, depth) and prints the
-// answers and rate limits; it exits 1 unless both are answered.
+// answers and rate limits; it exits 1 unless both are answered. `redecode` rebuilds the decoded
+// market data of a raw frame file (a sandbox run's raw-frames.jraw): the same codec and depth
+// sync over the same frames in the same order, snapshot answers paired with their symbols by
+// the recorded requests. --out writes the events as an event log; --check requires the market
+// data inputs of a run log to be exactly the first redecoded events, in order and byte for byte
+// (exit 1 on a difference).
 
 #include <array>
 #include <atomic>
@@ -46,15 +52,21 @@
 #include "jarvis/adapter/codec.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/raw_frames.hpp"
+#include "jarvis/live/redecode.hpp"
+#include "jarvis/model/wire.hpp"
 #include "jarvis/network/backoff.hpp"
 #include "jarvis/network/io.hpp"
 #include "jarvis/network/timer.hpp"
 #include "jarvis/network/ws_client.hpp"
+#include "jarvis/node/build_info.hpp"
+#include "jarvis/node/event_log.hpp"
+#include <algorithm>
 
 namespace {
 
 namespace net = jarvis::network;
 namespace live = jarvis::live;
+namespace wire = jarvis::model::wire;
 using jarvis::core::ok;
 using jarvis::core::Status;
 
@@ -68,6 +80,7 @@ struct Options {
   std::optional<std::string> out;
   std::optional<std::string> exchange_info;
   std::optional<std::string> symbols;
+  std::optional<std::string> check;
   std::optional<long> seconds;
   std::optional<long> conn;
   std::optional<long> limit;
@@ -87,8 +100,11 @@ bool parse_number(std::string_view text, long& out) {
 
 // Sets the option `name` from `value`: --url adds, the others replace.
 bool set_option(std::string_view name, std::string_view value, Options& o) {
-  const std::array<std::pair<std::string_view, std::optional<std::string>*>, 3> texts{
-      {{"--out", &o.out}, {"--exchange-info", &o.exchange_info}, {"--symbols", &o.symbols}}};
+  const std::array<std::pair<std::string_view, std::optional<std::string>*>, 4> texts{
+      {{"--out", &o.out},
+       {"--exchange-info", &o.exchange_info},
+       {"--symbols", &o.symbols},
+       {"--check", &o.check}}};
   const std::array<std::pair<std::string_view, std::optional<long>*>, 3> numbers{
       {{"--seconds", &o.seconds}, {"--conn", &o.conn}, {"--limit", &o.limit}}};
   if (name == "--url") {
@@ -241,6 +257,8 @@ const char* kind_name(live::RawKind kind) {
     return "message";
   case live::RawKind::Close:
     return "close";
+  case live::RawKind::Sent:
+    return "sent";
   }
   return "?";
 }
@@ -688,13 +706,65 @@ int ws_api_probe(const Options& o) {
   return answered == 2 ? 0 : 1;
 }
 
+// ---- redecode ------------------------------------------------------------------------------
+
+int redecode(const Options& o) {
+  if (o.positional.size() != 2 || !o.exchange_info) {
+    std::fprintf(stderr, "usage: jarvis-capture redecode FILE --exchange-info JSON [--symbols A,B] "
+                         "[--out DIR] [--check RUN_DIR]\n");
+    return 2;
+  }
+  jarvis::adapter::SymbolTable table;
+  if (!load_symbols(*o.exchange_info, o.symbols, table)) {
+    return 2;
+  }
+  jarvis::node::EventLogWriter writer;
+  if (o.out) {
+    const jarvis::node::BuildInfo info = jarvis::node::build_info();
+    wire::LogHeader header;
+    static_cast<void>(decltype(header.jarvis_version)::from(info.version, header.jarvis_version));
+    static_cast<void>(decltype(header.git_commit)::from(info.git_commit, header.git_commit));
+    if (!ok(writer.open(*o.out, header, {}))) {
+      std::fprintf(stderr, "cannot write an event log in %s\n", o.out->c_str());
+      return 1;
+    }
+  }
+  live::RedecodeResult result;
+  std::string error;
+  if (!ok(live::redecode(o.positional[1], table, o.out ? &writer : nullptr, result, error))) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+  if (o.out && !ok(writer.close())) {
+    std::fprintf(stderr, "cannot finish the event log in %s\n", o.out->c_str());
+    return 1;
+  }
+  const auto u = [](std::uint64_t v) { return static_cast<unsigned long long>(v); };
+  std::printf("frames %llu, stream messages %llu, events %zu, decode errors %llu, snapshots %llu, "
+              "book syncs %llu\n",
+              u(result.frames), u(result.messages), result.events.size(), u(result.decode_errors),
+              u(result.snapshots), u(result.book_syncs));
+  if (o.check) {
+    std::size_t compared = 0;
+    if (!ok(live::check_market_inputs(*o.check, result.events, compared, error))) {
+      std::printf("check: %s\n", error.c_str());
+      return 1;
+    }
+    std::printf("check: the run's %zu market data inputs are identical to the first %zu "
+                "redecoded events (%zu more arrived after the run stopped)\n",
+                compared, compared, result.events.size() - compared);
+  }
+  return result.decode_errors == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   Options o;
   const std::span<char*> args{argv + 1, static_cast<std::size_t>(argc > 0 ? argc - 1 : 0)};
   if (!parse(args, o) || o.positional.empty()) {
-    std::fprintf(stderr, "usage: jarvis-capture record|dump|decode|depth-check|ws-api-probe ...\n");
+    std::fprintf(
+        stderr, "usage: jarvis-capture record|dump|decode|depth-check|ws-api-probe|redecode ...\n");
     return 2;
   }
   if (o.positional[0] == "record") {
@@ -711,6 +781,9 @@ int main(int argc, char** argv) {
   }
   if (o.positional[0] == "ws-api-probe") {
     return ws_api_probe(o);
+  }
+  if (o.positional[0] == "redecode") {
+    return redecode(o);
   }
   std::fprintf(stderr, "unknown command %s\n", o.positional[0].c_str());
   return 2;

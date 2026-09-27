@@ -235,7 +235,7 @@ if(JARVIS_BUILD_LIVE)
 
   # Live runtime pieces (docs/architecture.md sections 7 and 13.4).
   add_library(jarvis_live STATIC jarvis/live/raw_frames.cpp jarvis/live/market_feed.cpp
-                          jarvis/live/sandbox_node.cpp)
+                          jarvis/live/redecode.cpp jarvis/live/sandbox_node.cpp)
   add_library(jarvis::live ALIAS jarvis_live)
   target_link_libraries(jarvis_live PUBLIC jarvis::kernel jarvis::shell jarvis::network jarvis::adapter)
 
@@ -280,6 +280,11 @@ if(JARVIS_BUILD_PYTHON)
       ${nanobind_SOURCE_DIR}/include
   )
   target_link_libraries(_core PRIVATE jarvis::shell)
+  # With the live shell, jarvis.Node also runs sandbox sessions (node.env = "sandbox").
+  if(TARGET jarvis_live)
+    target_link_libraries(_core PRIVATE jarvis::live)
+    target_compile_definitions(_core PRIVATE JARVIS_PY_LIVE=1)
+  endif()
   install(TARGETS _core LIBRARY DESTINATION jarvis RUNTIME DESTINATION jarvis)
 endif()
 

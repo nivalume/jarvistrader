@@ -40,7 +40,7 @@ struct LiveRunner {
       return node::detail::BacktestRunner{}(program, parsed, config, std::move(manifest), set);
     }
     static std::atomic<bool> stop{false};
-    install_shutdown_signals(stop);
+    const ShutdownSignals signals{stop};
     SandboxRequest request;
     request.config = &config;
     request.manifest = std::move(manifest);

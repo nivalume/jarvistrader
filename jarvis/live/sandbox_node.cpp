@@ -97,13 +97,26 @@ Status collect_streams(const node::NodeConfig& config, std::vector<std::string>&
 
 } // namespace
 
-void install_shutdown_signals(std::atomic<bool>& flag) {
+struct ShutdownSignals::Saved {
+  struct sigaction interrupt {};
+  struct sigaction terminate {};
+  std::atomic<bool>* previous_flag = nullptr;
+};
+
+ShutdownSignals::ShutdownSignals(std::atomic<bool>& flag) : saved_{std::make_unique<Saved>()} {
+  saved_->previous_flag = g_shutdown;
   g_shutdown = &flag;
   struct sigaction action {};
   action.sa_handler = on_shutdown_signal;
   sigemptyset(&action.sa_mask);
-  sigaction(SIGINT, &action, nullptr);
-  sigaction(SIGTERM, &action, nullptr);
+  sigaction(SIGINT, &action, &saved_->interrupt);
+  sigaction(SIGTERM, &action, &saved_->terminate);
+}
+
+ShutdownSignals::~ShutdownSignals() {
+  sigaction(SIGINT, &saved_->interrupt, nullptr);
+  sigaction(SIGTERM, &saved_->terminate, nullptr);
+  g_shutdown = saved_->previous_flag;
 }
 
 Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxPlan& out,

@@ -132,7 +132,7 @@ core::Status RawFrameReader::next(RawFrame& out) {
   const std::byte* h = data_.data() + at_;
   const auto kind = std::to_integer<std::uint8_t>(h[12]);
   const auto length = get<std::uint32_t>(h + 16);
-  if (kind > static_cast<std::uint8_t>(RawKind::Close) || length > kRawMaxLength) {
+  if (kind > static_cast<std::uint8_t>(RawKind::Sent) || length > kRawMaxLength) {
     return core::Status::ParseError;
   }
   if (data_.size() - at_ - kRawRecordHeaderSize < length) {

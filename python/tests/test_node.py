@@ -369,3 +369,45 @@ def test_rng_draws_depend_only_on_the_inputs(tmp_path: Path) -> None:
         for run in runs
     ]
     assert draws[0] == draws[1] and len(draws[0]) == runs[0].timers
+
+
+SANDBOX_CONFIG = """
+[node]
+id = "sbx01"
+env = "sandbox"
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[persistence]
+mode = "none"
+"""
+
+
+def test_a_sandbox_run_needs_the_live_shell(tmp_path: Path) -> None:
+    from jarvis._core import node as native
+
+    if native.has_live:
+        pytest.skip("this build has the live shell; the sandbox runs against the venue")
+    config = tmp_path / "sandbox.toml"
+    config.write_text(SANDBOX_CONFIG)
+    node = Node(config)
+    assert node.env == "sandbox"
+    node.add_strategy(Strategy(id="idle-001"))
+    with pytest.raises(ValueError, match="live shell"):
+        node.run()
+
+
+def test_run_for_is_a_node_argument() -> None:
+    from jarvis._core import node as native
+
+    parsed = native.parse_args(["--config", "x.toml", "--env", "sandbox", "--run-for", "30"])
+    assert parsed["run_for"] == 30
+    with pytest.raises(ValueError, match="run-for"):
+        native.parse_args(["--replay", "run", "--run-for", "5"])

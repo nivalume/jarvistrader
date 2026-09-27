@@ -105,9 +105,11 @@ public:
                                     model::OrderSide side, std::string& error);
   [[nodiscard]] core::Status cancel(const model::CancelOrder& c, std::string_view symbol,
                                     std::string& error);
-  // Any other method (order.status, userDataStream.start, ...).
+  // Any other method (order.status, userDataStream.start, ...). `sent`, when given, receives
+  // the request exactly as sent (id included), for recording.
   [[nodiscard]] core::Status request(std::string_view method, Params params, Security security,
-                                     Callback callback, std::string& error);
+                                     Callback callback, std::string& error,
+                                     std::string* sent = nullptr);
 
 private:
   struct Impl;

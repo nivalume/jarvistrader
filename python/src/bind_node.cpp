@@ -50,6 +50,12 @@
 #include "jarvis/strategy/strategy_set.hpp"
 #include "jarvis/strategy/trading.hpp"
 
+#if defined(JARVIS_PY_LIVE)
+#include <atomic>
+
+#include "jarvis/live/sandbox_node.hpp"
+#endif
+
 namespace jarvis::py {
 
 namespace {
@@ -263,6 +269,7 @@ public:
     context_ = nb::cast(PyContext{}, nb::rv_policy::move);
     context_ptr_ = nb::inst_ptr<PyContext>(context_);
     context_ptr_->views = &views_;
+    idle_ = nb::getattr(strategy_, "on_idle", nb::none());
   }
 
   PyStrategyHost(const PyStrategyHost&) = delete;
@@ -275,6 +282,22 @@ public:
 
   [[nodiscard]] const HostStats& stats() const noexcept { return stats_; }
   [[nodiscard]] const std::string& id() const noexcept { return id_; }
+
+  // on_idle(self), sandbox and live only, with the GIL held by the caller. It runs outside any
+  // step and gets no context: nothing it does may reach the kernel, since a replay could not
+  // reproduce it. An exception is printed and otherwise ignored for the same reason.
+  void idle() {
+    if (idle_.is_none()) {
+      return;
+    }
+    try {
+      idle_();
+    } catch (nb::python_error& e) {
+      std::cerr << "jarvis: strategy " << id_ << " raised " << nb::type_name(e.type()).c_str()
+                << " in on_idle:\n"
+                << std::string_view{e.what()}.substr(0, 4096) << "\n";
+    }
+  }
 
 private:
   [[nodiscard]] bool has(Callback c) const noexcept { return callbacks_[c].is_valid(); }
@@ -497,6 +520,7 @@ private:
   HostOptions options_;
   nb::object callbacks_[kCallbackCount]; // NOLINT(cppcoreguidelines-avoid-c-arrays)
   nb::object context_;
+  nb::object idle_;
   PyContext* context_ptr_ = nullptr;
   std::vector<nb::object> views_;
   std::vector<std::uint64_t> ts_;
@@ -764,10 +788,133 @@ nb::dict summary_dict(const node::BacktestResult& r) {
   return d;
 }
 
+#if defined(JARVIS_PY_LIVE)
+// The input hook of a sandbox run: GilHook's batch rule, gc.freeze() once the strategies have
+// started, and the idle hook (gc.collect(0), then each strategy's on_idle) at most every
+// python.idle_hook_ms while nothing is due (docs/architecture.md section 7.4).
+class SandboxHook {
+public:
+  SandboxHook(Assembly& assembly, std::uint64_t idle_every_ms) noexcept
+      : assembly_{&assembly}, idle_every_ns_{idle_every_ms * 1'000'000U} {}
+
+  void before_input(const m::Event& event) {
+    if (after_batch_end_) {
+      assembly_->gil.release();
+    }
+    after_batch_end_ = std::holds_alternative<m::BatchEnd>(event);
+    if (started_ && !frozen_) {
+      frozen_ = true; // on_start has run: what exists now is long-lived
+      assembly_->gil.acquire();
+      call_gc("freeze");
+    }
+    if (const auto* l = std::get_if<m::NodeLifecycle>(&event)) {
+      started_ = started_ || l->to == m::NodeState::Running;
+    }
+  }
+
+  [[nodiscard]] bool frozen() const noexcept { return frozen_; }
+
+  void on_idle(core::UnixNanos now) {
+    if (idle_every_ns_ == 0 || now.value() < next_ns_) {
+      return;
+    }
+    next_ns_ = now.value() + idle_every_ns_;
+    assembly_->gil.acquire();
+    call_gc("collect", 0);
+    for (const auto& host : assembly_->hosts) {
+      host->idle();
+    }
+    assembly_->gil.release();
+  }
+
+private:
+  template <typename... A> static void call_gc(const char* name, A&&... args) {
+    try {
+      nb::module_::import_("gc").attr(name)(std::forward<A>(args)...);
+    } catch (nb::python_error& e) {
+      std::cerr << "jarvis: gc." << name << ": " << e.what() << "\n";
+    }
+  }
+
+  Assembly* assembly_;
+  std::uint64_t idle_every_ns_;
+  std::uint64_t next_ns_ = 0;
+  bool after_batch_end_ = false;
+  bool started_ = false;
+  bool frozen_ = false;
+};
+
+nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
+                          const std::optional<std::string>& out, std::optional<double> run_for_s) {
+  live::SandboxRequest request;
+  request.config = &setup.config;
+  request.manifest = setup.manifest;
+  request.out = out.value_or("");
+  request.extras = header_extras();
+  if (run_for_s) {
+    request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
+  }
+  live::SandboxResult result;
+  std::string error;
+  Status s = Status::Ok;
+  bool hook_frozen = false;
+  {
+    nb::gil_scoped_release release;
+    std::atomic<bool> stop{false};
+    const live::ShutdownSignals signals{stop};
+    request.stop = &stop;
+    SandboxHook hook{assembly, setup.config.python.idle_hook_ms};
+    try {
+      s = live::run_sandbox(request, *assembly.set, result, error, hook);
+    } catch (...) {
+      assembly.gil.release();
+      throw;
+    }
+    hook_frozen = hook.frozen();
+    assembly.gil.release();
+  }
+  // Frozen objects are never collected, not even at interpreter exit: hand them back.
+  if (hook_frozen) {
+    nb::module_::import_("gc").attr("unfreeze")();
+  }
+  if (PyErr_Occurred() != nullptr) {
+    throw nb::python_error();
+  }
+  check(s, error);
+  node::BacktestResult summary;
+  summary.directory = result.directory;
+  summary.summary = result.summary;
+  nb::dict d = summary_dict(summary);
+  nb::dict feed;
+  feed["messages"] = result.feed.messages;
+  feed["events"] = result.feed.events;
+  feed["decode_errors"] = result.feed.decode_errors;
+  feed["unsupported"] = result.feed.unsupported;
+  feed["ring_waits"] = result.feed.ring_waits;
+  feed["connects"] = result.feed.connects;
+  feed["snapshots"] = result.feed.snapshots;
+  feed["snapshot_failures"] = result.feed.snapshot_failures;
+  feed["book_syncs"] = result.feed.book_syncs;
+  d["feed"] = feed;
+  d["strategies"] = assembly.stats();
+  return d;
+}
+#endif
+
 nb::dict run_node(const NodeSetup& setup, const nb::list& strategies,
-                  const std::optional<std::string>& out) {
+                  const std::optional<std::string>& out, std::optional<double> run_for_s) {
   Assembly assembly;
   assembly.build(strategies, setup.config, false);
+  if (setup.config.node.env == node::Env::Sandbox) {
+#if defined(JARVIS_PY_LIVE)
+    return run_sandbox_node(setup, assembly, out, run_for_s);
+#else
+    static_cast<void>(run_for_s);
+    throw nb::value_error("node.env = \"sandbox\" needs the live shell, which this build of "
+                          "jarvis leaves out (build it with -DJARVIS_BUILD_LIVE=ON, e.g. "
+                          "`just install-live`)");
+#endif
+  }
   node::BacktestRequest request;
   request.config = &setup.config;
   request.manifest = setup.manifest;
@@ -1509,12 +1656,19 @@ void bind_node(nb::module_& mod) {
                      return out;
                    })
       .def("run", &run_node, nb::arg("strategies"), nb::arg("out") = nb::none(),
-           "Runs the node over its [data] with `strategies` (Python objects and NativeSpec) and "
-           "returns the run summary.")
+           nb::arg("run_for") = nb::none(),
+           "Runs the node with `strategies` (Python objects and NativeSpec) and returns the run "
+           "summary: a backtest over its [data], or a sandbox session until SIGINT, SIGTERM or "
+           "`run_for` seconds.")
       .def("replay", &replay_node, nb::arg("directory"), nb::arg("strategies"),
            nb::arg("until") = nb::none(), nb::arg("dump_state") = false,
            "Replays a run directory with `strategies` and returns the report.");
 
+#if defined(JARVIS_PY_LIVE)
+  mod.attr("has_live") = true;
+#else
+  mod.attr("has_live") = false;
+#endif
   mod.def(
       "parse_args",
       [](const std::vector<std::string>& args) {
@@ -1530,6 +1684,7 @@ void bind_node(nb::module_& mod) {
         out["out"] = parsed.out;
         out["replay"] = parsed.replay;
         out["until"] = parsed.until;
+        out["run_for"] = parsed.run_for_s;
         out["dump_state"] = parsed.dump_state;
         out["help"] = parsed.help;
         return out;

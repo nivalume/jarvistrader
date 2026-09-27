@@ -19,11 +19,13 @@
 //   record  u64 recv_ns, u32 conn_id, u8 kind, u8 opcode, u16 reserved, u32 length, bytes
 //
 // kind: Open (bytes = the URL), Message (opcode = the WebSocket opcode), Close (bytes = the
-// reason). recv_ns is UTC nanoseconds taken from a monotonic clock anchored once at start.
+// reason), Sent (a request the node sent on the connection, such as a WebSocket API depth
+// request; never one carrying credentials). recv_ns is UTC nanoseconds taken from a monotonic
+// clock anchored once at start.
 
 namespace jarvis::live {
 
-enum class RawKind : std::uint8_t { Open = 0, Message = 1, Close = 2 };
+enum class RawKind : std::uint8_t { Open = 0, Message = 1, Close = 2, Sent = 3 };
 
 struct RawFrame {
   std::uint64_t recv_ns = 0;

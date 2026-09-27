@@ -133,6 +133,9 @@ struct RiskSection {
 struct PythonSection {
   std::uint64_t callback_budget_us = 2'000;
   std::uint64_t overrun_limit = 50;
+  // Sandbox and live: while idle, the node runs gc.collect(0) and the strategies' on_idle()
+  // at most this often, holding the GIL (0: never). Operational: outside the config hash.
+  std::uint64_t idle_hook_ms = 100;
 };
 
 struct PersistenceSection {

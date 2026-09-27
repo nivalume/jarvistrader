@@ -184,6 +184,14 @@ Node 是组合根。它拥有一个 `Engine`、一份事件日志，以及由 `e
 
 testnet 不是 sandbox。testnet 是 `env = "live"` 加上 `endpoint = "testnet"`。sandbox 的意义是用真实行情和真实时钟检验策略与撮合模型，不向任何交易所发单。
 
+sandbox 的实现（M4-E，`jarvis/live/sandbox_node.hpp`）：
+
+- 行情 IO 线程是 `MarketFeed`（`jarvis/live/market_feed.hpp`），把归一化事件编码为线格式记录写入 `SpscByteRing`；core 线程（调用方线程）用 `LiveSource` 读出、以 `MonotonicClock` 打时间戳。
+- core 线程运行与 backtest 相同的 `Driver` 与 `Engine`，只是用实时模式 `Driver::run_realtime`：输入在时钟到达其时间后才步进，最早者优先；没有到期的输入时关闭当前批次并进入空闲钩子。
+- 模拟交易所复用 backtest 的 `VenueLoop`，打开 `live_feed`：真实行情到达节点时模拟交易所同时看到它，没有行情延迟，`ts_init` 保持 IO 线程记录的到达时间；订单往返的延迟仍取自 `[venues.sim]`。
+- instrument 取自 `exchangeInfo`（REST），或 `venues[].exchange_info` 指定的保存文件；预备输入（instrument 定义与模拟账户）以启动时刻打时间戳。
+- 结束于 SIGINT、SIGTERM 或 `--run-for`，以 `ShutdownRequested` 与 `Drained` 收尾。C++ 节点用 `jarvis::live_node_main<S...>`（`jarvis/live/live_main.hpp`），Python 节点在带 live shell 的构建中（`just install-live`）用同一个 `jarvis.main`。
+
 ### 4.2 NodeConfig
 
 配置是类型化 TOML，解析为 C++ 结构体（`jarvis/node/config.hpp`）。未知键直接报错。命令行的 `--env` 与 `--set a.b=c` 覆盖之后的最终配置被规范化并计算 hash，hash 写入事件日志头，回放时据此确认配置一致。
@@ -375,7 +383,7 @@ int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); } 
 
 1. `Context` 没有任何环境专属的成员或方法。策略无法得知自己处于哪个环境。
 2. 分层检查禁止 `strategy`、`examples`、`python/jarvis` include `live`、`backtest`、`adapter` 的内部头。
-3. **环境等价测试**进入 CI：录制一段 sandbox 会话的解码日志，用同一个策略文件以 backtest 接线回放（回放模式见第 5.2 节），两次的命令流必须逐字节相同。它验证的是接线差异不会泄漏到策略与引擎。每个示例策略都跑这项测试。
+3. **环境等价测试**进入 CI：录制一段 sandbox 会话的解码日志，用同一个策略文件以 backtest 接线回放（回放模式见第 5.2 节），两次的命令流必须逐字节相同。它验证的是接线差异不会泄漏到策略与引擎。每个示例策略都跑这项测试。实现（M4-E）：`tests/cpp/test_sandbox.cpp` 用脚本化的回环交易所（行情路由、WS API 快照）跑一段 sandbox 会话，策略在模拟交易所成交、撤单，然后 `replay_run` 复算全部输出逐字节相同，原始帧重解码得到的行情与运行日志中的行情输入逐条相同。内核层另有测试：虚拟时钟下的实时运行与同一到达序列的 backtest 记录相同的输入、输出与交易所回报。2026-09-27 对生产行情实测：C++ 示例 `pegged_mm` 60 秒（16,942 条消息、0 解码错误、21 个订单、32 条交易所回报）与带 depth 的 40 秒（1 次快照、订单簿同步）、Python 示例 `mm_quote.py` 60 秒，回放全部无偏差。
 4. 三个环境之间唯一不同的配置段是 `[data]`、`[venues]`、`[persistence]`，策略读不到它们。
 
 ---
@@ -606,6 +614,8 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - order-sender 线程拥有 WS API 连接。它从出站环取命令发出，并把回执与错误码推入自己的回执环。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
+- 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
+- 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
 
 ### 7.2 路由
 
@@ -634,9 +644,9 @@ jarvis 采用 nautilus 的 standard precision 模式。
 
 - Python 启动的节点里，主线程就是 core 线程。`Node.run()` 进入时释放 GIL，所有 IO 线程都是 C++ 线程，从不触碰 Python。
 - 一批输入中第一次需要调用 Python 回调时，`PyStrategyHost` 获取 GIL（`python/src/bind_node.cpp` 的 `GilBatch`）；策略没有定义的回调直接跳过，不触碰 Python，所以只路由到 C++ 策略的批次不获取 GIL。批次结束后，节点在写下一批的第一条输入之前释放 GIL（backtest 的输入钩子 `InputHook`）。回放在调用方持有 GIL 的情况下进行。
-- 空闲时不持有 GIL。`on_idle(ctx)` 钩子按 `idle_hook_ms` 的节奏在持有 GIL 的情况下运行，默认做 `gc.collect(0)`；backtest 没有空闲期，这个钩子随 sandbox（M4）实现。
-- 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。
-- `on_start` 结束后调用 `gc.freeze()`，第二代回收只在 `on_idle` 中进行。
+- 空闲时不持有 GIL。空闲钩子按 `python.idle_hook_ms`（默认 100，运维参数，不进入配置 hash）的节奏在持有 GIL 的情况下运行：先 `gc.collect(0)`，再调用各 Python 策略的 `on_idle()`；backtest 没有空闲期，不运行它。`on_idle` 不接收 `ctx`：它在任何 `step` 之外运行，它对内核做的任何事都无法在回放中重现；它抛出的异常只打印，不产生 `StrategyError`，原因相同。
+- 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。实现（M4-E）：运行期间 `live::ShutdownSignals` 把 SIGINT、SIGTERM 换成只写一个原子标志的处理器，运行结束时恢复原来的处理器（Python 的）；实时循环见到标志后以 `ShutdownRequested` 收尾。
+- `on_start` 结束后调用 `gc.freeze()`，第二代回收只在 `on_idle` 中进行。运行结束时调用 `gc.unfreeze()`：冻结的对象连解释器退出时也不回收，不解冻会在退出时留下未释放的对象。
 
 ### 7.5 让 Python 远离逐 tick 热循环
 
@@ -1154,9 +1164,9 @@ Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
 - **解码事件日志**：归一化事件，即 WAL，回放只读这一份（第 16 节）。
 - **原始帧文件**：每个连接一份，记录 `(recv_ts, conn_id, len, bytes)`，由 IO 线程写入。`persistence.raw_frames` 可设为 `true`、`false` 或 `sampled`。
 
-只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis redecode raw.bin --codec sbe@<id>:<ver>` 可以从原始帧重建解码日志用于研究。
+只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis-capture redecode raw-frames.jraw --exchange-info JSON [--out DIR] [--check RUN_DIR]` 可以从原始帧重建解码日志用于研究（放在 `jarvis-capture` 而不是 `jarvis`，因为 `jarvis` CLI 在不带 live shell 的构建中也要能编译）。重解码用与 md-io 线程相同的 Codec 与订单簿同步，按文件中的顺序处理同样的帧；IO 线程按处理顺序写帧，WS API 的快照请求与应答也写入，所以结果与当时交给 core 的事件流逐条相同。`--check` 要求运行日志中的行情输入恰好是重解码事件的前缀，逐字节相同；之后的几条是运行停止时仍在环里、没有被步进的事件。2026-09-27 对一段 40 秒的生产 sandbox 会话（含 depth 与一次快照）验证：运行的 2704 条行情输入与重解码结果逐字节相同。
 
-原始帧文件的格式（`jarvis/live/raw_frames.hpp`，小端）：文件头为 `"JVRAWFR1"`、`u32 version`、`u32 reserved`；每条记录为 `u64 recv_ns`、`u32 conn_id`、`u8 kind`、`u8 opcode`、`u16 reserved`、`u32 length` 加字节。`kind` 区分 Open（字节为 URL）、Message、Close（字节为原因），因此重解码知道每个连接订阅了什么，也能看到断线。`recv_ns` 是 UTC 纳秒，取自启动时锚定一次的单调时钟。`jarvis-capture record|dump|decode` 采集、打印并离线解码这种文件，codec 的测试夹具与 fuzz 语料都由它采集。
+原始帧文件的格式（`jarvis/live/raw_frames.hpp`，小端）：文件头为 `"JVRAWFR1"`、`u32 version`、`u32 reserved`；每条记录为 `u64 recv_ns`、`u32 conn_id`、`u8 kind`、`u8 opcode`、`u16 reserved`、`u32 length` 加字节。`kind` 区分 Open（字节为 URL）、Message、Close（字节为原因）与 Sent（节点在该连接上发出的请求，例如 WS API 的 depth 请求，用来把快照应答与其 symbol 配对；带凭证的请求从不写入），因此重解码知道每个连接订阅了什么，也能看到断线。`recv_ns` 是 UTC 纳秒，取自启动时锚定一次的单调时钟。`jarvis-capture record|dump|decode` 采集、打印并离线解码这种文件，codec 的测试夹具与 fuzz 语料都由它采集。
 
 ---
 

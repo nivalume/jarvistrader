@@ -23,6 +23,10 @@ build preset="dev": (configure preset)
 install: bootstrap
     uv pip install --python {{python}} --reinstall ".[parquet]"
 
+# The same with the live shell (needs OpenSSL 3 headers): jarvis.Node then runs sandbox sessions.
+install-live: bootstrap
+    uv pip install --python {{python}} --reinstall ".[parquet]" -C cmake.define.JARVIS_BUILD_LIVE=ON
+
 # Everything a contributor runs before pushing: lint, functional tier, benchmark A/B, formal tier.
 check: lint test golden fp bench-compare tla-changed
 

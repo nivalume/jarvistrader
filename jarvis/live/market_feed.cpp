@@ -212,6 +212,7 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
     books.due_snapshots(core::UnixNanos{clock->now()}, due);
     for (const binance::SnapshotRequest r : due) {
       std::string error;
+      std::string sent;
       const Status s = api->request(
           "depth",
           {{"symbol", config.names[r.symbol]}, {"limit", std::to_string(config.snapshot_limit)}},
@@ -219,8 +220,10 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
           [this, r](Status answered, const binance::WsAnswer& a, std::string_view json) {
             on_snapshot(r, answered, a, json);
           },
-          error);
-      if (!core::ok(s)) {
+          error, &sent);
+      if (core::ok(s)) {
+        record(RawKind::Sent, api_conn, 1, sent, clock->now()); // pairs the answer with its symbol
+      } else {
         books.snapshot_failed(r);
         Counters::add(counters.snapshot_failures);
       }
