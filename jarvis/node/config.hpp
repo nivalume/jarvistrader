@@ -85,6 +85,8 @@ struct VenueConfig {
   std::string credentials; // a reference such as "env:NAME", never the secret itself
   AccountMode account_mode = AccountMode::OneWay;
   OmsKind oms = OmsKind::Netting;
+  std::uint32_t leverage =
+      0; // initial margin = notional / leverage; 0: the instrument's margin_init
   std::optional<SimSection> sim;
 };
 
@@ -108,7 +110,16 @@ struct StrategyConfig {
 struct RiskSection {
   model::TradingState initial_state = model::TradingState::Active;
   std::optional<model::Money> max_order_notional;
-  std::optional<model::Money> daily_loss_limit;
+  std::optional<model::Money> max_position_notional; // per instrument, open orders included
+  std::optional<model::Money> daily_loss_limit;      // Reducing
+  std::optional<model::Money> daily_loss_halt;       // Halted and KillSwitch
+  std::optional<model::Money> max_drawdown;          // Reducing
+  std::uint32_t price_band_bps = 0;                  // 0: off
+  std::uint32_t max_open_orders = 0;                 // per instrument; 0: off
+  std::uint32_t orders_per_10s = 250;                // 0: off
+  std::uint32_t orders_per_minute = 1000;            // 0: off
+  std::uint32_t margin_ratio_bps = 8000;             // Reducing at this maintenance/equity; 0: off
+  bool check_margin = true;
   std::uint64_t countdown_cancel_all_ms = 120'000;
   OnStrategyError on_strategy_error = OnStrategyError::HaltStrategy;
 };

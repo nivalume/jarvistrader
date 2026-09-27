@@ -34,10 +34,11 @@
 // in subscription order. Subscribers are collected before any callback runs, so a callback that
 // subscribes or unsubscribes changes the next delivery, not the current one.
 //
-// Order events: a venue event is applied to the OMS and delivered to the order's strategy at
-// once; the events the kernel produces for commands (OrderSubmitted, OrderDenied, pending
-// update and cancel) are delivered after the input's other callbacks, in the order the commands
-// were issued, including commands issued by those deliveries.
+// Order events: a venue event is applied to the OMS (a fill is also booked in the portfolio) and
+// delivered to the order's strategy at once; position events and the events the kernel produces
+// for commands (OrderSubmitted, OrderDenied, pending update and cancel) are delivered after the
+// input's other callbacks, in the order they arose, including those arising from these
+// deliveries.
 
 namespace jarvis::engine {
 
@@ -133,13 +134,13 @@ private:
       }
       return core::Status::Ok;
     } else if constexpr (std::is_same_v<T, model::MarkPriceUpdate>) {
-      return simple(e, data::DataKind::MarkPrice);
+      return on_mark(e);
     } else if constexpr (std::is_same_v<T, model::IndexPriceUpdate>) {
       return simple(e, data::DataKind::IndexPrice);
     } else if constexpr (std::is_same_v<T, model::FundingRateUpdate>) {
-      return simple(e, data::DataKind::FundingRate);
+      return on_funding(e);
     } else if constexpr (std::is_same_v<T, model::InstrumentStatus>) {
-      return simple(e, data::DataKind::Status);
+      return on_status(e);
     } else if constexpr (std::is_same_v<T, model::InstrumentClose>) {
       return simple(e, data::DataKind::Close);
     } else if constexpr (std::is_same_v<T, model::LiquidationOrder>) {
@@ -157,8 +158,10 @@ private:
       return k_.define_instrument(model::Instrument{e});
     } else if constexpr (detail::is_alternative_v<T, model::OrderEvent>) {
       return on_venue_order_event(model::OrderEvent{e});
+    } else if constexpr (std::is_same_v<T, model::AccountState>) {
+      return k_.trading.portfolio.set_account(e);
     } else {
-      return core::Status::Ok; // AccountState arrives with the portfolio; Shutdown is the node's
+      return core::Status::Ok; // Shutdown is the node's
     }
   }
 
@@ -179,11 +182,54 @@ private:
     return core::Status::Ok;
   }
 
+  core::Status on_status(const model::InstrumentStatus& e) {
+    std::uint32_t slot = 0;
+    if (slot_of(e.instrument_id, slot)) {
+      k_.trading.risk.on_status(slot, e);
+      deliver(slot, data::DataKind::Status, e, e.ts_init);
+    }
+    return core::Status::Ok;
+  }
+
+  // The monitors see the new valuation before subscribers do.
+  core::Status on_mark(const model::MarkPriceUpdate& e) {
+    std::uint32_t slot = 0;
+    if (!slot_of(e.instrument_id, slot)) {
+      return core::Status::Ok;
+    }
+    k_.trading.portfolio.set_mark(slot, e.value);
+    const core::Status s = k_.trading.monitor(k_.current, k_.outputs);
+    if (!core::ok(s)) {
+      return s;
+    }
+    deliver(slot, data::DataKind::MarkPrice, e, e.ts_init);
+    return core::Status::Ok;
+  }
+
+  // Funding settles before subscribers see the update, so a strategy reading its position in
+  // on_funding_rate sees the payment.
+  core::Status on_funding(const model::FundingRateUpdate& e) {
+    std::uint32_t slot = 0;
+    if (!slot_of(e.instrument_id, slot)) {
+      return core::Status::Ok;
+    }
+    core::Status s = k_.trading.on_funding(k_.current, slot, e);
+    if (core::ok(s)) {
+      s = k_.trading.monitor(k_.current, k_.outputs);
+    }
+    if (!core::ok(s)) {
+      return s;
+    }
+    deliver(slot, data::DataKind::FundingRate, e, e.ts_init);
+    return core::Status::Ok;
+  }
+
   core::Status on_trade(const model::TradeTick& t) {
     std::uint32_t slot = 0;
     if (!slot_of(t.instrument_id, slot)) {
       return core::Status::Ok;
     }
+    k_.trading.portfolio.note_trade(slot, t.price);
     deliver(slot, data::DataKind::Trade, t, t.ts_init);
     for (std::size_t f = 0; f < k_.features.size(); ++f) {
       data::Feature& feature = k_.features.at(static_cast<model::FeatureId>(f));
@@ -494,10 +540,18 @@ private:
 
   core::Status on_venue_order_event(const model::OrderEvent& e) {
     StrategyIndex owner = 0;
-    if (k_.trading.on_venue_event(e, owner)) {
-      deliver_order_event(owner, e);
+    if (!k_.trading.on_venue_event(k_.current, e, owner)) {
+      return core::Status::Ok; // refused and unknown events are counted, not fatal
     }
-    return core::Status::Ok; // refused and unknown events are counted, not fatal
+    if (std::holds_alternative<model::OrderFilled>(e) ||
+        std::holds_alternative<model::OrderFillVoided>(e)) {
+      const core::Status s = k_.trading.monitor(k_.current, k_.outputs);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    deliver_order_event(owner, e);
+    return core::Status::Ok;
   }
 
   void deliver_order_event(StrategyIndex s, const model::OrderEvent& e) {
@@ -511,12 +565,28 @@ private:
     }
   }
 
+  void deliver_position_event(StrategyIndex s, const model::PositionEvent& e) {
+    if (s >= ss_->size() || k_.is_disabled(s)) {
+      return;
+    }
+    strategy::Context ctx{k_, s};
+    const core::Status status = ss_->on_position_event(s, ctx, e);
+    if (!core::ok(status)) {
+      k_.fail(s, status);
+    }
+  }
+
   // The queue has fixed capacity and never reallocates, so entries stay put while callbacks
   // append to it.
   void deliver_order_events() {
-    core::FixedVector<strategy::PendingOrderEvent>& events = k_.trading.events;
+    core::FixedVector<strategy::PendingEvent>& events = k_.trading.events;
     for (std::size_t i = 0; i < events.size(); ++i) {
-      deliver_order_event(events[i].strategy, events[i].event);
+      const strategy::PendingEvent& p = events[i];
+      if (const auto* order = std::get_if<model::OrderEvent>(&p.event)) {
+        deliver_order_event(p.strategy, *order);
+      } else if (const auto* position = std::get_if<model::PositionEvent>(&p.event)) {
+        deliver_position_event(p.strategy, *position);
+      }
     }
     events.clear();
   }
@@ -524,6 +594,7 @@ private:
   // ---- lifecycle, timers, errors ------------------------------------------------------------
 
   core::Status on_lifecycle(const model::NodeLifecycle& e) {
+    k_.trading.on_lifecycle(e.from, e.to);
     if (e.to == model::NodeState::Running && !started_) {
       started_ = true;
       for (std::size_t i = 0; i < ss_->size(); ++i) {

@@ -16,10 +16,14 @@ Callbacks::
     on_trade_batch(ctx, batch)             on_quote_batch(ctx, batch)
     on_timer(ctx, timer_id, deadline)      on_error(ctx, error)
     on_order_event(ctx, event)             every event of this strategy's orders
+    on_position_event(ctx, event)          this strategy's positions: opened, changed, closed,
+                                           adjusted (funding)
 
 Orders: ``ctx.submit(ctx.limit(iid, side, qty, price))`` returns the ClientOrderId; the outcome
 (submitted or denied, then the venue's answers) arrives in ``on_order_event``. ``ctx.modify``,
-``ctx.cancel``, ``ctx.cancel_all``, ``ctx.order`` and ``ctx.open_orders`` complete the set.
+``ctx.cancel``, ``ctx.cancel_all``, ``ctx.order`` and ``ctx.open_orders`` complete the set;
+``ctx.position``, ``ctx.exposure``, ``ctx.balance`` and ``ctx.trading_state`` read the portfolio
+and the risk state.
 
 An exception in a callback becomes a recorded StrategyError; ``risk.on_strategy_error`` decides
 what happens next (by default the strategy stops). Inside callbacks the wall clock and
@@ -39,6 +43,8 @@ Context = _native.Context
 DataKind = _native.DataKind
 OrderIntent = _native.OrderIntent
 OrderView = _native.OrderView
+PositionView = _native.PositionView
+ExposureView = _native.ExposureView
 QuoteBatch = _native.QuoteBatch
 TradeBatch = _native.TradeBatch
 
@@ -62,6 +68,7 @@ CALLBACKS = (
     "on_timer",
     "on_error",
     "on_order_event",
+    "on_position_event",
 )
 
 
@@ -98,8 +105,10 @@ __all__ = [
     "Cadence",
     "Context",
     "DataKind",
+    "ExposureView",
     "OrderIntent",
     "OrderView",
+    "PositionView",
     "QuoteBatch",
     "Strategy",
     "TradeBatch",

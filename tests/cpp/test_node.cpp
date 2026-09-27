@@ -18,6 +18,10 @@
 
 #include <doctest/doctest.h>
 
+#include "jarvis/node/backtest_node.hpp"
+#include "jarvis/portfolio/margin.hpp"
+#include "jarvis/risk/gates.hpp"
+
 #include "jarvis/core/crc32c.hpp"
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
@@ -453,6 +457,58 @@ TEST_SUITE("unit") {
     CHECK_FALSE(c.risk.max_order_notional.has_value());
     CHECK(c.persistence.mode == node::PersistenceMode::Async);
     CHECK(c.python.callback_budget_us == 2000);
+  }
+
+  TEST_CASE("the risk section and venue leverage reach the kernel configuration") {
+    node::NodeConfig c;
+    REQUIRE(parse(R"toml(
+[node]
+id = "mm01"
+
+[[venues]]
+id = "binance_usdm"
+kind = "binance_usdm"
+leverage = 20
+
+[[strategies]]
+id = "mm-001"
+impl = "cpp:Nope"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+
+[risk]
+initial_state = "reducing"
+max_position_notional = "1000 USDT"
+daily_loss_halt = "300 USDT"
+max_drawdown = "500 USDT"
+price_band_bps = 150
+max_open_orders = 20
+orders_per_10s = 100
+orders_per_minute = 0
+margin_ratio_bps = 7000
+check_margin = false
+)toml",
+                  c)
+                .empty());
+    const jarvis::strategy::KernelConfig k = node::kernel_config(c);
+    const jarvis::risk::RiskConfig& r = k.trading.risk;
+    CHECK(r.initial_state == m::TradingState::Reducing);
+    CHECK(r.max_position_notional.value_or(m::Money{}).raw() == 1000'000'000'000LL);
+    CHECK(r.daily_loss_halt.has_value());
+    CHECK(r.max_drawdown.has_value());
+    CHECK(r.price_band_bps == 150);
+    CHECK(r.max_open_orders == 20);
+    CHECK(r.orders_per_10s == 100);
+    CHECK(r.orders_per_minute == 0);
+    CHECK(r.margin_ratio_bps == 7000);
+    CHECK_FALSE(r.check_margin);
+    REQUIRE(std::holds_alternative<jarvis::portfolio::LeveragedMargin>(k.trading.margin));
+    CHECK(std::get<jarvis::portfolio::LeveragedMargin>(k.trading.margin).leverage() == 20);
+    CHECK(k.trading.account_id.view() == "BINANCE_USDM-001");
+    CHECK(k.trading.trader_id.view() == "MM01-001");
+
+    node::NodeConfig bad;
+    const auto errors = parse("[node]\nid = \"mm01\"\n[risk]\nprice_band_bps = -1\n", bad);
+    CHECK(has_error(errors, "risk.price_band_bps", ""));
   }
 
   TEST_CASE("configuration errors name the path and line of every problem") {

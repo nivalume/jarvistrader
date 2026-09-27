@@ -221,6 +221,8 @@ st::KernelConfig small_config() {
   c.book_overflow_levels = 64;
   c.trading.orders = 256;
   c.trading.trades = 1024;
+  c.trading.risk.orders_per_10s = 0; // tests submit far faster than any venue allows
+  c.trading.risk.orders_per_minute = 0;
   return c;
 }
 
@@ -1062,6 +1064,266 @@ TEST_SUITE("unit") {
     CHECK(a == run(7));
     CHECK(a != run(8));
     CHECK(std::set<md::Uuid4>(a.begin(), a.end()).size() == a.size());
+  }
+}
+
+namespace {
+
+md::Event account_state(std::uint64_t ts, std::span<const md::AccountBalance> balances) {
+  md::AccountState a;
+  REQUIRE(md::AccountId::from("SIM-001", a.account_id) == Status::Ok);
+  a.balances = balances;
+  a.ts_event = UnixNanos{ts};
+  a.ts_init = UnixNanos{ts};
+  return md::Event{a};
+}
+
+md::Event filled_with_fee(std::uint64_t ts, const md::ClientOrderId& id, const std::string& trade,
+                          std::string_view qty, std::string_view px, std::string_view fee) {
+  md::Event e = filled(ts, id, trade, qty, px);
+  md::Money commission;
+  REQUIRE(md::Money::parse(fee, commission) == Status::Ok);
+  std::get<md::OrderFilled>(e).commission = commission;
+  return e;
+}
+
+md::Event mark_at(std::uint64_t ts, std::string_view px) {
+  md::MarkPriceUpdate u;
+  u.instrument_id = iid("BTCUSDT-PERP.BINANCE");
+  u.value = price(px);
+  u.ts_event = UnixNanos{ts};
+  u.ts_init = UnixNanos{ts};
+  return md::Event{u};
+}
+
+md::Event funding_at(std::uint64_t ts, std::string_view rate) {
+  md::FundingRateUpdate u;
+  u.instrument_id = iid("BTCUSDT-PERP.BINANCE");
+  REQUIRE(md::Decimal::parse(rate, u.rate) == Status::Ok);
+  u.ts_event = UnixNanos{ts};
+  u.ts_init = UnixNanos{ts};
+  return md::Event{u};
+}
+
+std::string position_line(const md::PositionEvent& e) {
+  return std::visit(
+      [](const auto& p) -> std::string {
+        using P = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<P, md::PositionOpened>) {
+          return "OPENED " + std::to_string(p.signed_qty.raw());
+        } else if constexpr (std::is_same_v<P, md::PositionChanged>) {
+          return "CHANGED " + std::to_string(p.signed_qty.raw());
+        } else if constexpr (std::is_same_v<P, md::PositionClosed>) {
+          return "CLOSED " + std::to_string(p.realized_pnl ? p.realized_pnl->raw() : 0);
+        } else {
+          return "ADJUSTED " + std::to_string(p.pnl_change ? p.pnl_change->raw() : 0);
+        }
+      },
+      e);
+}
+
+// Buys on start, sells on the first trade; logs order and position events and what it sees.
+struct Holder {
+  std::vector<std::string>* log = nullptr;
+  std::vector<md::ClientOrderId>* ids = nullptr;
+  int trades = 0;
+
+  Status on_start(st::Context& ctx) {
+    REQUIRE(ctx.subscribe_trades(iid("BTCUSDT-PERP.BINANCE")) == Status::Ok);
+    md::ClientOrderId id;
+    REQUIRE(ctx.submit(ctx.limit(iid("BTCUSDT-PERP.BINANCE"), md::OrderSide::Buy, quantity("0.010"),
+                                 price("65000.0")),
+                       id) == Status::Ok);
+    ids->push_back(id);
+    return Status::Ok;
+  }
+  Status on_trade(st::Context& ctx, const md::TradeTick& /*t*/) {
+    if (++trades == 1) {
+      md::ClientOrderId id;
+      REQUIRE(ctx.submit(
+                  ctx.market(iid("BTCUSDT-PERP.BINANCE"), md::OrderSide::Sell, quantity("0.010")),
+                  id) == Status::Ok);
+      ids->push_back(id);
+    }
+    return Status::Ok;
+  }
+  Status on_order_event(st::Context& ctx, const md::OrderEvent& e) {
+    log->push_back(order_line(e));
+    if (std::holds_alternative<md::OrderFilled>(e)) {
+      st::PositionView view;
+      REQUIRE(ctx.position(iid("BTCUSDT-PERP.BINANCE"), view));
+      log->push_back("sees " + std::to_string(view.signed_qty.raw()));
+    }
+    return Status::Ok;
+  }
+  Status on_position_event(st::Context& /*ctx*/, const md::PositionEvent& e) {
+    log->push_back(position_line(e));
+    return Status::Ok;
+  }
+};
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("fills move positions and balances; strategies see both in order") {
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids;
+    st::StaticStrategySet<Holder> set{Holder{&log, &ids}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::array<md::AccountBalance, 1> balances{};
+    md::Money thousand;
+    md::Money zero;
+    REQUIRE(md::Money::parse("1000 USDT", thousand) == Status::Ok);
+    REQUIRE(md::Money::parse("0 USDT", zero) == Status::Ok);
+    REQUIRE(md::AccountBalance::create(thousand, zero, thousand, balances[0]) == Status::Ok);
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), account_state(1, balances), running(2)}, seq) ==
+            Status::Ok);
+    REQUIRE(ids.size() == 1);
+    REQUIRE(drive(engine,
+                  {accepted(3, ids[0], "v1"),
+                   filled_with_fee(4, ids[0], "t1", "0.010", "65000.0", "0.13 USDT"),
+                   mark_at(5, "65100.0")},
+                  seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "ACCEPTED", "FILLED", "sees 10000000",
+                                          "OPENED 10000000"});
+    const st::Trading& trading = engine.kernel().trading;
+    md::Currency usdt;
+    REQUIRE(md::Currency::builtin("USDT", usdt) == Status::Ok);
+    md::AccountBalance balance;
+    REQUIRE(trading.balance(usdt, balance));
+    CHECK(balance.total.raw() == 1000 * 1'000'000'000LL - 130'000'000);
+    CHECK(balance.locked.raw() == 32'550'000'000); // 5% of 0.010 x 65100
+    st::PositionView view;
+    REQUIRE(trading.position(0, 0, view));
+    CHECK(view.unrealized_pnl.raw() == 1'000'000'000); // (65100 - 65000) x 0.010
+    CHECK(view.realized_pnl.raw() == -130'000'000);    // the commission
+    CHECK(view.position_id.view() == "BTCUSDT-PERP.BINANCE-strategy-001");
+    st::ExposureView exposure;
+    REQUIRE(trading.exposure(0, exposure));
+    CHECK(exposure.position.raw() == 10'000'000);
+    CHECK(exposure.max_long.raw() == 10'000'000);
+
+    log.clear();
+    REQUIRE(drive(engine, {funding_at(6, "0.0001"), trade_at(7, "65100.0")}, seq) == Status::Ok);
+    REQUIRE(ids.size() == 2);
+    REQUIRE(drive(engine, {filled_with_fee(8, ids[1], "t2", "0.010", "65200.0", "0.326 USDT")},
+                  seq) == Status::Ok);
+    // funding 0.010 x 65100 x 0.0001 = 0.0651 paid; realized 2 - 0.13 - 0.326 - 0.0651
+    CHECK(log == std::vector<std::string>{"ADJUSTED -65100000", "SUBMITTED", "FILLED", "sees 0",
+                                          "CLOSED 1478900000"});
+    REQUIRE(trading.balance(usdt, balance));
+    CHECK(balance.total.raw() == 1000 * 1'000'000'000LL + 1'478'900'000);
+    CHECK(balance.locked.raw() == 0);
+    CHECK(engine.failures().empty());
+  }
+}
+
+TEST_SUITE("unit") {
+  TEST_CASE("a hard loss limit halts trading and cancels every open order") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids(3);
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("0.010"), price("65000.0")),
+                           ids[0]) == Status::Ok);
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("0.010"), price("64000.0")),
+                           ids[1]) == Status::Ok);
+      } else {
+        CHECK(ctx.trading_state() == md::TradingState::Halted);
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Sell, quantity("0.010"), price("64000.0")),
+                           ids[2]) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    st::KernelConfig config = small_config();
+    REQUIRE(md::Money::parse("10 USDT", config.trading.risk.daily_loss_halt.emplace()) ==
+            Status::Ok);
+    jarvis::engine::Engine engine{config, set};
+    std::array<md::AccountBalance, 1> balances{};
+    md::Money thousand;
+    md::Money zero;
+    REQUIRE(md::Money::parse("1000 USDT", thousand) == Status::Ok);
+    REQUIRE(md::Money::parse("0 USDT", zero) == Status::Ok);
+    REQUIRE(md::AccountBalance::create(thousand, zero, thousand, balances[0]) == Status::Ok);
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), account_state(1, balances), running(2)}, seq) ==
+            Status::Ok);
+    REQUIRE(drive(engine,
+                  {accepted(3, ids[0], "v1"), accepted(3, ids[1], "v2"),
+                   filled(4, ids[0], "t1", "0.010", "65000.0")},
+                  seq) == Status::Ok);
+    engine.clear_outputs();
+    // 0.010 x (63900 - 65000) = -11 USDT: past the 10 USDT hard limit.
+    REQUIRE(drive(engine, {mark_at(5, "63900.0")}, seq) == Status::Ok);
+    CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Halted);
+    CHECK(engine.kernel().trading.risk.stats().kill_switches == 1);
+    REQUIRE(engine.outputs().size() == 1);
+    CHECK(std::get<md::CancelOrder>(engine.outputs()[0]).client_order_id == ids[1]);
+    log.clear();
+    REQUIRE(drive(engine, {trade_at(6, "63900.0")}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"DENIED TRADING_HALTED"}); // even a reducing sell
+  }
+
+  TEST_CASE("a modify outside the price band is rejected and the order stays") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId id;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("0.010"), price("100.0")),
+                           id) == Status::Ok);
+      } else {
+        CHECK(ctx.modify(id, std::nullopt, price("90.0")) == Status::Ok);
+        st::OrderView view;
+        REQUIRE(ctx.order(id, view));
+        CHECK(view.status == md::OrderStatus::Accepted);
+        CHECK(view.price == price("100.0"));
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    st::KernelConfig config = small_config();
+    config.trading.risk.price_band_bps = 500; // 5%
+    jarvis::engine::Engine engine{config, set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    REQUIRE(drive(engine, {accepted(3, id, "v1"), trade_at(4, "100.0")}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "ACCEPTED", "MODIFY_REJECTED"});
+    CHECK(count_outputs<md::ModifyOrder>(engine.outputs()) == 0);
+  }
+
+  TEST_CASE("the node lifecycle holds trading while it reconciles or is degraded") {
+    std::vector<std::string> log;
+    Script script = [](st::Context& /*ctx*/, int /*step*/) -> Status { return Status::Ok; };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    const auto lifecycle = [](NodeState from, NodeState to, LifecycleReason reason,
+                              std::uint64_t ts) {
+      return md::Event{md::NodeLifecycle{from, to, reason, UnixNanos{ts}}};
+    };
+    const st::Trading& trading = engine.kernel().trading;
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine,
+                  {lifecycle(NodeState::Starting, NodeState::Syncing, LifecycleReason::Started, 1)},
+                  seq) == Status::Ok);
+    CHECK(trading.risk.trading_state() == md::TradingState::Halted);
+    REQUIRE(drive(engine, {running(2)}, seq) == Status::Ok);
+    CHECK(trading.risk.trading_state() == md::TradingState::Active);
+    REQUIRE(
+        drive(engine,
+              {lifecycle(NodeState::Running, NodeState::Degraded, LifecycleReason::HealthLost, 3)},
+              seq) == Status::Ok);
+    CHECK(trading.risk.trading_state() == md::TradingState::Reducing);
+    REQUIRE(drive(engine,
+                  {lifecycle(NodeState::Degraded, NodeState::Syncing,
+                             LifecycleReason::HealthRestored, 4)},
+                  seq) == Status::Ok);
+    CHECK(trading.risk.trading_state() == md::TradingState::Halted);
+    REQUIRE(drive(engine, {running(5)}, seq) == Status::Ok);
+    CHECK(trading.risk.trading_state() == md::TradingState::Active);
   }
 }
 

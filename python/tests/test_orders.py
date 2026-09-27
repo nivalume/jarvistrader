@@ -178,3 +178,145 @@ def test_order_intents_are_editable_before_submit() -> None:
     intent.price = "65000.1"
     intent.time_in_force = m.TimeInForce.GTC
     assert str(intent.price) == "65000.1"
+
+
+def _header(cid: str, ts: int) -> dict[str, Any]:
+    return {
+        "trader_id": m.TraderId("ORD01-001"),
+        "strategy_id": m.StrategyId("holder-001"),
+        "instrument_id": m.InstrumentId.from_str(IID),
+        "client_order_id": m.ClientOrderId(cid),
+        "event_id": m.UUID4.derive(1, ts, 1),
+        "ts_event": ts,
+        "ts_init": ts,
+    }
+
+
+def _portfolio_config(tmp_path: Path) -> Path:
+    """A catalog with an account snapshot and the venue's answers to the first order."""
+    catalog = tmp_path / "catalog"
+    usdt = m.Currency.from_str("USDT")
+    cid = "ord01-000001-00000001"
+    events: list[Any] = [
+        _perpetual(DAY),
+        m.AccountState(
+            account_id=m.AccountId("BINANCE_USDM-001"),
+            account_type=m.AccountType.MARGIN,
+            base_currency=None,
+            balances=[m.AccountBalance(m.Money("1000", usdt), m.Money("0", usdt), m.Money("1000", usdt))],
+            margins=[],
+            is_reported=True,
+            event_id=m.UUID4.derive(1, 1, 1),
+            ts_event=DAY,
+            ts_init=DAY,
+        ),
+    ]
+    trades = [_trade(DAY + i * SECOND // 2, "65000.0") for i in range(1, 7)]
+    accepted = m.OrderAccepted(
+        **_header(cid, DAY + 3 * SECOND // 4),
+        venue_order_id=m.VenueOrderId("77"),
+        account_id=m.AccountId("BINANCE_USDM-001"),
+    )
+    filled = m.OrderFilled(
+        **_header(cid, DAY + 5 * SECOND // 4),
+        venue_order_id=m.VenueOrderId("77"),
+        account_id=m.AccountId("BINANCE_USDM-001"),
+        trade_id=m.TradeId("t1"),
+        order_side=m.OrderSide.BUY,
+        order_type=m.OrderType.LIMIT,
+        last_qty=m.Quantity("0.010"),
+        last_px=m.Price("64000.0"),
+        currency=usdt,
+        liquidity_side=m.LiquiditySide.MAKER,
+        commission=m.Money("0.128", usdt),
+        info_flags=0,
+    )
+    events += sorted([*trades, accepted, filled], key=lambda e: e.ts_init)
+    with log.EventLogWriter(str(catalog / IID / "aggTrade" / "2026-09-01")) as writer:
+        for seq, event in enumerate(events, start=1):
+            writer.append(event, seq=seq, ts=event.ts_init, source_id=1)
+    path = tmp_path / "node.toml"
+    path.write_text(
+        f"""
+[node]
+id = "ord01"
+seed = 5
+
+[data]
+catalog = "{catalog}"
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["{IID}"]
+streams = ["aggTrade"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[[strategies]]
+id = "holder-001"
+impl = "py:Holder"
+"""
+    )
+    return path
+
+
+class Holder(Strategy):
+    """Buys on the first trade; reads its position, exposure and balance afterwards."""
+
+    def __init__(self, params: Any = None, **kwargs: Any) -> None:
+        super().__init__(params, **kwargs)
+        self.trades = 0
+        self.positions: list[str] = []
+        self.seen: dict[str, Any] = {}
+
+    def on_start(self, ctx: jarvis.Context) -> None:
+        ctx.subscribe_trades(IID)
+        self.seen["state"] = ctx.trading_state()
+
+    def on_trade(self, ctx: jarvis.Context, trade: m.TradeTick) -> None:
+        self.trades += 1
+        if self.trades == 1:
+            ctx.submit(ctx.limit(IID, m.OrderSide.BUY, "0.010", "64000.0"))
+        elif self.trades == 4:
+            position = ctx.position(IID)
+            exposure = ctx.exposure(IID)
+            balance = ctx.balance("USDT")
+            self.seen.update(
+                side=position.side,
+                qty=str(position.quantity),
+                avg=str(position.avg_px_open),
+                unrealized=str(position.unrealized_pnl),
+                realized=str(position.realized_pnl),
+                position_id=str(position.position_id),
+                max_long=str(exposure.max_long),
+                total=str(balance.total),
+                locked=str(balance.locked),
+            )
+
+    def on_position_event(self, ctx: jarvis.Context, event: Any) -> None:
+        self.positions.append(type(event).__name__)
+
+
+def test_positions_balances_and_exposure_from_python(tmp_path: Path) -> None:
+    node = Node(_portfolio_config(tmp_path), out=tmp_path / "run")
+    strategy = Holder(id="holder-001")
+    result = node.add_strategy(strategy).run()
+    assert result.strategy_errors == 0
+    assert strategy.positions == ["PositionOpened"]
+    assert strategy.seen == {
+        "state": m.TradingState.ACTIVE,
+        "side": m.PositionSide.LONG,
+        "qty": "0.010",
+        "avg": "64000.000000000",
+        "unrealized": "10.00000000 USDT",
+        "realized": "-0.12800000 USDT",
+        "position_id": f"{IID}-holder-001",
+        "max_long": "0.010",
+        "total": "999.87200000 USDT",
+        "locked": "32.50000000 USDT",
+    }
+    replay = Node.from_run(result.directory)
+    report = replay.add_strategy(Holder(id="holder-001")).replay()
+    assert report.divergence is None, str(report)

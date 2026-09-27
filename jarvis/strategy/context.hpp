@@ -20,10 +20,12 @@
 #include "jarvis/data/features.hpp"
 #include "jarvis/data/subscription.hpp"
 #include "jarvis/model/bar.hpp"
+#include "jarvis/model/currency.hpp"
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instrument_table.hpp"
 #include "jarvis/model/instruments.hpp"
+#include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/strategy/trading.hpp"
@@ -279,6 +281,18 @@ public:
     }
     out = *def;
     return true;
+  }
+
+  // ---- portfolio (section 11.2) -------------------------------------------------------------
+
+  [[nodiscard]] bool position(StrategyIndex strategy, const model::InstrumentId& id,
+                              PositionView& out) const {
+    model::InstrumentSlot slot;
+    return core::ok(instruments.find(id, slot)) && trading.position(strategy, slot.value, out);
+  }
+  [[nodiscard]] bool exposure(const model::InstrumentId& id, ExposureView& out) const {
+    model::InstrumentSlot slot;
+    return core::ok(instruments.find(id, slot)) && trading.exposure(slot.value, out);
   }
 
   // ---- orders (section 9) -------------------------------------------------------------------
@@ -655,6 +669,25 @@ public:
 
   [[nodiscard]] bool order(const model::ClientOrderId& id, OrderView& out) const {
     return k_->trading.order(self_, id, out);
+  }
+
+  // ---- portfolio ----------------------------------------------------------------------------
+
+  // This strategy's position in the instrument; false before the instrument is defined.
+  [[nodiscard]] bool position(const model::InstrumentId& id, PositionView& out) const {
+    return k_->position(self_, id, out);
+  }
+  // open_exposure() of the instrument across all strategies (section 9.3).
+  [[nodiscard]] bool exposure(const model::InstrumentId& id, ExposureView& out) const {
+    return k_->exposure(id, out);
+  }
+  // Which commands the risk gates accept now (section 10.2).
+  [[nodiscard]] model::TradingState trading_state() const noexcept {
+    return k_->trading.risk.trading_state();
+  }
+  // The account's balance of one currency; false when the account never held it.
+  [[nodiscard]] bool balance(const model::Currency& currency, model::AccountBalance& out) const {
+    return k_->trading.balance(currency, out);
   }
   // Writes up to out.size() open orders of this strategy and returns how many there are.
   [[nodiscard]] std::size_t open_orders(std::span<OrderView> out) const {

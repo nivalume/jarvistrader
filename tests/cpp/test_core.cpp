@@ -117,6 +117,13 @@ TEST_SUITE("unit") {
                             9'223'372'036'000'000'000ULL, 1'000'000'000'000'000'000ULL,
                             out) == Status::Overflow);
     CHECK(core::mul_div_u64(7, 1, 1, 0, out) == Status::InvalidArgument);
+    CHECK(core::mul_div_u64_up(7, 1, 1, 2, out) == Status::Ok);
+    CHECK(out == 4);
+    CHECK(core::mul_div_u64_up(8, 1, 1, 2, out) == Status::Ok);
+    CHECK(out == 4); // exact: no extra unit
+    // Quotients beyond 64 bits.
+    CHECK(core::mul_div_u64_up(UINT64_MAX, UINT64_MAX, 2, UINT64_MAX - 1, out) == Status::Overflow);
+    CHECK(core::mul_div_u64_up(UINT64_MAX, 3, 1, 2, out) == Status::Overflow);
     std::int64_t signed_out = 0;
     CHECK(core::mul_div_i64(-7, 1, 1, 2, signed_out) == Status::Ok);
     CHECK(signed_out == -3); // toward zero
@@ -266,6 +273,25 @@ TEST_SUITE("property") {
       const core::u128 expected = static_cast<core::u128>(a) * b * c / d;
       std::uint64_t out = 0;
       const Status s = core::mul_div_u64(a, b, c, d, out);
+      if (expected > UINT64_MAX) {
+        CHECK(s == Status::Overflow);
+      } else {
+        CHECK(s == Status::Ok);
+        CHECK(out == static_cast<std::uint64_t>(expected));
+      }
+    });
+  }
+
+  TEST_CASE("mul_div_up is the ceiling that 128-bit arithmetic computes where that suffices") {
+    jarvis::testkit::for_all([](Gen& gen) {
+      const std::uint64_t a = gen.range_u(0, UINT32_MAX);
+      const std::uint64_t b = gen.range_u(0, UINT32_MAX);
+      const std::uint64_t c = gen.range_u(0, UINT32_MAX);
+      const std::uint64_t d = gen.range_u(1, UINT32_MAX);
+      const core::u128 product = static_cast<core::u128>(a) * b * c;
+      const core::u128 expected = product / d + (product % d != 0 ? 1 : 0);
+      std::uint64_t out = 0;
+      const Status s = core::mul_div_u64_up(a, b, c, d, out);
       if (expected > UINT64_MAX) {
         CHECK(s == Status::Overflow);
       } else {

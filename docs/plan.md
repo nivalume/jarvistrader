@@ -91,21 +91,21 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 - [x] task: specs — `OrderLifecycle.tla`（含 jarvis 新增的 `Submitted → Expired`）与 `specs/map/order_lifecycle_actions.hpp`（§8.1、§18）
 - [x] task: execution — `OrderCore` 与订单状态转移表，转移表由规约核对，含 `apply` 阶段的 `previous_status` 规则
 - [x] task: execution — OMS：按 `ClientOrderId` 开放寻址索引、成交按 trade id 去重、已关闭订单按关闭顺序淘汰、按 instrument 与策略统计未完成数量（Netting）
-- [ ] task: execution — `open_exposure()`（持仓 + 在途子单 + 父单剩余量）与按策略的归因账本，依赖 Portfolio
+- [x] task: execution — `open_exposure()`（venue 持仓 + 未完成订单，OMS 按 instrument 维护运行总量）与按策略的归因账本；父单剩余量随执行算法加入
 - [x] task: execution — `ExecutionEngine`：命令作为输出、venue 事件推进状态机、`OrderDenied` 与内核产生的订单事件回送策略的 `on_order_event`
 - [ ] task: execution — `ExecAlgorithm` concept、`AlgoState` 竞技场、`AlgoContext`（子单经 Gate B、生成前查询令牌）与直通模式
 - [x] task: strategy — `Context` 的下单方法（`submit`、`modify`、`cancel`、`cancel_all`）、订单与 instrument 查询、意图工厂，C++ 与 Python 同名（§9.4）
-- [ ] task: strategy — `Context` 的 `position`、`account`、`exposure`、`trading_state` 查询，依赖 Portfolio 与风控
-- [ ] task: cost — `FeeModel`（档位、BNB 抵扣、资金费）、`SlippageModel`、`LatencyModel`（§11.1）
+- [x] task: strategy — `Context` 的 `position`、`balance`、`exposure`、`trading_state` 查询，C++ 与 Python 同名
+- [x] task: cost — `FeeModel`（档位、BNB 抵扣、资金费）、`SlippageModel`、`LatencyModel`（§11.1）
 - [ ] task: backtest — `SimulatedExchange`：实现 `VenueClient` concept、双时间线、延迟事件入队（§12.1、§12.2）
 - [ ] task: backtest — 成交模型 `TopOfBookCross` 与 `QueuePosition`（以 `TradeTick` 消耗前方排队量，§12.3）
 - [ ] task: backtest — `GTX` 会吃单时拒单、`IOC`/`FOK` 余量过期、STP 三种模式、资金费结算
 - [ ] task: backtest — `SimulatedExchange` 的快照查询，使对账代码能在回测中运行
-- [ ] task: portfolio — `Portfolio`：定点仓位、余额、`MarginModel`、按 mark 计的未实现盈亏、资金费调整（§11.2）
-- [ ] task: risk — `RiskRule` concept、Gate A 与 Gate B 的规则数组、§10.1 的规则目录与拒单原因码
-- [ ] task: risk — `TradingState`、允许命令矩阵、KillSwitch（§10.2、§10.3）
-- [ ] task: risk — 内核内令牌桶，由定时器事件推进（§10.4）
-- [ ] task: risk — 事后监控：日内亏损、回撤、保证金率（§10.5）
+- [x] task: portfolio — `Portfolio`：定点仓位、余额、`MarginModel`、按 mark 计的未实现盈亏、资金费调整（§11.2）
+- [x] task: risk — `RiskRule` concept、Gate A 与 Gate B 的规则数组、§10.1 的规则目录与拒单原因码
+- [x] task: risk — `TradingState`、允许命令矩阵、KillSwitch（§10.2、§10.3）
+- [x] task: risk — 内核内限速（按时钟对齐的固定窗口，由输入的 ts 推进，§10.4）
+- [x] task: risk — 事后监控：日内亏损、回撤、保证金率（§10.5）
 - [ ] task: specs — `TradingState.tla`（含令牌桶）与映射头
 - [ ] task: specs — `Matching.tla` 与映射头
 - [ ] task: tools — `tools/tla/behaviours.py`、`trace_driver`、`jarvis trace-export`（§18.2）
@@ -113,8 +113,9 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 - [ ] task: examples — `examples/py/mm_quote.py` 与 `examples/cpp/pegged_mm.cpp`，只供测试与 soak
 - [ ] task: harness — `OrderLifecycle` 正向与反向 trace validation 进入 CI
 - [ ] task: harness — `TradingState`、`Matching` 的不变量检查与生成行为进入 CI
-- [ ] task: harness — 性质测试：成交守恒、仓位等于成交流之和、`open_exposure()` 等于逐单求和
-- [ ] task: harness — 热基准 `oms/apply_order_event`、`risk/gate_a`、`risk/gate_b`、`sim/match_top_of_book`、`sim/match_queue_position`、`step/quote_to_command`
+- [x] task: harness — 性质测试：成交守恒、仓位等于成交流之和、`open_exposure()` 等于逐单求和
+- [x] task: harness — 热基准 `oms/apply_order_event`、`risk/gate_a`、`risk/gate_b`、`step/quote_to_command`
+- [ ] task: harness — 热基准 `sim/match_top_of_book`、`sim/match_queue_position`
 - [ ] task: bench — 准备自托管基准 runner（D21），就绪后把核心路径阈值收紧到 3%
 - [ ] task: 验收 — Python 与 C++ 示例策略在 BTCUSDT-PERP 数据上完成回测，跨 preset 指纹一致；规约 a、c、d 在 CI 中通过
 

@@ -483,4 +483,72 @@ TEST_SUITE("property") {
       }
     });
   }
+
+  TEST_CASE("running open totals equal a scan of the open orders") {
+    jarvis::testkit::for_all([](jarvis::testkit::Gen& gen) {
+      ex::Oms oms{24, 128, 2};
+      int next = 0;
+      int trade = 0;
+      const auto scan = [&](std::uint32_t slot) {
+        ex::OpenQuantity total;
+        for (std::uint16_t s = 0; s < 2; ++s) {
+          const ex::OpenQuantity part = oms.open_quantity(slot, s);
+          total.buy_raw += part.buy_raw;
+          total.sell_raw += part.sell_raw;
+          total.orders += part.orders;
+          total.buy_notional += part.buy_notional;
+          total.sell_notional += part.sell_notional;
+        }
+        return total;
+      };
+      for (int step = 0; step < 300; ++step) {
+        const std::uint64_t action = gen.below(6);
+        if (action == 0 || next == 0) {
+          ex::OrderRecord r =
+              order_record(next, gen.coin() ? m::OrderSide::Buy : m::OrderSide::Sell,
+                           1 + gen.below(4), static_cast<std::uint32_t>(gen.below(2)));
+          r.strategy = static_cast<std::uint16_t>(gen.below(2));
+          std::uint32_t index = ex::kNoIndex;
+          if (oms.create(r, index) == Status::Ok) {
+            static_cast<void>(oms.apply(index, K::Submitted));
+            ++next;
+          }
+        } else {
+          const std::uint32_t index =
+              oms.find(cid(static_cast<int>(gen.below(static_cast<std::uint64_t>(next)))));
+          if (index == ex::kNoIndex) {
+            continue;
+          }
+          switch (action) {
+          case 1:
+            static_cast<void>(oms.apply(index, K::Accepted));
+            break;
+          case 2:
+            static_cast<void>(
+                oms.fill(index, tid("t" + std::to_string(trade++)), q(1), px("100.00")));
+            break;
+          case 3:
+            static_cast<void>(oms.apply(index, K::PendingUpdate));
+            static_cast<void>(oms.update(index, q(2 + gen.below(4)), px("99.50")));
+            break;
+          case 4:
+            static_cast<void>(oms.apply(index, K::Canceled));
+            break;
+          default:
+            static_cast<void>(oms.apply(index, K::PendingCancel));
+            break;
+          }
+        }
+        for (std::uint32_t slot = 0; slot < 2; ++slot) {
+          const ex::OpenQuantity fast = oms.open_quantity(slot);
+          const ex::OpenQuantity slow = scan(slot);
+          REQUIRE(fast.buy_raw == slow.buy_raw);
+          REQUIRE(fast.sell_raw == slow.sell_raw);
+          REQUIRE(fast.orders == slow.orders);
+          REQUIRE(fast.buy_notional == slow.buy_notional);
+          REQUIRE(fast.sell_notional == slow.sell_notional);
+        }
+      }
+    });
+  }
 }

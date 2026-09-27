@@ -15,6 +15,7 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/model/position_events.hpp"
 
 // The strategy API (docs/architecture.md section 9.4). A C++ strategy is any class with some of
 // the callbacks below; missing callbacks are skipped at compile time. There is no base class and
@@ -34,6 +35,8 @@
 //   on_trade_batch(ctx, TradeBatch) / on_quote_batch(ctx, QuoteBatch)   OnBatch cadence
 //   on_order_event(ctx, OrderEvent)               every event of this strategy's orders, from the
 //                                                 kernel (submitted, denied, pending) or the venue
+//   on_position_event(ctx, PositionEvent)         this strategy's positions: opened, changed,
+//                                                 closed, adjusted (funding)
 //   on_timer(ctx, TimerKey, UnixNanos deadline)
 //   on_error(ctx, StrategyError)                  this strategy failed
 
@@ -110,6 +113,15 @@ template <typename S>
 core::Status invoke_order_event(S& s, Context& ctx, const model::OrderEvent& e) {
   if constexpr (requires { s.on_order_event(ctx, e); }) {
     return detail::status_of([&] { return s.on_order_event(ctx, e); });
+  } else {
+    return core::Status::Ok;
+  }
+}
+
+template <typename S>
+core::Status invoke_position_event(S& s, Context& ctx, const model::PositionEvent& e) {
+  if constexpr (requires { s.on_position_event(ctx, e); }) {
+    return detail::status_of([&] { return s.on_position_event(ctx, e); });
   } else {
     return core::Status::Ok;
   }

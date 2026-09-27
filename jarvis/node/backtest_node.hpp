@@ -69,7 +69,8 @@ private:
 [[nodiscard]] strategy::KernelConfig kernel_config(const NodeConfig& config);
 [[nodiscard]] strategy::ErrorPolicy error_policy(const NodeConfig& config);
 // Strategy i issues orders under [[strategies]][i].id (a nautilus StrategyId, "<name>-<tag>");
-// the default "strategy-00<i+1>" stays for entries without a valid one.
+// the default "strategy-00<i+1>" stays for entries without a valid one. A strategy whose entry
+// lists instruments may trade only those.
 void name_strategies(const NodeConfig& config, strategy::KernelServices& kernel);
 
 // Opens one LogSource per catalog stream that [data] selects. The merge keeps pointers into

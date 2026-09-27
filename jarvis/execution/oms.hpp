@@ -49,17 +49,24 @@ struct OrderRecord {
   bool used = false;
 };
 
-// Open order quantities of one instrument, for open_exposure() (section 9.3).
+// Open order quantities of one instrument, for open_exposure() (section 9.3) and the risk gates.
 struct OpenQuantity {
-  std::uint64_t buy_raw = 0;  // leaves of open buy orders
-  std::uint64_t sell_raw = 0; // leaves of open sell orders
-  std::uint32_t orders = 0;   // open orders
+  std::uint64_t buy_raw = 0;    // leaves of open buy orders
+  std::uint64_t sell_raw = 0;   // leaves of open sell orders
+  std::uint32_t orders = 0;     // open orders
+  core::u128 buy_notional = 0;  // sum of leaves.raw x price.raw of open priced buy orders
+  core::u128 sell_notional = 0; // the same for sells (10^18 scale)
 };
 
 class Oms {
 public:
-  Oms(std::uint32_t orders, std::uint32_t trades)
-      : orders_{orders}, trades_{trades}, table_{table_size(orders)}, closed_{orders} {
+  // `slots` instruments get running open totals (open_quantity in O(1)); others are scanned.
+  Oms(std::uint32_t orders, std::uint32_t trades, std::uint32_t slots = 0)
+      : orders_{orders}, trades_{trades}, table_{table_size(orders)}, closed_{orders},
+        open_{slots} {
+    for (std::uint32_t i = 0; i < slots; ++i) {
+      static_cast<void>(open_.push_back(OpenQuantity{}));
+    }
     for (std::uint32_t i = 0; i < orders; ++i) {
       static_cast<void>(orders_.push_back(OrderRecord{}));
       static_cast<void>(closed_.push_back(kNoIndex));
@@ -121,7 +128,9 @@ public:
   [[nodiscard]] core::Status apply(std::uint32_t index, OrderEventKind kind) noexcept {
     OrderRecord& r = orders_[index];
     const bool was_closed = is_closed(r.state.status());
+    const Share before = share(r);
     const core::Status s = r.state.apply(kind);
+    track(r, before);
     note_closed(index, was_closed);
     return s;
   }
@@ -129,10 +138,12 @@ public:
   [[nodiscard]] core::Status update(std::uint32_t index, model::Quantity quantity,
                                     std::optional<model::Price> price) noexcept {
     OrderRecord& r = orders_[index];
+    const Share before = share(r);
     const core::Status s = r.state.update(quantity);
     if (core::ok(s) && price) {
       r.price = price;
     }
+    track(r, before);
     return s;
   }
 
@@ -147,10 +158,12 @@ public:
       return core::Status::CapacityExceeded;
     }
     const bool was_closed = is_closed(r.state.status());
+    const Share before = share(r);
     const core::Status s = r.state.fill(qty);
     if (!core::ok(s)) {
       return s;
     }
+    track(r, before);
     const std::uint32_t t = free_trade_;
     free_trade_ = trades_[t].next;
     trades_[t] = TradeRecord{trade_id, qty.raw(), r.trades};
@@ -169,10 +182,12 @@ public:
       return core::Status::InvalidArgument;
     }
     const bool was_closed = is_closed(r.state.status());
+    const Share before = share(r);
     const core::Status s = r.state.void_fill(voided);
     if (!core::ok(s)) {
       return s;
     }
+    track(r, before);
     trades_[t].qty_raw -= voided.raw();
     r.fill_notional -= static_cast<core::i128>(px.raw()) * static_cast<core::i128>(voided.raw());
     note_closed(index, was_closed);
@@ -198,6 +213,9 @@ public:
   // Leaves of the open orders of instrument `slot` (all strategies, or one).
   [[nodiscard]] OpenQuantity
   open_quantity(std::uint32_t slot, std::optional<std::uint16_t> strategy = {}) const noexcept {
+    if (!strategy && slot < open_.size()) {
+      return open_[slot];
+    }
     OpenQuantity out;
     for (std::uint32_t i = 0; i < next_unused_; ++i) {
       const OrderRecord& r = orders_[i];
@@ -205,14 +223,46 @@ public:
           (strategy && r.strategy != *strategy)) {
         continue;
       }
-      const std::uint64_t leaves = r.state.leaves().raw();
-      (r.side == model::OrderSide::Buy ? out.buy_raw : out.sell_raw) += leaves;
+      const Share sh = share(r);
+      (r.side == model::OrderSide::Buy ? out.buy_raw : out.sell_raw) += sh.leaves;
+      (r.side == model::OrderSide::Buy ? out.buy_notional : out.sell_notional) += sh.notional;
       ++out.orders;
     }
     return out;
   }
 
 private:
+  // What an order adds to its instrument's open totals.
+  struct Share {
+    std::uint64_t leaves = 0;
+    core::u128 notional = 0;
+    bool open = false;
+  };
+
+  [[nodiscard]] static Share share(const OrderRecord& r) noexcept {
+    if (!r.used || !is_open(r.state.status())) {
+      return {};
+    }
+    const std::uint64_t leaves = r.state.leaves().raw();
+    const core::u128 notional =
+        r.price ? static_cast<core::u128>(core::magnitude(r.price->raw())) * leaves : 0;
+    return Share{leaves, notional, true};
+  }
+
+  void track(const OrderRecord& r, const Share& before) noexcept {
+    if (r.slot >= open_.size()) {
+      return;
+    }
+    const Share after = share(r);
+    OpenQuantity& o = open_[r.slot];
+    const bool buy = r.side == model::OrderSide::Buy;
+    std::uint64_t& q = buy ? o.buy_raw : o.sell_raw;
+    core::u128& n = buy ? o.buy_notional : o.sell_notional;
+    q = q - before.leaves + after.leaves;
+    n = n - before.notional + after.notional;
+    o.orders = o.orders - (before.open ? 1U : 0U) + (after.open ? 1U : 0U);
+  }
+
   struct TradeRecord {
     model::TradeId trade_id;
     std::uint64_t qty_raw = 0;
@@ -318,6 +368,7 @@ private:
   core::FixedVector<TradeRecord> trades_;
   core::FixedVector<std::uint32_t> table_;
   core::FixedVector<std::uint32_t> closed_; // ring of closed orders, oldest at closed_head_
+  core::FixedVector<OpenQuantity> open_;    // running open totals by instrument slot
   std::size_t closed_head_ = 0;
   std::size_t closed_count_ = 0;
   std::uint32_t next_unused_ = 0;

@@ -146,7 +146,7 @@ void bind_account_state(nb::module_& mod) {
             from_py(ts_init, out.base.ts_init, "ts_init");
             new (self) PyAccountState{std::move(out)};
           },
-          nb::arg("account_id"), nb::arg("account_type"), nb::arg("base_currency"),
+          nb::arg("account_id"), nb::arg("account_type"), nb::arg("base_currency").none(),
           nb::arg("balances"), nb::arg("margins"), nb::arg("is_reported"), nb::arg("event_id"),
           nb::arg("ts_event"), nb::arg("ts_init"))
       .def_prop_ro("account_id", [](const PyAccountState& s) { return s.base.account_id; })

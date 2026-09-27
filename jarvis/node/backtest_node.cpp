@@ -11,8 +11,11 @@
 #include "jarvis/core/fixed_string.hpp"
 #include "jarvis/core/fixed_vector.hpp"
 #include "jarvis/model/identifiers.hpp"
+#include "jarvis/model/instrument_table.hpp"
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/replay.hpp"
+#include "jarvis/portfolio/margin.hpp"
+#include "jarvis/risk/gates.hpp"
 
 namespace jarvis::node {
 
@@ -49,17 +52,45 @@ strategy::KernelConfig kernel_config(const NodeConfig& config) {
   if (!config.venues.empty()) {
     static_cast<void>(
         model::AccountId::from(upper(config.venues.front().id) + "-001", k.trading.account_id));
+    if (config.venues.front().leverage > 0) {
+      k.trading.margin = portfolio::LeveragedMargin{config.venues.front().leverage};
+    }
   }
+  const RiskSection& r = config.risk;
+  risk::RiskConfig& rc = k.trading.risk;
+  rc.initial_state = r.initial_state;
+  rc.max_order_notional = r.max_order_notional;
+  rc.max_position_notional = r.max_position_notional;
+  rc.daily_loss_limit = r.daily_loss_limit;
+  rc.daily_loss_halt = r.daily_loss_halt;
+  rc.max_drawdown = r.max_drawdown;
+  rc.price_band_bps = r.price_band_bps;
+  rc.max_open_orders = r.max_open_orders;
+  rc.orders_per_10s = r.orders_per_10s;
+  rc.orders_per_minute = r.orders_per_minute;
+  rc.margin_ratio_bps = r.margin_ratio_bps;
+  rc.check_margin = r.check_margin;
   return k;
 }
 
 void name_strategies(const NodeConfig& config, strategy::KernelServices& kernel) {
   core::FixedVector<model::StrategyId>& ids = kernel.trading.strategy_ids;
   for (std::size_t i = 0; i < config.strategies.size() && i < ids.size(); ++i) {
+    const StrategyConfig& entry = config.strategies[i];
     model::StrategyId id;
-    if (!config.strategies[i].id.empty() &&
-        core::ok(model::StrategyId::from(config.strategies[i].id, id))) {
+    if (!entry.id.empty() && core::ok(model::StrategyId::from(entry.id, id))) {
       ids[i] = id;
+    }
+    // A strategy that lists its instruments may trade only those (InstrumentWhitelistRule).
+    if (!entry.instruments.empty()) {
+      const auto s = static_cast<std::uint16_t>(i);
+      kernel.trading.risk.restrict(s);
+      for (const model::InstrumentId& instrument : entry.instruments) {
+        model::InstrumentSlot slot;
+        if (core::ok(kernel.instruments.intern(instrument, slot))) {
+          kernel.trading.risk.allow(s, slot.value);
+        }
+      }
     }
   }
 }

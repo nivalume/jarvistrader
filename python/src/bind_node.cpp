@@ -208,7 +208,8 @@ constexpr std::string_view kCallbackNames[] = { // NOLINT(cppcoreguidelines-avoi
     "on_quote_batch",
     "on_timer",
     "on_error",
-    "on_order_event"};
+    "on_order_event",
+    "on_position_event"};
 
 enum Callback : std::uint8_t {
   kOnStart,
@@ -230,6 +231,7 @@ enum Callback : std::uint8_t {
   kOnTimer,
   kOnError,
   kOnOrderEvent,
+  kOnPositionEvent,
   kCallbackCount
 };
 
@@ -564,11 +566,24 @@ struct HostVTable {
       return h.call(ctx, kOnOrderEvent, event);
     });
   }
+  static Status on_position_event(void* p, st::Context& ctx, const m::PositionEvent& e) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnPositionEvent)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnPositionEvent, [&] {
+      h.gil_->acquire();
+      nb::object event =
+          std::visit([](const auto& x) { return nb::cast(x, nb::rv_policy::copy); }, e);
+      return h.call(ctx, kOnPositionEvent, event);
+    });
+  }
 };
 
 const st::StrategyVTable PyStrategyHost::kVTable{
-    &HostVTable::on_start, &HostVTable::on_stop,  &HostVTable::on_data,       &HostVTable::on_batch,
-    &HostVTable::on_timer, &HostVTable::on_error, &HostVTable::on_order_event};
+    &HostVTable::on_start,       &HostVTable::on_stop,          &HostVTable::on_data,
+    &HostVTable::on_batch,       &HostVTable::on_timer,         &HostVTable::on_error,
+    &HostVTable::on_order_event, &HostVTable::on_position_event};
 
 // ---- node setup -----------------------------------------------------------------------------
 
@@ -921,14 +936,19 @@ void bind_data_types(nb::module_& mod) {
       .def("__len__", [](const PyQuoteBatch& b) { return b.size; });
 }
 
+// Orders, the portfolio and the risk state (docs/architecture.md section 9.4).
+void bind_context_trading(nb::class_<PyContext>& cls);
+void bind_context_portfolio(nb::class_<PyContext>& cls);
+
 void bind_context(nb::module_& mod) {
   const auto cadence_arg = nb::arg("cadence") = d::Cadence::every();
-  nb::class_<PyContext>(mod, "Context",
-                        "The kernel as a strategy sees it; valid only during the callback it "
-                        "was passed to.")
-      .def(
-          "now", [](const PyContext& c) { return c.get().now().value(); },
-          "The current input's ts, in nanoseconds (the only clock a strategy may read).")
+  nb::class_<PyContext> cls(mod, "Context",
+                            "The kernel as a strategy sees it; valid only during the callback "
+                            "it was passed to.");
+  bind_context_trading(cls);
+  cls.def(
+         "now", [](const PyContext& c) { return c.get().now().value(); },
+         "The current input's ts, in nanoseconds (the only clock a strategy may read).")
       .def("seq", [](const PyContext& c) { return c.get().seq(); })
       .def(
           "rng", [](const PyContext& c, std::uint32_t key) { return c.get().rng(key); },
@@ -1032,17 +1052,20 @@ void bind_context(nb::module_& mod) {
             c.views->push_back(obj);
             return obj;
           },
-          nb::arg("instrument_id"), "The instrument's book, or None without a book subscription.")
-      .def(
-          "instrument",
-          [](const PyContext& c, nb::handle iid) -> nb::object {
-            m::Instrument def;
-            if (!c.get().instrument(instrument_of(iid), def)) {
-              return nb::none();
-            }
-            return std::visit([](const auto& i) { return event_to_py(m::Event{i}); }, def);
-          },
-          nb::arg("instrument_id"), "The instrument's definition, or None before one arrived.")
+          nb::arg("instrument_id"), "The instrument's book, or None without a book subscription.");
+}
+
+void bind_context_trading(nb::class_<PyContext>& cls) {
+  cls.def(
+         "instrument",
+         [](const PyContext& c, nb::handle iid) -> nb::object {
+           m::Instrument def;
+           if (!c.get().instrument(instrument_of(iid), def)) {
+             return nb::none();
+           }
+           return std::visit([](const auto& i) { return event_to_py(m::Event{i}); }, def);
+         },
+         nb::arg("instrument_id"), "The instrument's definition, or None before one arrived.")
       .def_static(
           "limit",
           [](nb::handle iid, m::OrderSide side, nb::handle qty, nb::handle price,
@@ -1155,6 +1178,48 @@ void bind_context(nb::module_& mod) {
           },
           nb::arg("instrument_id") = nb::none(),
           "Copies of this strategy's open orders (of one instrument when given).");
+  bind_context_portfolio(cls);
+}
+
+void bind_context_portfolio(nb::class_<PyContext>& cls) {
+  cls.def(
+         "position",
+         [](const PyContext& c, nb::handle iid) -> nb::object {
+           st::PositionView view;
+           if (!c.get().position(instrument_of(iid), view)) {
+             return nb::none();
+           }
+           return nb::cast(view, nb::rv_policy::copy);
+         },
+         nb::arg("instrument_id"),
+         "This strategy's position in the instrument (its share of the account's), or None "
+         "before the instrument is defined.")
+      .def(
+          "exposure",
+          [](const PyContext& c, nb::handle iid) -> nb::object {
+            st::ExposureView view;
+            if (!c.get().exposure(instrument_of(iid), view)) {
+              return nb::none();
+            }
+            return nb::cast(view, nb::rv_policy::copy);
+          },
+          nb::arg("instrument_id"),
+          "open_exposure() of the instrument: the account's position plus open orders.")
+      .def(
+          "balance",
+          [](const PyContext& c, nb::handle currency) -> nb::object {
+            m::Currency ccy;
+            from_py(currency, ccy, "currency");
+            m::AccountBalance balance;
+            if (!c.get().balance(ccy, balance)) {
+              return nb::none();
+            }
+            return nb::cast(balance, nb::rv_policy::copy);
+          },
+          nb::arg("currency"), "The account's balance of one currency, or None.")
+      .def(
+          "trading_state", [](const PyContext& c) { return c.get().trading_state(); },
+          "Which commands the risk gates accept now: ACTIVE, REDUCING or HALTED.");
 }
 
 template <typename T, typename F> auto rw(F T::*member, const char* name) {
@@ -1203,6 +1268,40 @@ void bind_orders(nb::module_& mod) {
   ro(&st::OrderView::leaves, "leaves_qty");
   ro(&st::OrderView::avg_px, "avg_px");
   ro(&st::OrderView::ts_init, "ts_init");
+  nb::class_<st::PositionView> position(
+      mod, "PositionView",
+      "A strategy's position in one instrument; PnL in the settlement currency, realized_pnl "
+      "net of commissions and funding since the position opened.");
+  const auto pos = [&position](auto member, const char* name) {
+    position.def_prop_ro(name, [member](const st::PositionView& v) { return to_py(v.*member); });
+  };
+  pos(&st::PositionView::instrument_id, "instrument_id");
+  pos(&st::PositionView::position_id, "position_id");
+  pos(&st::PositionView::side, "side");
+  pos(&st::PositionView::signed_qty, "signed_qty");
+  pos(&st::PositionView::quantity, "quantity");
+  pos(&st::PositionView::avg_px_open, "avg_px_open");
+  pos(&st::PositionView::realized_pnl, "realized_pnl");
+  pos(&st::PositionView::unrealized_pnl, "unrealized_pnl");
+  pos(&st::PositionView::commission, "commission");
+  pos(&st::PositionView::funding, "funding");
+  pos(&st::PositionView::total_pnl, "total_pnl");
+  pos(&st::PositionView::ts_opened, "ts_opened");
+
+  nb::class_<st::ExposureView> exposure(
+      mod, "ExposureView",
+      "open_exposure() of one instrument: the account's position and its open orders.");
+  const auto exp = [&exposure](auto member, const char* name) {
+    exposure.def_prop_ro(name, [member](const st::ExposureView& v) { return to_py(v.*member); });
+  };
+  exp(&st::ExposureView::instrument_id, "instrument_id");
+  exp(&st::ExposureView::position, "position");
+  exp(&st::ExposureView::open_buy, "open_buy");
+  exp(&st::ExposureView::open_sell, "open_sell");
+  exp(&st::ExposureView::max_long, "max_long");
+  exp(&st::ExposureView::max_short, "max_short");
+  exp(&st::ExposureView::notional, "notional");
+
   view.def("__repr__", [](const st::OrderView& v) {
     return "OrderView(" + std::string{v.client_order_id.view()} + " " +
            std::string{m::to_string(v.status)} + ")";

@@ -438,6 +438,7 @@ void read_venue(const toml::table& t, const std::string& path, Errors& errors, V
   r.string("credentials", v.credentials);
   r.enumeration("account_mode", v.account_mode, kAccountModeNames);
   r.enumeration("oms", v.oms, kOmsNames);
+  r.unsigned_int("leverage", v.leverage);
   if (const toml::table* sim = r.table("sim")) {
     SimSection s;
     read_sim(*sim, path + ".sim", errors, s);
@@ -532,7 +533,16 @@ void read_risk(TableReader& root, RiskSection& risk) {
   TableReader r{*t, "risk", root.errors()};
   r.enumeration("initial_state", risk.initial_state, kTradingStateNames);
   r.money("max_order_notional", risk.max_order_notional);
+  r.money("max_position_notional", risk.max_position_notional);
   r.money("daily_loss_limit", risk.daily_loss_limit);
+  r.money("daily_loss_halt", risk.daily_loss_halt);
+  r.money("max_drawdown", risk.max_drawdown);
+  r.unsigned_int("price_band_bps", risk.price_band_bps);
+  r.unsigned_int("max_open_orders", risk.max_open_orders);
+  r.unsigned_int("orders_per_10s", risk.orders_per_10s);
+  r.unsigned_int("orders_per_minute", risk.orders_per_minute);
+  r.unsigned_int("margin_ratio_bps", risk.margin_ratio_bps);
+  r.boolean("check_margin", risk.check_margin);
   r.unsigned_int("countdown_cancel_all_ms", risk.countdown_cancel_all_ms);
   r.enumeration("on_strategy_error", risk.on_strategy_error, kOnErrorNames);
   r.finish();
@@ -824,6 +834,7 @@ void canon_venue(Canon& c, const VenueConfig& v, const std::string& p) {
   c.str(p + ".kind", v.kind);
   c.str(p + ".account_mode", name_of(kAccountModeNames, v.account_mode));
   c.str(p + ".oms", name_of(kOmsNames, v.oms));
+  c.num(p + ".leverage", v.leverage);
   if (!v.sim) {
     c.raw(p + ".sim", "none");
     return;
@@ -942,7 +953,16 @@ std::string canonical_hashed_text(const NodeConfig& config) {
   const RiskSection& risk = config.risk;
   c.str("risk.initial_state", name_of(kTradingStateNames, risk.initial_state));
   c.money("risk.max_order_notional", risk.max_order_notional);
+  c.money("risk.max_position_notional", risk.max_position_notional);
   c.money("risk.daily_loss_limit", risk.daily_loss_limit);
+  c.money("risk.daily_loss_halt", risk.daily_loss_halt);
+  c.money("risk.max_drawdown", risk.max_drawdown);
+  c.num("risk.price_band_bps", risk.price_band_bps);
+  c.num("risk.max_open_orders", risk.max_open_orders);
+  c.num("risk.orders_per_10s", risk.orders_per_10s);
+  c.num("risk.orders_per_minute", risk.orders_per_minute);
+  c.num("risk.margin_ratio_bps", risk.margin_ratio_bps);
+  c.flag("risk.check_margin", risk.check_margin);
   c.num("risk.countdown_cancel_all_ms", risk.countdown_cancel_all_ms);
   c.str("risk.on_strategy_error", name_of(kOnErrorNames, risk.on_strategy_error));
   c.num("python.callback_budget_us", config.python.callback_budget_us);

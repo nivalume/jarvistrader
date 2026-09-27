@@ -101,6 +101,29 @@ struct U192 {
   return Status::Ok;
 }
 
+// out = ceil(a * b * c / d), exactly. ceil(ceil(x / p) / q) == ceil(x / (p * q)), so a caller
+// can round up in stages without losing the remainder of the first division.
+[[nodiscard]] constexpr Status mul_div_u64_up(std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                                              std::uint64_t d, std::uint64_t& out) noexcept {
+  std::uint64_t q = 0;
+  const Status s = mul_div_u64(a, b, c, d, q);
+  if (!ok(s)) {
+    return s;
+  }
+  const U192 product = mul_u128_u64(static_cast<u128>(a) * b, c);
+  const u128 back = static_cast<u128>(q) * d; // q * d <= product < 2^192 and q, d < 2^64
+  const u128 low = (static_cast<u128>(product.mid) << 64U) | product.lo;
+  if (product.hi == 0 && low == back) {
+    out = q;
+    return Status::Ok;
+  }
+  if (q == UINT64_MAX) {
+    return Status::Overflow;
+  }
+  out = q + 1;
+  return Status::Ok;
+}
+
 [[nodiscard]] constexpr std::uint64_t magnitude(std::int64_t v) noexcept {
   return v < 0 ? std::uint64_t{0} - static_cast<std::uint64_t>(v) : static_cast<std::uint64_t>(v);
 }

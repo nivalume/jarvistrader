@@ -12,5 +12,6 @@ function(jarvis_add_bench_group group)
 endfunction()
 
 jarvis_add_bench_group(
-  hot SOURCES hot/bench_noop.cpp hot/bench_model.cpp hot/bench_engine.cpp LIBS jarvis::kernel
+  hot SOURCES hot/bench_noop.cpp hot/bench_model.cpp hot/bench_engine.cpp hot/bench_execution.cpp
+  LIBS jarvis::kernel
 )

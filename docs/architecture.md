@@ -219,6 +219,7 @@ endpoint = "prod"                 # prod | testnet
 credentials = "env:BINANCE_USDM_KEY"   # 只存引用，不存密钥
 account_mode = "one_way"          # one_way | hedge，与交易所不一致则拒绝启动
 oms = "netting"                   # 必须与 account_mode 匹配
+leverage = 20                     # 初始保证金 = 名义 / 杠杆；省略时用 instrument 的 margin_init
 
 [venues.sim]                      # backtest 与 sandbox 使用
 fill_model = "queue_position"     # queue_position | top_of_book
@@ -234,7 +235,16 @@ params = { spread_bps = 2, size = "0.010" }
 [risk]
 initial_state = "active"
 max_order_notional = "50000 USDT"
-daily_loss_limit = "2000 USDT"
+max_position_notional = "200000 USDT"  # 每个 instrument，含未完成订单
+daily_loss_limit = "2000 USDT"    # → Reducing
+daily_loss_halt = "4000 USDT"     # → Halted + KillSwitch
+max_drawdown = "5000 USDT"        # → Reducing
+price_band_bps = 200              # 限价偏离参考价的上限；0 关闭
+max_open_orders = 50              # 每个 instrument；0 关闭
+orders_per_10s = 250              # 0 关闭
+orders_per_minute = 1000
+margin_ratio_bps = 8000           # 维持保证金 / 权益达到 80% → Reducing
+check_margin = true
 countdown_cancel_all_ms = 120000
 on_strategy_error = "halt_strategy"    # halt_strategy | halt_node | ignore
 
@@ -381,7 +391,7 @@ int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); } 
 | 参考数据 | instrument 定义（`CurrencyPair`、`CryptoPerpetual`、`CryptoFuture`） | exchangeInfo、目录中的 instrument 文件 |
 | 时间 | `TimerFired`、`BatchEnd` | timer 线程、core 线程 |
 | 控制 | `AdminCommand`、`Shutdown`、`ParamUpdate`、`TargetPosition`（控制面）、`Health*` | admin 线程、控制面通道 |
-| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、venue 命令（`SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CancelAllOrders`）、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志 |
+| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、venue 命令（`SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CancelAllOrders`）、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志；仓位事件只交给策略，不写入日志 |
 
 ### 5.2 全序键
 
@@ -848,6 +858,15 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 
 撤单与查询不经过风控。
 
+规则的实现（`jarvis/risk/gates.hpp`）：每条规则满足 `RiskRule` concept，读取一份 `OrderCheck`（订单本身，以及它会改变的状态的快照：venue 持仓、该 instrument 的未完成订单、参考价、可用保证金）与闸的共享状态，返回拒单原因码或空。一道闸是规则的定长 tuple，按顺序检查，第一个拒绝生效。补充说明：
+
+- 名义金额只在限额的币种下比较，币种不同的限额不适用于该 instrument。
+- 参考价取 mark price，没有时取最近成交价。
+- `MarginRule` 的可用保证金 = 钱包余额 + 未实现盈亏 − 持仓初始保证金 − 未完成订单初始保证金。未完成订单按名义金额计保证金、不与持仓对冲，比交易所的计算保守。只减仓的订单总是通过。
+- `MinNotionalRule` 对 reduce-only 订单豁免，与 Binance 一致；市价单按参考价计算名义。
+- `InstrumentStatusRule` 在停牌时仍放行只减仓的订单。
+- 改单经过一道较小的闸（TradingState、价格过滤、步长、单笔最大名义、价格带、限速）；被拒的改单以 `OrderModifyRejected` 事件回到策略，订单保持原状。
+
 规则目录之前先做结构检查（`jarvis/risk/order_checks.hpp`），确认意图对其 instrument 是一张合法的单。原因码：`INSTRUMENT_UNKNOWN`（还没有 instrument 定义）、`ORDER_TYPE_UNSUPPORTED`、`TIME_IN_FORCE_UNSUPPORTED`、`POST_ONLY_INVALID`、`QUANTITY_NOT_POSITIVE`、`QUANTITY_INVALID_PRECISION`、`PRICE_MISSING`、`PRICE_UNEXPECTED`、`PRICE_NOT_POSITIVE`、`PRICE_INVALID_PRECISION`、`GTD_EXPIRE_TIME_MISSING`、`GTD_ALREADY_EXPIRED`，以及 OMS 已满且没有可淘汰的已关闭订单时的 `OMS_CAPACITY_EXCEEDED`。
 
 ### 10.2 TradingState
@@ -869,7 +888,13 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 | Node `Degraded` | → `Reducing` |
 | admin 命令 | `halt`、`reduce`、`resume`，唯一能从 `Halted` 回到 `Active` 的途径 |
 
-TradingState 的转移是 TLA+ 规约 `TradingState` 的对象。
+实现（`jarvis/risk/trading_state.hpp`）把有效状态拆成三部分，取最严格者：
+
+- `base`：事后监控只能收紧（`Active → Reducing → Halted`），admin 命令是唯一能放宽它的途径；
+- 同步保持：对账期间（启动与每次重连）为 `Halted`，同步完成后自动解除；
+- 降级保持：Node 处于 `Degraded` 时为 `Reducing`，恢复后自动解除。
+
+因此对账完成不会撤销监控造成的 `Reducing` 或 `Halted`，配置的初值 `initial_state` 就是 `base` 的初值。改单若增加数量，按新开仓处理（`Reducing` 下拒绝）。TradingState 的转移是 TLA+ 规约 `TradingState` 的对象。
 
 ### 10.3 KillSwitch 与 venue 侧死人开关
 
@@ -880,15 +905,22 @@ TradingState 的转移是 TLA+ 规约 `TradingState` 的对象。
 
 ### 10.4 令牌桶与权重反馈
 
-- 限速状态在内核内，由定时器事件推进，所以回测与实盘按同样的规则限速。
-- USDⓈ-M 的桶：IP 请求权重（每分钟）、账户下单数（每 10 秒与每分钟）。容量与补充速率取自配置，默认值低于交易所上限，给重连与对账请求留出余量。
+- 限速状态在内核内（`jarvis/risk/rate_limit.hpp`），所以回测与实盘按同样的规则限速。Binance 按与时钟对齐的固定窗口计数，内核同样用固定窗口：一个窗口在两个间隔整数倍之间最多放行 `limit` 笔。窗口由输入的 ts 推进，状态是输入的函数，不需要定时器。
+- USDⓈ-M 的窗口：账户下单数每 10 秒与每分钟（`[risk] orders_per_10s = 250`、`orders_per_minute = 1000`，交易所上限为 300 与 1200），新单与改单各计一笔，撤单不计。IP 请求权重由适配器按连接统计（M4）。默认值低于交易所上限，给重连与对账请求留出余量。
+- 限速是 Gate B 的最后一条规则，只有其他规则都通过时才消耗额度。
 - 适配器把响应头 `X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*` 与 WS API 响应中的 `rateLimits` 回灌为 `RateLimitFeedback` 事件，内核据此校正估计值。
 - 收到 HTTP 429 立即把相关桶清零并退避；收到 418（IP 封禁）进入 `Degraded` 并告警。
 - `PeggedQuote` 等执行算法在生成子单前查询剩余令牌，令牌不足时只更新移动了的一侧。
 
 ### 10.5 事后监控
 
-事后监控在每次成交、mark price 更新和日切时运行：日内已实现加未实现亏损、从高点的回撤、保证金率、单策略连续被拒次数。监控只能产生 TradingState 转移与告警，不直接发单。
+事后监控（`jarvis/risk/monitors.hpp`）在每次成交、mark price 更新和资金费结算后运行，读取一个币种下的权益（钱包余额加未实现盈亏）：
+
+- 日内亏损：UTC 当日第一次观测时的权益减当前权益，超过 `daily_loss_limit` → `Reducing`，超过 `daily_loss_halt` → `Halted` 并触发 KillSwitch；
+- 回撤：观测到的最高权益减当前权益，超过 `max_drawdown` → `Reducing`；
+- 保证金率：维持保证金 / 权益达到 `margin_ratio_bps`（默认 80%）→ `Reducing`。
+
+币种取第一个配置的亏损限额的币种，否则取第一个 instrument 的结算币种。监控只能产生 TradingState 转移，不直接发单；KillSwitch 由内核执行：撤销全部策略的全部未完成订单。
 
 ---
 
@@ -906,9 +938,29 @@ TradingState 的转移是 TLA+ 规约 `TradingState` 的对象。
 
 实盘中手续费以交易所回报（`ORDER_TRADE_UPDATE` 的 `n`、`N`）为准；`FeeModel` 的估计值与实际值之差进入报告与指标。
 
+实现（`jarvis/cost/`）：
+
+- `MakerTakerFees`：内置档位 `binance_usdm_vip0`（maker 0.02%、taker 0.05%）、`binance_usdm_vip0_bnb`（BNB 抵扣 10%）、`binance_spot_vip0`（0.1%）、`binance_spot_vip0_bnb`（抵扣 25%）与 `zero`；负 maker 费率表示返佣。
+- 费用与资金费用整数精确计算，并按对账户不利的方向取整到币种精度：支付的费用与资金费向上取整，返佣与收到的资金费向下取整，回测不会少记成本。
+- 资金费：持仓在 mark price 下的名义乘以费率，多头支付正费率。
+- `BookDepthSlippage`：按簿深度逐档吃单，平均价按对吃单方不利的方向取整；档位类型只要有 `price` 与 `size` 成员，成本层不依赖订单簿实现。
+- `JitteredLatency`：每一跳固定延迟加 `[0, jitter]` 的均匀抖动，取自独立 Philox 密钥的 counter-based RNG，是 `(seed, identity, hop)` 的纯函数。
+
 ### 11.2 Portfolio
 
 `Portfolio` 是必需组件，在 `step` 内由 OMS 的输出更新。它维护：每个 instrument 的仓位（定点数量、开仓均价）、余额、保证金（初始与维持，经 `MarginModel` concept 计算）、已实现与未实现盈亏（未实现盈亏按 mark price 计）、敞口、按策略归因的账本。
+
+实现（`jarvis/portfolio/`）：
+
+- venue 仓位：每个 instrument 一个 netting 仓位，是余额、保证金与敞口的依据。
+- 账本：每个（策略，instrument）一个 netting 仓位，只由该策略自己的成交推动；策略的仓位事件、PnL 与 `ctx.position()` 都来自账本。venue 仓位恒等于各策略账本之和。
+- 仓位用整数表示：带符号数量与开仓名义（价格 raw × 数量 raw 之和）。开仓均价精确，全部平仓时实现的盈亏正好是出场名义减入场名义；减仓按比例移除成本，不改变均价。一笔翻转仓位的成交拆成平仓与开仓两部分，各自产生仓位事件。
+- 余额：`AccountState` 置位全部余额，之后由 venue 仓位的已实现盈亏、手续费与资金费推动。
+- `MarginModel`：`StandardMargin`（instrument 的 `margin_init` 与 `margin_maint`）与 `LeveragedMargin`（初始保证金 = 名义 / 杠杆，`[[venues]] leverage`），都向上取整。
+- 资金费：`FundingRateUpdate` 带 `next_funding_ns` 时，下一个资金费时刻越过已存的时刻即按已存的费率结算；不带时，该更新本身就是一次已结算的费率（历史资金费文件）。结算产生每个持仓策略的 `PositionAdjusted`。
+- 估值价取 mark price，没有时取最近成交价。
+- 仓位事件（`PositionOpened/Changed/Closed/Adjusted`）经 `on_position_event` 交给策略，排在引起它的成交事件之后；它们由输入确定性地重算，不写入日志。
+- v1 只记账线性合约（USDⓈ-M 永续与交割）。反向合约与现货的成交只计数不记账，随相应 venue 在 M6 加入。
 
 `ACCOUNT_UPDATE` 用户流事件与对账快照直接置位余额与仓位；置位与本地计算值的差异产生 `ReconciliationDiff` 事件。
 
