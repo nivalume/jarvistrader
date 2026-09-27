@@ -151,7 +151,9 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [x] task: harness — 环境等价测试：sandbox 录制后以 backtest 回放同一策略文件，命令流逐字节相同（§4.6）：`test_sandbox`（脚本化交易所）与内核层实时对 backtest 测试；生产行情上 C++ 与 Python 示例的回放均无偏差
 - [x] task: harness — `DepthSync` 的不变量与生成行为进入 CI：TLC 不变量、正向 trace validation（ctest 与 formal job、nightly 由 MAP.toml 决定规约清单），以及以内核 `OrderBook` 为观察者的随机交易所性质测试
 - [x] task: harness — 热基准 `codec/json_aggTrade`、`codec/json_bookTicker`、`codec/json_depth`、`ring/spsc_roundtrip`：codec 三项已进 `bench_codec` 门禁组（本机 Release 中位数约 290 ns、330 ns、3.2 µs，depth 为 46 档的 1.5 KB 消息）；`ring/spsc_roundtrip` 与 `ring/byte_record` 在 `bench_live` 门禁组（本机约 690 ns 与 9 ns）
-- [ ] task: 验收 — `python examples/py/mm_quote.py --env sandbox` 连续运行 24 小时；录制日志回放逐字节一致；环境等价测试通过
+- [ ] task: 验收 — `python examples/py/mm_quote.py --env sandbox` 连续运行 24 小时；录制日志回放逐字节一致；环境等价测试通过：环境等价测试通过；2 小时生产行情 soak 通过（见下方记录）；24 小时连续运行尚未进行
+
+M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox` 在生产行情（`fstream.binance.com` 的 `aggTrade`、`bookTicker`、`depth@100ms`，快照经 `ws-fapi.binance.com`）上对模拟交易所连续运行 2 小时（带 live shell 的 release wheel）。运行正常结束（`STOPPED`）：4,564,971 条输入，其中行情 2,747,364 条、交易所回报 6,639 条，输出 3,024 条；行情线程 2,747,404 条消息 0 解码错误、0 次环满等待、1 次快照、1 次订单簿同步，全程没有断线。`mm_quote.py --replay` 复算全部输出无偏差；`jarvis-capture redecode --check` 由 781 MB 原始帧重建的行情与运行日志中的 2,747,364 条行情输入逐字节相同（另有 37 条在运行停止时尚未步进）。instrument 定义使用 testnet 的 exchangeInfo 夹具并按 BTCUSDT 生产环境的数量过滤器（步长与最小数量 0.001、最小名义价值 100）修改，因为本环境访问生产 REST（`fapi.binance.com`）返回 451。第一次 soak 在 3.5 分钟时以 `CapacityExceeded` 停止：回放无偏差，说明内核没有问题，原因是模拟交易所自己的 L2 簿容量（窗口 4096 档、窗口外每侧 1024 档）小于内核的簿，而实时 depth 流每侧保留最多 2000 档、许多远离盘口；修正后模拟交易所的簿容量取自内核配置，并加了回归测试。
 
 ## M5 实盘、对账、运维、内置执行算法与纯 C++ 节点，规约 b（发布 v1.0）
 
