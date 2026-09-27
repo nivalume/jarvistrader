@@ -64,3 +64,61 @@ function(jarvis_add_tomlplusplus)
     SYSTEM YES
   )
 endfunction()
+
+# ---- live shell (JARVIS_BUILD_LIVE) -------------------------------------------------------------
+
+function(jarvis_add_asio)
+  if(TARGET jarvis_asio)
+    return()
+  endif()
+
+  # standalone Asio 1.38.2 (header-only; no Boost).
+  CPMAddPackage(
+    NAME asio
+    GITHUB_REPOSITORY chriskohlhoff/asio
+    GIT_TAG 12b52a54a25d1861b037bc5d9810f92a7151d920
+    DOWNLOAD_ONLY YES
+  )
+  find_package(Threads REQUIRED)
+  add_library(jarvis_asio INTERFACE)
+  target_include_directories(jarvis_asio SYSTEM INTERFACE "${asio_SOURCE_DIR}/asio/include")
+  target_compile_definitions(jarvis_asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
+  target_link_libraries(jarvis_asio INTERFACE Threads::Threads)
+endfunction()
+
+function(jarvis_add_picohttpparser)
+  if(TARGET jarvis_picohttpparser)
+    return()
+  endif()
+
+  # picohttpparser master (HTTP response and chunked-encoding parser; one C file). The caller
+  # enables the C language at directory scope first.
+  CPMAddPackage(
+    NAME picohttpparser
+    GITHUB_REPOSITORY h2o/picohttpparser
+    GIT_TAG f4d94b48b31e0abae029ebeafcfd9ca0680ede58
+    DOWNLOAD_ONLY YES
+  )
+  add_library(jarvis_picohttpparser STATIC "${picohttpparser_SOURCE_DIR}/picohttpparser.c")
+  target_include_directories(jarvis_picohttpparser SYSTEM PUBLIC "${picohttpparser_SOURCE_DIR}")
+  set_target_properties(jarvis_picohttpparser PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endfunction()
+
+function(jarvis_add_simdjson)
+  if(TARGET simdjson::simdjson)
+    return()
+  endif()
+
+  # simdjson v4.6.11 (the venue adapters' JSON codec).
+  CPMAddPackage(
+    NAME simdjson
+    GITHUB_REPOSITORY simdjson/simdjson
+    GIT_TAG f5de14f09256982933af2849beb43778bd421ca7
+    EXCLUDE_FROM_ALL YES
+    SYSTEM YES
+    OPTIONS
+      "SIMDJSON_DEVELOPER_MODE OFF"
+      "SIMDJSON_ENABLE_THREADS OFF"
+      "BUILD_SHARED_LIBS OFF"
+  )
+endfunction()

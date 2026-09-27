@@ -1112,6 +1112,12 @@ concept Transport = requires(T t, std::span<const std::byte> bytes) {
   - HTTP/1.1 客户端：keep-alive 请求构造，响应与 chunked 编码由 picohttpparser 解析。
 - TLS 使用 `asio::ssl::stream` 与系统 OpenSSL 3。Ed25519 签名经 `EVP_DigestSign` 实现，封装在 `Signer` 接口后（第 19 节）。
 - 连接管理：24 小时强制断线按计划重连处理；服务端 ping 自动回 pong；断线指数退避，退避期间 Node 进入 `Degraded`。
+- 实现要点（`jarvis/network/`，M4-A）：
+  - `jarvis_network` 是静态库。Asio、OpenSSL 与 picohttpparser 都是私有依赖，其他层 include 的头文件只含标准库与 jarvis 类型。
+  - `WsClient` 每次连接新建一个 TLS stream，并分配一个代际号。每个完成回调都持有自己的 stream 与代际号：stream 不会先于它的异步操作释放；旧连接被中止的操作即使在 `on_close` 里重连之后才送达，也会被丢弃。
+  - `HttpsClient` 是阻塞式的，只用于启动阶段与 order-sender 线程的 REST 调用。每个请求在超时内完成或失败；复用的 keep-alive 连接若已被服务端关闭，换新连接重试一次。
+  - HTTP 响应解析按 RFC 9112 拒绝互相矛盾的多个 `Content-Length`；`Connection` 与 `Transfer-Encoding` 按逗号分隔的 token 匹配，不做子串匹配。
+  - fuzz 目标 `fuzz_ws` 与 `fuzz_http` 检查同一个性质：输入一次投递与按任意大小分片投递，得到的消息、错误与未消费尾部都相同。
 
 ### 13.3 Codec
 

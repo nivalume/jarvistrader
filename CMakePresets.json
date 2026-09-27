@@ -13,7 +13,8 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "JARVIS_BUILD_PYTHON": "ON"
+        "JARVIS_BUILD_PYTHON": "ON",
+        "JARVIS_BUILD_LIVE": "ON"
       }
     },
     {

@@ -182,6 +182,33 @@ jarvis_add_tomlplusplus()
 target_link_libraries(jarvis_shell PRIVATE tomlplusplus::tomlplusplus)
 target_compile_definitions(jarvis_shell PRIVATE TOML_HEADER_ONLY=0 TOML_EXCEPTIONS=0 TOML_ENABLE_FORMATTERS=0)
 
+# Live shell (docs/architecture.md section 13): the network stack. Asio, OpenSSL and
+# picohttpparser stay private to it: the headers other layers include name only the standard
+# library and jarvis types (a static library still passes its private link dependencies on).
+if(JARVIS_BUILD_LIVE)
+  enable_language(C) # picohttpparser
+  find_package(OpenSSL 3 REQUIRED)
+  jarvis_add_asio()
+  jarvis_add_picohttpparser()
+  add_library(
+    jarvis_network STATIC
+    jarvis/network/crypto.cpp
+    jarvis/network/http.cpp
+    jarvis/network/https_client.cpp
+    jarvis/network/io.cpp
+    jarvis/network/signer.cpp
+    jarvis/network/url.cpp
+    jarvis/network/ws_client.cpp
+    jarvis/network/ws_frame.cpp
+  )
+  add_library(jarvis::network ALIAS jarvis_network)
+  target_link_libraries(
+    jarvis_network
+    PUBLIC jarvis::kernel
+    PRIVATE jarvis_asio jarvis_picohttpparser OpenSSL::SSL OpenSSL::Crypto
+  )
+endif()
+
 if(JARVIS_BUILD_CLI)
   add_executable(jarvis_cli jarvis/node/cli_main.cpp)
   target_link_libraries(jarvis_cli PRIVATE jarvis::shell)

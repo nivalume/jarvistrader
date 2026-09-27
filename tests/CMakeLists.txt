@@ -99,3 +99,22 @@ foreach(spec IN ITEMS OrderLifecycle TradingState Matching)
            COMMAND trace_driver "${PROJECT_SOURCE_DIR}/tests/trace/behaviours/${spec}.txt")
   set_tests_properties(trace.${spec} PROPERTIES LABELS "conformance;trace")
 endforeach()
+
+if(TARGET jarvis_network)
+  jarvis_add_layer_test(network SOURCES cpp/test_network.cpp SUITES unit LIBS jarvis::network jarvis_asio)
+endif()
+
+# The fuzz targets build only with JARVIS_ENABLE_FUZZ (clang and libFuzzer). This object library,
+# excluded from `all`, gives their sources real entries in compile_commands.json, so clang-tidy
+# checks them with their own include paths instead of flags borrowed from a neighbouring file.
+if(NOT JARVIS_ENABLE_FUZZ)
+  file(GLOB _jarvis_fuzz_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tests/fuzz/fuzz_*.cpp")
+  set(_jarvis_fuzz_libs jarvis::kernel jarvis::testkit jarvis::shell)
+  if(NOT TARGET jarvis_network)
+    list(FILTER _jarvis_fuzz_sources EXCLUDE REGEX "fuzz_(ws|http)\\.cpp$")
+  else()
+    list(APPEND _jarvis_fuzz_libs jarvis::network)
+  endif()
+  add_library(jarvis_fuzz_sources OBJECT EXCLUDE_FROM_ALL ${_jarvis_fuzz_sources})
+  target_link_libraries(jarvis_fuzz_sources PRIVATE ${_jarvis_fuzz_libs})
+endif()

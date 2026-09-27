@@ -123,11 +123,11 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 
 ## M4 网络、Binance USDⓈ-M 适配器、Codec 与录制，规约 e（sandbox 可用）
 
-- [ ] task: build — 钉定 standalone Asio、picohttpparser、simdjson 的提交，OpenSSL 3 使用系统库，全部只链接到 `jarvis_shell`
+- [x] task: build — 钉定 standalone Asio、picohttpparser、simdjson 的提交，OpenSSL 3 使用系统库，全部作为私有依赖链接到 `jarvis_network`（`JARVIS_BUILD_LIVE`；CI 在 Linux 安装 `libssl-dev`，macOS 用 Homebrew 的 `openssl@3`）
 - [ ] task: network — `Transport` concept 与 Asio + OpenSSL 实现，每个 IO 线程一个 `io_context`，每连接预分配接收缓冲（§13.2）
-- [ ] task: network — RFC 6455 客户端帧层：握手、仅出站掩码、分片重组、ping/pong/close
-- [ ] task: network — HTTP/1.1 keep-alive 客户端（picohttpparser 解析响应与 chunked）
-- [ ] task: network — `Signer` 接口：HMAC-SHA256 与 Ed25519（`EVP_DigestSign`）
+- [x] task: network — RFC 6455 客户端帧层：握手、仅出站掩码、分片重组、ping/pong/close（`ws_frame`、`WsClient`，含 TLS 回环测试与 `on_close` 内重连测试）
+- [x] task: network — HTTP/1.1 keep-alive 客户端（picohttpparser 解析响应与 chunked；`HttpsClient` 阻塞式，超时与一次重试）
+- [x] task: network — `Signer` 接口：HMAC-SHA256 与 Ed25519（`EVP_DigestSign`），密钥引用 `env:`、`file:`
 - [ ] task: network — 连接管理：24 小时计划重连、指数退避、`Health*` 事件
 - [ ] task: adapter — `Codec` concept 与 `JsonCodec`（simdjson on-demand，数值直接解析为定点，§13.3）
 - [ ] task: adapter — 行情流解码：aggTrade → `TradeTick`、bookTicker → `QuoteTick`、markPrice → mark、index、funding，kline → `Bar`，forceOrder → `LiquidationOrder`（§14.2）
@@ -145,7 +145,7 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [ ] task: live — `SandboxWiring`：`RingSource`、`SimulatedExchange`（真实定时器，触发写入日志）、`MonotonicClock`
 - [ ] task: tools — 深度与成交流录制器可独立运行，用于积累 USDⓈ-M L2 数据（§12.4）
 - [ ] task: python — `on_idle(ctx)` 钩子：空闲期按 `idle_hook_ms` 持 GIL 运行，默认 `gc.collect(0)`；`on_start` 后 `gc.freeze()`（§7.4）
-- [ ] task: harness — Codec、WebSocket 帧层、HTTP 解析的 fuzz 目标：PR 每个 60 秒，nightly 10 分钟，语料入库
+- [ ] task: harness — Codec、WebSocket 帧层、HTTP 解析的 fuzz 目标：PR 每个 60 秒，nightly 10 分钟，语料入库（WebSocket 与 HTTP 已完成：`fuzz_ws`、`fuzz_http`；Codec 随 M4-B）
 - [ ] task: harness — `tsan` preset 覆盖环与 IO 线程
 - [ ] task: harness — testnet 契约测试（nightly）：每类流与每个 WS API 方法的往返
 - [ ] task: harness — 环境等价测试：sandbox 录制后以 backtest 回放同一策略文件，命令流逐字节相同（§4.6）
