@@ -1,7 +1,12 @@
 #include <array>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <optional>
+#include <set>
+#include <string>
 #include <string_view>
+#include <tuple>
 
 #include <doctest/doctest.h>
 
@@ -18,6 +23,7 @@
 #include "jarvis/risk/rate_limit.hpp"
 #include "jarvis/risk/trading_state.hpp"
 #include "jarvis/testkit/property.hpp"
+#include "specs/map/trading_state_actions.hpp"
 
 namespace {
 
@@ -329,5 +335,136 @@ TEST_SUITE("property") {
         CHECK((!s.syncing() || s.state() == TradingState::Halted));
       }
     });
+  }
+}
+
+namespace {
+
+// The quoted strings of the lines between `begin` and `end` in TradingState.tla, one tuple per
+// line with <<...>> (strings only; TRUE/FALSE become "TRUE"/"FALSE").
+std::vector<std::vector<std::string>> spec_rows(std::string_view begin, std::string_view end) {
+  std::ifstream file(std::string{JARVIS_SOURCE_DIR} + "/specs/tla/TradingState.tla");
+  REQUIRE(file.good());
+  const std::string text{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+  const std::size_t from = text.find(begin);
+  const std::size_t to = text.find(end);
+  REQUIRE(from != std::string::npos);
+  REQUIRE(to != std::string::npos);
+  std::vector<std::vector<std::string>> rows;
+  std::size_t pos = from;
+  while ((pos = text.find("<<", pos)) != std::string::npos && pos < to) {
+    const std::size_t close = text.find(">>", pos);
+    std::vector<std::string> row;
+    std::string item;
+    for (std::size_t i = pos + 2; i < close; ++i) {
+      const char c = text[i];
+      if (c == ',') {
+        row.push_back(item);
+        item.clear();
+      } else if (c != '"' && c != ' ') {
+        item += c;
+      }
+    }
+    row.push_back(item);
+    rows.push_back(row);
+    pos = close;
+  }
+  return rows;
+}
+
+// A machine in a given state, reached through the public API.
+r::TradingStateMachine machine(TradingState base, bool syncing, bool degraded) {
+  r::TradingStateMachine m{base};
+  if (syncing) {
+    m.apply(TradingTrigger::SyncStarted);
+  }
+  if (degraded) {
+    m.apply(TradingTrigger::Degraded);
+  }
+  return m;
+}
+
+TradingState state_named(const std::string& name) {
+  for (const TradingState s :
+       {TradingState::Active, TradingState::Reducing, TradingState::Halted}) {
+    if (r::spec_name(s) == name) {
+      return s;
+    }
+  }
+  FAIL("unknown state " << name);
+  return TradingState::Halted;
+}
+
+} // namespace
+
+TEST_SUITE("conformance") {
+  TEST_CASE("the trigger table equals the TradingState spec, in every state") {
+    const auto rows = spec_rows("\\* BEGIN TRIGGERS", "\\* END TRIGGERS");
+    REQUIRE(rows.size() == jarvis::specmap::trading_state::kTriggers.size());
+    for (const auto& row : rows) {
+      REQUIRE(row.size() == 3);
+      std::optional<TradingTrigger> trigger;
+      for (std::size_t i = 0; i < jarvis::specmap::trading_state::kTriggers.size(); ++i) {
+        if (jarvis::specmap::trading_state::kTriggers[i] == row[0]) {
+          trigger = static_cast<TradingTrigger>(i);
+        }
+      }
+      REQUIRE(trigger.has_value());
+      for (const TradingState base :
+           {TradingState::Active, TradingState::Reducing, TradingState::Halted}) {
+        for (const bool syncing : {false, true}) {
+          for (const bool degraded : {false, true}) {
+            r::TradingStateMachine m = machine(base, syncing, degraded);
+            m.apply(trigger.value_or(TradingTrigger::Synced));
+            TradingState want_base = base;
+            bool want_sync = syncing;
+            bool want_degraded = degraded;
+            if (row[1] == "sync") {
+              want_sync = row[2] == "TRUE";
+            } else if (row[1] == "degraded") {
+              want_degraded = row[2] == "TRUE";
+            } else if (row[1] == "base=") {
+              want_base = state_named(row[2]);
+            } else {
+              REQUIRE(row[1] == "base+");
+              const TradingState floor = state_named(row[2]);
+              want_base = r::detail::rank(base) >= r::detail::rank(floor) ? base : floor;
+            }
+            CAPTURE(row[0]);
+            CHECK(m.base() == want_base);
+            CHECK(m.syncing() == want_sync);
+            CHECK(m.degraded() == want_degraded);
+            // Effective == IF syncing THEN HALTED ELSE IF degraded THEN Stricter(base, REDUCING)
+            TradingState effective = want_base;
+            if (want_degraded && r::detail::rank(effective) < 1) {
+              effective = TradingState::Reducing;
+            }
+            if (want_sync) {
+              effective = TradingState::Halted;
+            }
+            CHECK(m.state() == effective);
+          }
+        }
+      }
+    }
+  }
+
+  TEST_CASE("the command matrix equals the TradingState spec") {
+    std::set<std::pair<std::string, std::string>> spec;
+    for (const auto& row : spec_rows("\\* BEGIN MATRIX", "\\* END MATRIX")) {
+      REQUIRE(row.size() == 2);
+      spec.emplace(row[0], row[1]);
+    }
+    std::set<std::pair<std::string, std::string>> code;
+    for (const TradingState s :
+         {TradingState::Active, TradingState::Reducing, TradingState::Halted}) {
+      for (std::size_t c = 0; c < jarvis::specmap::trading_state::kCommands.size(); ++c) {
+        if (r::allowed(s, static_cast<CommandKind>(c))) {
+          code.emplace(std::string{r::spec_name(s)},
+                       std::string{jarvis::specmap::trading_state::kCommands[c]});
+        }
+      }
+    }
+    CHECK(code == spec);
   }
 }

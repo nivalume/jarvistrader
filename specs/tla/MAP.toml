@@ -6,8 +6,10 @@
 #
 # [specs.<Name>] keys:
 #   paths       globs of the source files the spec models (** matches any depth)
-#   forward     TLC behaviours are replayed through Engine.step (from M3)
-#   backward    recorded event logs are checked against the spec (from M3)
+#   forward     TLC behaviours (specs/tla/<Name>Behaviours.tla) are replayed through the
+#               implementation by tests/trace/trace_driver; tests/trace/behaviours/<Name>.txt
+#               is the committed set ctest replays
+#   backward    event logs are projected on the spec (`jarvis trace-export`) and checked by TLC
 #   budget_min  wall-clock budget for one TLC run
 #   tlc_args    extra TLC command-line arguments
 
@@ -20,8 +22,24 @@ tlc_args = ["-deadlock"]
 
 [specs.OrderLifecycle]
 paths = ["jarvis/execution/order_fsm.hpp", "jarvis/execution/order.hpp",
-         "jarvis/execution/oms.hpp", "specs/map/order_lifecycle_actions.hpp"]
-forward = false
+         "jarvis/execution/oms.hpp", "jarvis/execution/execution_engine.hpp",
+         "specs/map/order_lifecycle_actions.hpp"]
+forward = true
+backward = true
+budget_min = 5
+tlc_args = []
+
+[specs.TradingState]
+paths = ["jarvis/risk/trading_state.hpp", "jarvis/risk/rate_limit.hpp",
+         "jarvis/risk/gates.hpp", "specs/map/trading_state_actions.hpp"]
+forward = true
+backward = false
+budget_min = 5
+tlc_args = []
+
+[specs.Matching]
+paths = ["jarvis/backtest/matching/sim_exchange.hpp", "specs/map/matching_actions.hpp"]
+forward = true
 backward = false
 budget_min = 5
 tlc_args = []

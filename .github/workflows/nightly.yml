@@ -1,7 +1,8 @@
 name: Nightly
 
-# Long-running checks (docs/architecture.md section 17.6). Soak runs and backward trace
-# validation of soak logs join this workflow when the sandbox environment exists (plan.md M4, M5).
+# Long-running checks (docs/architecture.md section 17.6), including large forward trace
+# validation runs. Soak runs and backward trace validation of soak logs join this workflow when
+# the sandbox environment exists (plan.md M4, M5).
 
 on:
   schedule:
@@ -63,3 +64,20 @@ jobs:
           java-version: "17"
       - name: Run every spec
         run: python3 tools/tla/run_tlc.py --all
+      - name: Build the trace tools
+        run: |
+          sudo apt-get update && sudo apt-get install --yes ninja-build
+          cmake -S . -B build/trace -G Ninja -DCMAKE_BUILD_TYPE=Release -DJARVIS_BUILD_PYTHON=OFF \
+            -DJARVIS_BUILD_EXAMPLES=OFF
+          cmake --build build/trace --target trace_driver jarvis_cli
+      - name: Forward trace validation, 20000 behaviours per spec
+        env:
+          SEED: ${{ github.run_number }}
+        run: |
+          for spec in OrderLifecycle TradingState Matching; do
+            echo "behaviours of $spec with seed $SEED"
+            python3 tools/tla/behaviours.py --spec "$spec" --num 20000 --depth 32 --seed "$SEED"
+            build/trace/bin/trace_driver "build/tla/behaviours/$spec.txt"
+          done
+      - name: Backward trace validation of the golden traces
+        run: python3 tools/tla/check_trace.py --spec OrderLifecycle --golden

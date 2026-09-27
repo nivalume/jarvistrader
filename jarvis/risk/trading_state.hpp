@@ -6,7 +6,8 @@
 #include "jarvis/model/generated/enums.hpp"
 
 // TradingState (docs/architecture.md section 10.2): which commands the risk gates let through,
-// and who may move it.
+// and who may move it. specs/tla/TradingState.tla is the source of truth for both tables below;
+// tests/cpp/test_risk.cpp checks them against it.
 //
 // The effective state is the strictest of three parts:
 //   base      set by the post-trade monitors, which only tighten it (Active -> Reducing ->
@@ -26,6 +27,35 @@ enum class CommandKind : std::uint8_t {
   ModifyUp = 3, // a modify that increases it
   Cancel = 4,
 };
+
+[[nodiscard]] constexpr std::string_view to_string(CommandKind k) noexcept {
+  switch (k) {
+  case CommandKind::Open:
+    return "OPEN";
+  case CommandKind::Reduce:
+    return "REDUCE";
+  case CommandKind::Modify:
+    return "MODIFY";
+  case CommandKind::ModifyUp:
+    return "MODIFY_UP";
+  case CommandKind::Cancel:
+    return "CANCEL";
+  }
+  return "";
+}
+
+// Spec names of the states (specs/tla/TradingState.tla).
+[[nodiscard]] constexpr std::string_view spec_name(model::TradingState s) noexcept {
+  switch (s) {
+  case model::TradingState::Active:
+    return "ACTIVE";
+  case model::TradingState::Reducing:
+    return "REDUCING";
+  case model::TradingState::Halted:
+    return "HALTED";
+  }
+  return "";
+}
 
 //           Open   Reduce  Modify  ModifyUp  Cancel
 // Active    yes    yes     yes     yes       yes

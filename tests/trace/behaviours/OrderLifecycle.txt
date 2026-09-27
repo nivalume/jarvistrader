@@ -1,0 +1,814 @@
+# Behaviours of OrderLifecycle (specs/tla/OrderLifecycleBehaviours.tla), written by
+# tools/tla/behaviours.py; regenerate with its --check/--out options, never by hand.
+spec OrderLifecycle num 80 depth 14 seed 1
+const MaxQty 3
+const TradeIds {t1,t2,t3}
+behaviour 1
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=PENDING_CANCEL
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=TRIGGERED quantity=1 status=ACCEPTED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=1 status=PENDING_CANCEL
+step Fill t1 1 | filled=1 fills={t1:1} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=ACCEPTED quantity=1 status=FILLED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=FILLED quantity=1 status=VOIDED
+end
+behaviour 2
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Fill t1 1 | filled=1 fills={t1:1} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=FILLED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Updated 2 | filled=1 fills={t1:1} plain={} prev=FILLED quantity=2 status=FILLED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=FILLED quantity=2 status=VOIDED
+end
+behaviour 3
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Fill t2 1 | filled=1 fills={t2:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 1 | filled=2 fills={t1:1,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=2 fills={t1:1,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=1 fills={t1:0,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t2 1 | filled=0 fills={t1:0,t2:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 2 | filled=2 fills={t1:0,t2:0,t3:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 3 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+end
+behaviour 4
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=EMULATED
+step Plain RELEASED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=2 status=RELEASED
+step Plain SUBMITTED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=SUBMITTED
+step Fill t3 1 | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=2 status=PARTIALLY_FILLED
+step Plain PENDING_UPDATE | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=2 status=PENDING_UPDATE
+step Updated 3 | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=PARTIALLY_FILLED quantity=3 status=PARTIALLY_FILLED
+step Plain PENDING_CANCEL | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=3 status=PENDING_CANCEL
+step Fill t1 2 | filled=3 fills={t1:2,t3:1} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=PARTIALLY_FILLED quantity=3 status=FILLED
+step Void t1 2 | filled=1 fills={t1:0,t3:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t3 1 | filled=0 fills={t1:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 5
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Plain SUBMITTED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=SUBMITTED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 6
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=TRIGGERED
+step Updated 3 | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=TRIGGERED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=PENDING_CANCEL
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=TRIGGERED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 7
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Updated 2 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=2 status=FILLED
+step Updated 3 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Updated 2 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=2 status=FILLED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=2 status=VOIDED
+end
+behaviour 8
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EMULATED
+step Plain RELEASED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=1 status=RELEASED
+step Plain SUBMITTED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=SUBMITTED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+end
+behaviour 9
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 10
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=2 fills={t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=1 fills={t2:1,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t2:1,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=1 fills={t2:1,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Void t2 1 | filled=0 fills={t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 2 | filled=1 fills={t1:1,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Void t1 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+end
+behaviour 11
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=RELEASED
+step Updated 1 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=RELEASED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=CANCELED
+step Updated 2 | filled=0 fills={} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t2 1 | filled=1 fills={t2:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 2 | filled=1 fills={t2:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 1 | filled=2 fills={t1:1,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 1 | filled=3 fills={t1:1,t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t1 1 | filled=2 fills={t1:0,t2:1,t3:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t2 1 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=VOIDED quantity=3 status=VOIDED
+step Void t3 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 12
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=SUBMITTED
+step Fill t2 3 | filled=3 fills={t2:3} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=3 status=FILLED
+step Void t2 2 | filled=1 fills={t2:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t2 1 | filled=0 fills={t2:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 13
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=ACCEPTED
+step Plain REJECTED | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=2 status=REJECTED
+end
+behaviour 14
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EMULATED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=1 status=CANCELED
+step Updated 3 | filled=0 fills={} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=0 fills={} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=1 status=VOIDED
+end
+behaviour 15
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=TRIGGERED
+step Fill t2 1 | filled=1 fills={t2:1} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=2 status=PARTIALLY_FILLED
+step Plain EXPIRED | filled=1 fills={t2:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=2 status=EXPIRED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Void t2 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+end
+behaviour 16
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=REJECTED
+end
+behaviour 17
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=REJECTED
+end
+behaviour 18
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=EMULATED
+step Updated 3 | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=3 status=EMULATED
+step Plain RELEASED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=3 status=RELEASED
+step Updated 3 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=RELEASED
+step Updated 2 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=RELEASED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=CANCELED
+step Updated 2 | filled=0 fills={} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=0 fills={t1:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 3 | filled=3 fills={t1:0,t2:3} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t2 2 | filled=1 fills={t1:0,t2:1} plain={} prev=FILLED quantity=3 status=VOIDED
+end
+behaviour 19
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=DENIED
+end
+behaviour 20
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Plain EXPIRED | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 21
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=ACCEPTED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=FILLED quantity=3 status=VOIDED
+end
+behaviour 22
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 23
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+end
+behaviour 24
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=2 fills={t1:1,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=1 fills={t1:0,t2:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t2 1 | filled=0 fills={t1:0,t2:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 2 | filled=2 fills={t1:0,t2:0,t3:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+end
+behaviour 25
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Updated 2 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=2 status=FILLED
+step Updated 3 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=3 status=VOIDED
+end
+behaviour 26
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=REJECTED
+end
+behaviour 27
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=ACCEPTED
+step Fill t3 1 | filled=1 fills={t3:1} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=3 status=PARTIALLY_FILLED
+step Plain CANCELED | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 3 | filled=3 fills={t1:3,t3:0} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t1 3 | filled=0 fills={t1:0,t3:0} plain={} prev=FILLED quantity=3 status=VOIDED
+end
+behaviour 28
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=ACCEPTED
+step Fill t3 1 | filled=1 fills={t3:1} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=2 status=PARTIALLY_FILLED
+step Plain CANCELED | filled=1 fills={t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 2 | filled=3 fills={t1:2,t3:1} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t1 2 | filled=1 fills={t1:0,t3:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t3 1 | filled=0 fills={t1:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 29
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=SUBMITTED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=2 status=REJECTED
+end
+behaviour 30
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EMULATED
+step Plain EXPIRED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+end
+behaviour 31
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=REJECTED
+end
+behaviour 32
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Updated 3 | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=TRIGGERED
+step Plain PENDING_UPDATE | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=PENDING_UPDATE
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=TRIGGERED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 33
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 2 | filled=3 fills={t1:2,t3:1} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t1 2 | filled=1 fills={t1:0,t3:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t3 1 | filled=0 fills={t1:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 34
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=DENIED
+end
+behaviour 35
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Updated 3 | filled=0 fills={} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=1 fills={t2:1,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t2 1 | filled=0 fills={t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=0 fills={t2:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 1 | filled=0 fills={t2:0,t3:0} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={t2:0,t3:0} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1,t2:0,t3:0} plain={} prev=CANCELED quantity=1 status=FILLED
+step Void t1 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=FILLED quantity=1 status=VOIDED
+end
+behaviour 36
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Updated 3 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=DENIED
+end
+behaviour 37
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=REJECTED
+end
+behaviour 38
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=TRIGGERED
+step Fill t1 1 | filled=1 fills={t1:1} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=PARTIALLY_FILLED
+step Plain ACCEPTED | filled=1 fills={t1:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=3 status=ACCEPTED
+step Fill t3 1 | filled=2 fills={t1:1,t3:1} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=3 status=PARTIALLY_FILLED
+step Plain PENDING_UPDATE | filled=2 fills={t1:1,t3:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE} prev=PARTIALLY_FILLED quantity=3 status=PENDING_UPDATE
+step Plain SUBMITTED | filled=2 fills={t1:1,t3:1} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=PARTIALLY_FILLED quantity=3 status=PENDING_UPDATE
+step Plain REJECTED | filled=2 fills={t1:1,t3:1} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=PARTIALLY_FILLED quantity=3 status=REJECTED
+end
+behaviour 39
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=SUBMITTED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=SUBMITTED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=SUBMITTED
+step Fill t2 1 | filled=1 fills={t2:1} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=FILLED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Updated 3 | filled=1 fills={t2:1} plain={} prev=FILLED quantity=3 status=FILLED
+step Void t2 1 | filled=0 fills={t2:0} plain={} prev=FILLED quantity=3 status=VOIDED
+end
+behaviour 40
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=CANCELED
+step Updated 3 | filled=0 fills={} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 2 | filled=2 fills={t1:0,t2:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=2 fills={t1:0,t2:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 1 | filled=3 fills={t1:0,t2:2,t3:1} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t3 1 | filled=2 fills={t1:0,t2:2,t3:0} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t2 2 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 41
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=TRIGGERED
+step Plain PENDING_UPDATE | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=PENDING_UPDATE
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=TRIGGERED quantity=3 status=TRIGGERED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=PENDING_CANCEL
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=TRIGGERED quantity=3 status=REJECTED
+end
+behaviour 42
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+end
+behaviour 43
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=TRIGGERED
+step Updated 3 | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=TRIGGERED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=CANCELED
+step Updated 3 | filled=0 fills={} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 2 | filled=2 fills={t3:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=2 fills={t3:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=3 fills={t2:1,t3:2} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t3 2 | filled=1 fills={t2:1,t3:0} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t2 1 | filled=0 fills={t2:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 44
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=RELEASED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=1 status=VOIDED
+end
+behaviour 45
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=REJECTED
+end
+behaviour 46
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=RELEASED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=CANCELED
+step Fill t1 2 | filled=2 fills={t1:2} plain={} prev=CANCELED quantity=2 status=FILLED
+step Void t1 1 | filled=1 fills={t1:1} plain={} prev=FILLED quantity=2 status=VOIDED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=VOIDED quantity=2 status=VOIDED
+end
+behaviour 47
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=ACCEPTED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=3 status=PENDING_CANCEL
+step Plain PENDING_CANCEL | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=ACCEPTED quantity=3 status=PENDING_CANCEL
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=ACCEPTED quantity=3 status=REJECTED
+end
+behaviour 48
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=SUBMITTED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=2 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 2 | filled=2 fills={t1:0,t2:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t2 2 | filled=0 fills={t1:0,t2:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t3 2 | filled=2 fills={t1:0,t2:0,t3:2} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Updated 3 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+end
+behaviour 49
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain DENIED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=DENIED
+end
+behaviour 50
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Updated 1 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=DENIED
+end
+behaviour 51
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 2 | filled=0 fills={} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t3 2 | filled=2 fills={t3:2} plain={} prev=CANCELED quantity=2 status=FILLED
+step Void t3 1 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=2 status=VOIDED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=VOIDED quantity=2 status=VOIDED
+end
+behaviour 52
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=ACCEPTED
+step Updated 3 | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=3 status=ACCEPTED
+step Updated 2 | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=2 status=ACCEPTED
+step Fill t3 2 | filled=2 fills={t3:2} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=2 status=FILLED
+step Void t3 2 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=2 status=VOIDED
+end
+behaviour 53
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=REJECTED
+end
+behaviour 54
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+end
+behaviour 55
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain DENIED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=DENIED
+end
+behaviour 56
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=SUBMITTED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 57
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=1 status=FILLED
+step Updated 2 | filled=1 fills={t3:1} plain={} prev=FILLED quantity=2 status=FILLED
+step Void t3 1 | filled=0 fills={t3:0} plain={} prev=FILLED quantity=2 status=VOIDED
+end
+behaviour 58
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=RELEASED
+step Updated 1 | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=RELEASED
+step Plain SUBMITTED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=1 status=SUBMITTED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=PENDING_CANCEL
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=SUBMITTED quantity=1 status=REJECTED
+end
+behaviour 59
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Fill t1 1 | filled=1 fills={t1:1} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t2 1 | filled=2 fills={t1:1,t2:1} plain={} prev=CANCELED quantity=2 status=FILLED
+step Void t1 1 | filled=1 fills={t1:0,t2:1} plain={} prev=FILLED quantity=2 status=VOIDED
+step Void t2 1 | filled=0 fills={t1:0,t2:0} plain={} prev=VOIDED quantity=2 status=VOIDED
+end
+behaviour 60
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 1 | filled=2 fills={t1:1,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t1 1 | filled=1 fills={t1:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t1:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t1:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=1 fills={t1:0,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Void t3 1 | filled=0 fills={t1:0,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=1 fills={t1:0,t2:1,t3:0} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 2 | filled=1 fills={t1:0,t2:1,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Void t2 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=CANCELED quantity=2 status=CANCELED
+end
+behaviour 61
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=REJECTED
+end
+behaviour 62
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=REJECTED
+end
+behaviour 63
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+end
+behaviour 64
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=CANCELED
+step Fill t1 2 | filled=2 fills={t1:2} plain={} prev=CANCELED quantity=2 status=FILLED
+step Void t1 1 | filled=1 fills={t1:1} plain={} prev=FILLED quantity=2 status=VOIDED
+step Void t1 1 | filled=0 fills={t1:0} plain={} prev=VOIDED quantity=2 status=VOIDED
+end
+behaviour 65
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=TRIGGERED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=2 status=PENDING_CANCEL
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=TRIGGERED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 66
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain SUBMITTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=SUBMITTED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=SUBMITTED
+step Plain PENDING_UPDATE | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=1 status=PENDING_UPDATE
+step Updated 3 | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=SUBMITTED quantity=3 status=SUBMITTED
+step Fill t2 3 | filled=3 fills={t2:3} plain={ACCEPTED,CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=SUBMITTED quantity=3 status=FILLED
+step Void t2 1 | filled=2 fills={t2:2} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t2 2 | filled=0 fills={t2:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 67
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=TRIGGERED
+step Plain REJECTED | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=3 status=REJECTED
+end
+behaviour 68
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain EMULATED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=EMULATED
+step Plain CANCELED | filled=0 fills={} plain={CANCELED,EXPIRED,RELEASED} prev=EMULATED quantity=3 status=CANCELED
+step Fill t3 1 | filled=1 fills={t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t2 1 | filled=2 fills={t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=2 fills={t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Updated 3 | filled=2 fills={t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=CANCELED
+step Fill t1 1 | filled=3 fills={t1:1,t2:1,t3:1} plain={} prev=CANCELED quantity=3 status=FILLED
+step Void t2 1 | filled=2 fills={t1:1,t2:0,t3:1} plain={} prev=FILLED quantity=3 status=VOIDED
+step Void t1 1 | filled=1 fills={t1:0,t2:0,t3:1} plain={} prev=VOIDED quantity=3 status=VOIDED
+step Void t3 1 | filled=0 fills={t1:0,t2:0,t3:0} plain={} prev=VOIDED quantity=3 status=VOIDED
+end
+behaviour 69
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=REJECTED
+end
+behaviour 70
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=DENIED
+end
+behaviour 71
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain ACCEPTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=ACCEPTED
+step Plain PENDING_CANCEL | filled=0 fills={} plain={CANCELED,CANCEL_REJECTED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,TRIGGERED} prev=ACCEPTED quantity=3 status=PENDING_CANCEL
+step Fill t2 2 | filled=2 fills={t2:2} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=PARTIALLY_FILLED quantity=3 status=PENDING_CANCEL
+step Plain EXPIRED | filled=2 fills={t2:2} plain={ACCEPTED,CANCELED,CANCEL_REJECTED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,REJECTED} prev=PARTIALLY_FILLED quantity=3 status=EXPIRED
+step Void t2 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={t2:0} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+end
+behaviour 72
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=REJECTED
+end
+behaviour 73
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=3 status=DENIED
+end
+behaviour 74
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Updated 1 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Fill t2 1 | filled=1 fills={t2:1} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=FILLED
+step Void t2 1 | filled=0 fills={t2:0} plain={} prev=FILLED quantity=1 status=VOIDED
+end
+behaviour 75
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain TRIGGERED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=TRIGGERED
+step Plain PENDING_UPDATE | filled=0 fills={} plain={CANCELED,EXPIRED,PENDING_CANCEL,PENDING_UPDATE,REJECTED} prev=TRIGGERED quantity=1 status=PENDING_UPDATE
+step Plain CANCELED | filled=0 fills={} plain={ACCEPTED,CANCELED,EXPIRED,MODIFY_REJECTED,PENDING_CANCEL,PENDING_UPDATE,REJECTED,SUBMITTED,TRIGGERED} prev=TRIGGERED quantity=1 status=CANCELED
+step Updated 1 | filled=0 fills={} plain={} prev=CANCELED quantity=1 status=CANCELED
+step Updated 2 | filled=0 fills={} plain={} prev=CANCELED quantity=2 status=CANCELED
+step Fill t2 2 | filled=2 fills={t2:2} plain={} prev=CANCELED quantity=2 status=FILLED
+step Void t2 2 | filled=0 fills={t2:0} plain={} prev=FILLED quantity=2 status=VOIDED
+end
+behaviour 76
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain REJECTED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=REJECTED
+end
+behaviour 77
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Updated 2 | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=INITIALIZED
+step Plain RELEASED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=RELEASED
+step Plain DENIED | filled=0 fills={} plain={CANCELED,DENIED,SUBMITTED} prev=RELEASED quantity=2 status=DENIED
+end
+behaviour 78
+step Init | filled=0 fills={} plain={} prev=NONE quantity=2 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+end
+behaviour 79
+step Init | filled=0 fills={} plain={} prev=NONE quantity=1 status=INITIALIZED
+step Plain DENIED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=1 status=DENIED
+end
+behaviour 80
+step Init | filled=0 fills={} plain={} prev=NONE quantity=3 status=INITIALIZED
+step Plain EXPIRED | filled=0 fills={} plain={ACCEPTED,CANCELED,DENIED,EMULATED,EXPIRED,REJECTED,RELEASED,SUBMITTED,TRIGGERED} prev=INITIALIZED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 2 | filled=0 fills={} plain={} prev=EXPIRED quantity=2 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+step Updated 1 | filled=0 fills={} plain={} prev=EXPIRED quantity=1 status=EXPIRED
+step Updated 3 | filled=0 fills={} plain={} prev=EXPIRED quantity=3 status=EXPIRED
+end

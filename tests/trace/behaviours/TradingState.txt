@@ -1,0 +1,725 @@
+# Behaviours of TradingState (specs/tla/TradingStateBehaviours.tla), written by
+# tools/tla/behaviours.py; regenerate with its --check/--out options, never by hand.
+spec TradingState num 40 depth 16 seed 1
+const Limit 3
+const MaxWindows 3
+behaviour 1
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit OPEN | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=2 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=2 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=2 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=1
+end
+behaviour 2
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+end
+behaviour 3
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=1 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=2 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=2 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=2 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=2 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=2 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=2 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=3 window=0
+end
+behaviour 4
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=1 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=3 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=3 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+end
+behaviour 5
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=1
+end
+behaviour 6
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit OPEN | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=3 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=3 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=3 window=0
+step Tick | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=1
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=1
+end
+behaviour 7
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+end
+behaviour 8
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=2
+step Trigger SYNCED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=2
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=2
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=3
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=3
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=3
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=FALSE used=0 window=3
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=FALSE used=0 window=3
+end
+behaviour 9
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+end
+behaviour 10
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit MODIFY_UP | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=FALSE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=1 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+end
+behaviour 11
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=2
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=2
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=2
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=2
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=2
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=2
+end
+behaviour 12
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit MODIFY_UP | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=1 window=0
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Trigger SYNCED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=2
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=2
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=2
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=1 window=2
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=TRUE used=1 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=1 window=2
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=TRUE used=1 window=2
+end
+behaviour 13
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=1 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+end
+behaviour 14
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+end
+behaviour 15
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=3 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=3 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=3 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=3 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=3 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=3 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=3 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+end
+behaviour 16
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=2
+end
+behaviour 17
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=1
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=1
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=1
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=1
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=1
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Tick | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=3
+step Trigger RECOVERED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=TRUE used=0 window=3
+step Trigger DEGRADED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=TRUE used=0 window=3
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=3
+end
+behaviour 18
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=1 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=1
+step Admit REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=1 window=1
+end
+behaviour 19
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=FALSE used=2 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=FALSE used=3 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=3 window=0
+step Tick | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+end
+behaviour 20
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=FALSE used=0 window=1
+step Admit REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=1
+end
+behaviour 21
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=2
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=2
+end
+behaviour 22
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=1 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=1 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=3 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=3 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=3 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=TRUE used=3 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=3 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=TRUE used=3 window=0
+end
+behaviour 23
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=2
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=2
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=2
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=1 window=2
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=2
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=2
+end
+behaviour 24
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+end
+behaviour 25
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=1
+end
+behaviour 26
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Admit OPEN | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit OPEN | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=2 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=2 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=2 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=2
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=3
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=3
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=3
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=3
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=3
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=3
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=3
+end
+behaviour 27
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=2
+step Admit CANCEL | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=2
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=3
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=3
+step Admit MODIFY | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=3
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=1 window=3
+end
+behaviour 28
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=1 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNCED syncing=FALSE used=1 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=2 window=0
+step Tick | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=2
+end
+behaviour 29
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Admit MODIFY | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=2 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=FALSE used=2 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=2 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=2 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=2 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=2 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=2 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=1
+end
+behaviour 30
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+end
+behaviour 31
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=2
+end
+behaviour 32
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=1
+end
+behaviour 33
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=FALSE used=0 window=0
+end
+behaviour 34
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_REDUCE | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=RECOVERED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+end
+behaviour 35
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger DEGRADED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=TRUE used=0 window=2
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=2
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=2
+end
+behaviour 36
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+end
+behaviour 37
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=FALSE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger ADMIN_REDUCE | admissible={CANCEL} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_REDUCE syncing=TRUE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=DEGRADED syncing=TRUE used=0 window=1
+step Tick | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger SYNC_STARTED | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=2
+step Admit CANCEL | admissible={CANCEL} base=REDUCING degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=TRUE used=0 window=2
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=TRUE used=0 window=2
+end
+behaviour 38
+step Init | admissible={} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=TRUE used=0 window=1
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=1
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=1
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=1
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=1
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=1
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=1
+step Tick | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=2
+end
+behaviour 39
+step Init | admissible={} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Admit MODIFY_UP | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=FALSE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL,MODIFY,MODIFY_UP,OPEN,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=SOFT_LIMIT syncing=FALSE used=1 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL,MODIFY,REDUCE} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_HALT syncing=FALSE used=1 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=RECOVERED syncing=FALSE used=1 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=1 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=1 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=1 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=1 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=1 window=0
+step Trigger ADMIN_HALT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=ADMIN_HALT syncing=TRUE used=1 window=0
+step Tick | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=TRUE used=0 window=1
+step Trigger SYNC_STARTED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=1
+end
+behaviour 40
+step Init | admissible={} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SYNC_STARTED | admissible={CANCEL,MODIFY,REDUCE} base=REDUCING degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=SYNC_STARTED syncing=TRUE used=0 window=0
+step Trigger ADMIN_RESUME | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=REDUCING lastTrigger=ADMIN_RESUME syncing=TRUE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=NONE syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=ACTIVE degraded=TRUE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=DEGRADED syncing=TRUE used=0 window=0
+step Trigger RECOVERED | admissible={CANCEL} base=ACTIVE degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=RECOVERED syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=ACTIVE lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=TRUE used=0 window=0
+step Trigger HARD_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=HARD_LIMIT syncing=TRUE used=0 window=0
+step Trigger SYNCED | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SYNCED syncing=FALSE used=0 window=0
+step Admit CANCEL | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=NONE syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger SOFT_LIMIT | admissible={CANCEL} base=HALTED degraded=FALSE haltedAdmit=FALSE lastBase=HALTED lastTrigger=SOFT_LIMIT syncing=FALSE used=0 window=0
+step Trigger DEGRADED | admissible={CANCEL} base=HALTED degraded=TRUE haltedAdmit=FALSE lastBase=HALTED lastTrigger=DEGRADED syncing=FALSE used=0 window=0
+end

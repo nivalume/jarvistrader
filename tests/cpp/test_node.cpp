@@ -36,6 +36,7 @@
 #include "jarvis/node/fingerprint.hpp"
 #include "jarvis/node/model_text.hpp"
 #include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/testkit/property.hpp"
 
@@ -807,5 +808,112 @@ params = { size = true }
     CHECK(registry.check(detail) == Status::AlreadyExists);
     CHECK(detail.find("test.Sized") != std::string::npos);
     CHECK(registry.find("test.Sized") != nullptr);
+  }
+}
+
+namespace {
+
+// Order events for the trace export test, valid enough to encode.
+struct OrderLog {
+  jarvis::core::CounterRng rng{77};
+  std::uint64_t seq = 0;
+
+  [[nodiscard]] m::OrderEventHeader header(std::string_view cid) const {
+    m::OrderEventHeader h;
+    REQUIRE(m::TraderId::from("TESTER-001", h.trader_id) == Status::Ok);
+    REQUIRE(m::StrategyId::from("S-001", h.strategy_id) == Status::Ok);
+    REQUIRE(m::InstrumentId::parse("BTCUSDT-PERP.BINANCE", h.instrument_id) == Status::Ok);
+    REQUIRE(m::ClientOrderId::from(cid, h.client_order_id) == Status::Ok);
+    h.event_id = m::Uuid4::derive(rng, seq, 1);
+    h.ts_event = jarvis::core::UnixNanos{1000 + seq};
+    h.ts_init = h.ts_event;
+    return h;
+  }
+  static m::AccountId account() {
+    m::AccountId a;
+    REQUIRE(m::AccountId::from("BINANCE-001", a) == Status::Ok);
+    return a;
+  }
+  static m::VenueOrderId venue() {
+    m::VenueOrderId v;
+    REQUIRE(m::VenueOrderId::from("V1", v) == Status::Ok);
+    return v;
+  }
+  static m::Quantity qty(std::string_view text) {
+    m::Quantity q;
+    REQUIRE(m::Quantity::parse(text, q) == Status::Ok);
+    return q;
+  }
+  [[nodiscard]] m::Event filled(std::string_view cid, std::string_view trade,
+                                std::string_view q) const {
+    m::OrderFilled f;
+    f.header = header(cid);
+    f.venue_order_id = venue();
+    f.account_id = account();
+    REQUIRE(m::TradeId::from(trade, f.trade_id) == Status::Ok);
+    f.order_side = m::OrderSide::Buy;
+    f.order_type = m::OrderType::Limit;
+    f.last_qty = qty(q);
+    REQUIRE(m::Price::parse("100.0", f.last_px) == Status::Ok);
+    REQUIRE(m::Currency::builtin("USDT", f.currency) == Status::Ok);
+    f.liquidity_side = m::LiquiditySide::Maker;
+    return m::Event{f};
+  }
+};
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("trace-export projects each order on OrderLifecycle, with refusals and scaling") {
+    const TempDir dir{"trace_export"};
+    const std::string log = dir.sub("log");
+    OrderLog g;
+    node::EventLogWriter w;
+    REQUIRE(w.open(log, wire::LogHeader{}) == Status::Ok);
+    const auto key = [&g] {
+      ++g.seq;
+      return EventKey{jarvis::core::UnixNanos{1000 + g.seq}, 1, g.seq};
+    };
+    m::SubmitOrder submit;
+    REQUIRE(m::ClientOrderId::from("O-1", submit.client_order_id) == Status::Ok);
+    REQUIRE(m::InstrumentId::parse("BTCUSDT-PERP.BINANCE", submit.instrument_id) == Status::Ok);
+    submit.quantity = OrderLog::qty("0.004");
+    REQUIRE(m::Price::parse("100.0", submit.price.emplace()) == Status::Ok);
+    REQUIRE(w.append_output(key(), m::Output{submit}) == Status::Ok);
+    m::OrderAccepted accepted{g.header("O-1"), OrderLog::venue(), OrderLog::account()};
+    REQUIRE(w.append(key(), m::Event{accepted}) == Status::Ok);
+    REQUIRE(w.append(key(), g.filled("O-1", "T1", "0.002")) == Status::Ok);
+    REQUIRE(w.append(key(), g.filled("O-1", "T1", "0.002")) == Status::Ok); // duplicate
+    REQUIRE(w.append(key(), g.filled("O-9", "T2", "0.001")) == Status::Ok); // not our order
+    m::CancelOrder cancel;
+    cancel.client_order_id = submit.client_order_id;
+    cancel.instrument_id = submit.instrument_id;
+    REQUIRE(w.append_output(key(), m::Output{cancel}) == Status::Ok);
+    m::OrderCanceled canceled;
+    canceled.header = g.header("O-1");
+    REQUIRE(w.append(key(), m::Event{canceled}) == Status::Ok);
+    REQUIRE(w.close() == Status::Ok);
+
+    node::TraceExportSummary summary;
+    std::string error;
+    REQUIRE(node::export_trace(log, "OrderLifecycle", dir.sub("trace"), summary, error) ==
+            Status::Ok);
+    CHECK(summary.orders == 1);
+    CHECK(summary.steps == 6);
+    CHECK(summary.refused == 1);
+    CHECK(summary.skipped == 1);
+    std::ifstream in{dir.sub("trace/OrderLifecycleTrace.tla")};
+    const std::string text{std::istreambuf_iterator<char>{in}, {}};
+    // Quantities in units of 0.002, the gcd of the order's quantities.
+    CHECK(text.find("[id |-> \"O-1\", quantity |-> 2, steps |->") != std::string::npos);
+    CHECK(text.find("refused |-> FALSE, a |-> <<\"Fill\", \"T1\", 1>>, status |-> "
+                    "\"PARTIALLY_FILLED\"") != std::string::npos);
+    CHECK(text.find("refused |-> TRUE, a |-> <<\"Fill\", \"T1\", 1>>") != std::string::npos);
+    CHECK(text.find("<<\"Plain\", \"PENDING_CANCEL\">>, status |-> \"PENDING_CANCEL\"") !=
+          std::string::npos);
+    CHECK(text.find("<<\"Plain\", \"CANCELED\">>, status |-> \"CANCELED\"") != std::string::npos);
+
+    CHECK(node::export_trace(log, "Matching", dir.sub("x"), summary, error) ==
+          Status::InvalidArgument);
   }
 }

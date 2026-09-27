@@ -5,7 +5,7 @@ Changed files come from --files, or from `git diff --name-only <merge-base>...HE
 plus uncommitted and untracked files with --worktree.
 
     select_specs.py --base origin/main                 # affected specs, one per line
-    select_specs.py --base origin/main --github-output # writes specs=... and core=... to $GITHUB_OUTPUT
+    select_specs.py --base origin/main --github-output # writes specs, forward, backward, core to $GITHUB_OUTPUT
     select_specs.py --emit                             # regenerate tools/core-paths.txt, .github/labeler.yml
     select_specs.py --check                            # fail if the generated files are stale
 """
@@ -120,7 +120,11 @@ def main(argv: list[str] | None = None) -> int:
             print("select: warning: core paths changed but no spec maps them", file=sys.stderr)
     if args.github_output:
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+            forward = [n for n in specs if spec_map.spec(n).forward]
+            backward = [n for n in specs if spec_map.spec(n).backward]
             handle.write(f"specs={' '.join(specs)}\n")
+            handle.write(f"forward={' '.join(forward)}\n")
+            handle.write(f"backward={' '.join(backward)}\n")
             handle.write(f"core={'true' if core else 'false'}\n")
     for name in specs:
         print(name)

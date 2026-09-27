@@ -1,17 +1,22 @@
 // A node for the golden replay cases (tests/golden/replay_*): one strategy whose `plan`
 // parameter picks what it subscribes to, and a deterministic data catalog to run it on.
 //
-//   golden_node catalog --seed N --out DIR     writes the catalog (one day, BTCUSDT-PERP)
+//   golden_node catalog --seed N --out DIR [--instrument]
+//                                              writes the catalog (one day, BTCUSDT-PERP);
+//                                              --instrument adds the instrument definition that
+//                                              orders against the simulated venue need
 //   golden_node --config FILE ...              node_main<GoldenStrategy> (run and replay)
 //
 // Plans: trade (every trade, and trades per batch), quote (conflated and sampled quotes),
 // book (L2 deltas and the conflated book), bar (external klines, internal time and tick bars),
-// feature (EMA, VWAP, imbalance, microprice, realized volatility).
+// feature (EMA, VWAP, imbalance, microprice, realized volatility), orders (quotes both sides
+// against the simulated venue and exercises every order command; see GoldenStrategy::orders).
 
 #include <array>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -22,15 +27,20 @@
 #include "jarvis/data/book.hpp"
 #include "jarvis/data/features.hpp"
 #include "jarvis/data/subscription.hpp"
+#include "jarvis/execution/order_intent.hpp"
 #include "jarvis/model/bar.hpp"
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/identifiers.hpp"
+#include "jarvis/model/instruments.hpp"
+#include "jarvis/model/order_events.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/log_source.hpp"
 #include "jarvis/node/node_main.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
+#include "jarvis/strategy/trading.hpp"
 
 namespace {
 
@@ -83,6 +93,30 @@ bool open_log(jarvis::node::EventLogWriter& w, const std::string& catalog,
   const std::string dir =
       jarvis::node::catalog_directory(catalog, btc(), std::string{stream}, "2026-09-01");
   return jarvis::core::ok(w.open(dir, m::wire::LogHeader{}, {}));
+}
+
+// The BTCUSDT perpetual as Binance defines it (tick 0.1, step 0.001).
+bool write_instrument(const std::string& out) {
+  m::CryptoPerpetual p;
+  m::InstrumentCommon& c = p.common;
+  c.id = btc();
+  bool good = jarvis::core::ok(m::Symbol::from("BTCUSDT", c.raw_symbol)) &&
+              jarvis::core::ok(m::Currency::builtin("BTC", c.base_currency.emplace())) &&
+              jarvis::core::ok(m::Currency::builtin("USDT", c.quote_currency));
+  c.settlement_currency = c.quote_currency;
+  c.price_precision = 1;
+  c.size_precision = 3;
+  c.price_increment = px(1);
+  c.size_increment = qty(1);
+  static_cast<void>(m::Quantity::from_raw(1'000'000'000, 0, c.multiplier));
+  good = good && jarvis::core::ok(m::Decimal::parse("0.05", c.margin_init)) &&
+         jarvis::core::ok(m::Decimal::parse("0.025", c.margin_maint));
+  c.ts_event = UnixNanos{kDay};
+  c.ts_init = UnixNanos{kDay};
+  jarvis::node::EventLogWriter w;
+  return good && open_log(w, out, "instrument") &&
+         jarvis::core::ok(w.append(EventKey{UnixNanos{kDay}, 9, 1}, m::Event{p})) &&
+         jarvis::core::ok(w.close());
 }
 
 // Ten minutes of market data from 00:00 with a random walk mid.
@@ -201,8 +235,34 @@ m::Decimal count(std::uint64_t n) {
   return v;
 }
 
+bool is_open(m::OrderStatus s) {
+  switch (s) {
+  case m::OrderStatus::Submitted:
+  case m::OrderStatus::Accepted:
+  case m::OrderStatus::Triggered:
+  case m::OrderStatus::PendingUpdate:
+  case m::OrderStatus::PendingCancel:
+  case m::OrderStatus::PartiallyFilled:
+    return true;
+  case m::OrderStatus::Initialized:
+  case m::OrderStatus::Denied:
+  case m::OrderStatus::Emulated:
+  case m::OrderStatus::Released:
+  case m::OrderStatus::Rejected:
+  case m::OrderStatus::Canceled:
+  case m::OrderStatus::Expired:
+  case m::OrderStatus::Filled:
+  case m::OrderStatus::Voided:
+    return false;
+  }
+  return false;
+}
+
 struct GoldenStrategy {
   std::string plan;
+  std::uint64_t quotes = 0;
+  std::optional<m::ClientOrderId> bid;
+  std::optional<m::ClientOrderId> ask;
 
   static Status create(const jarvis::node::StrategyParams& p, GoldenStrategy& out) {
     std::string_view plan;
@@ -256,8 +316,71 @@ struct GoldenStrategy {
       }
       return Status::Ok;
     }
+    if (plan == "orders") {
+      return ctx.subscribe_quotes(id, d::Cadence::every());
+    }
     return Status::InvalidArgument;
   }
+
+  // One resting order per side at the touch, moved with modifies as the touch moves. On top of
+  // that, on a fixed rhythm of quotes: cancel everything (7), a post-only buy at the ask that the
+  // venue rejects (11), a market sell (13), an IOC buy below the bid that expires (17), an order
+  // whose quantity has the wrong precision, which the risk checks deny (19), and a modify that
+  // raises the bid's quantity (23). Latency makes commands race with fills.
+  Status orders(st::Context& ctx, const m::QuoteTick& q) {
+    ++quotes;
+    const m::InstrumentId id = btc();
+    if (quotes % 7 == 0) {
+      std::uint32_t canceled = 0;
+      bid.reset();
+      ask.reset();
+      return ctx.cancel_all(id, canceled);
+    }
+    Status s = keep(ctx, bid, m::OrderSide::Buy, q.bid_price);
+    s = jarvis::core::ok(s) ? keep(ctx, ask, m::OrderSide::Sell, q.ask_price) : s;
+    m::ClientOrderId cid;
+    if (jarvis::core::ok(s) && quotes % 11 == 0) {
+      s = ctx.submit(
+          ctx.limit(id, m::OrderSide::Buy, qty(10), q.ask_price, m::TimeInForce::Gtc, true), cid);
+    }
+    if (jarvis::core::ok(s) && quotes % 13 == 0) {
+      s = ctx.submit(ctx.market(id, m::OrderSide::Sell, qty(5)), cid);
+    }
+    if (jarvis::core::ok(s) && quotes % 17 == 0) {
+      m::Price below;
+      static_cast<void>(m::Price::from_raw(q.bid_price.raw() - 100'000'000, 1, below));
+      s = ctx.submit(ctx.limit(id, m::OrderSide::Buy, qty(10), below, m::TimeInForce::Ioc), cid);
+    }
+    if (jarvis::core::ok(s) && quotes % 19 == 0) {
+      m::Quantity odd; // 0.0005: finer than the instrument's step
+      static_cast<void>(m::Quantity::from_raw(500'000, 4, odd));
+      s = ctx.submit(ctx.limit(id, m::OrderSide::Buy, odd, q.bid_price), cid);
+    }
+    if (jarvis::core::ok(s) && quotes % 23 == 0 && bid) {
+      s = ignore_busy(ctx.modify(*bid, qty(20), std::nullopt));
+    }
+    return s;
+  }
+
+  // Keeps one open order on `side` at `price`: modifies the working order, or submits a new one.
+  static Status keep(st::Context& ctx, std::optional<m::ClientOrderId>& slot, m::OrderSide side,
+                     m::Price price) {
+    st::OrderView view;
+    if (slot && ctx.order(*slot, view) && is_open(view.status)) {
+      if ((view.price && *view.price == price) || view.status == m::OrderStatus::PendingUpdate ||
+          view.status == m::OrderStatus::PendingCancel) {
+        return Status::Ok;
+      }
+      return ignore_busy(ctx.modify(*slot, std::nullopt, price));
+    }
+    m::ClientOrderId cid;
+    const Status s = ctx.submit(ctx.limit(btc(), side, qty(10), price), cid);
+    slot = cid;
+    return s;
+  }
+
+  // A modify the order's state does not allow now (a fill got there first) is not an error.
+  static Status ignore_busy(Status s) { return s == Status::InvalidState ? Status::Ok : s; }
 
   static Status on_trade(st::Context& ctx, const m::TradeTick& t) {
     return ctx.record("trade", decimal9(t.price.raw()));
@@ -265,7 +388,10 @@ struct GoldenStrategy {
   static Status on_trade_batch(st::Context& ctx, const st::TradeBatch& b) {
     return ctx.record("batch", count(b.trades.size()));
   }
-  static Status on_quote(st::Context& ctx, const m::QuoteTick& q) {
+  Status on_quote(st::Context& ctx, const m::QuoteTick& q) {
+    if (plan == "orders") {
+      return orders(ctx, q);
+    }
     return ctx.record("mid", decimal9((q.bid_price.raw() + q.ask_price.raw()) / 2));
   }
   static Status on_book_deltas(st::Context& ctx, const m::OrderBookDeltas& deltas) {
@@ -290,14 +416,21 @@ struct GoldenStrategy {
 
 int main(int argc, char** argv) {
   const std::vector<std::string_view> args(argv, argv + argc); // NOLINT
-  if (args.size() == 6 && args[1] == "catalog" && args[2] == "--seed" && args[4] == "--out") {
+  const bool instrument = args.size() == 7 && args[6] == "--instrument";
+  if ((args.size() == 6 || instrument) && args[1] == "catalog" && args[2] == "--seed" &&
+      args[4] == "--out") {
     std::uint64_t seed = 0;
     const auto [end, ec] = std::from_chars(args[3].data(), args[3].data() + args[3].size(), seed);
     if (ec != std::errc{} || end != args[3].data() + args[3].size()) {
       std::fprintf(stderr, "golden_node: bad seed\n");
       return 2;
     }
-    return write_catalog(seed, std::string{args[5]});
+    const int status = write_catalog(seed, std::string{args[5]});
+    if (status == 0 && instrument && !write_instrument(std::string{args[5]})) {
+      std::fprintf(stderr, "golden_node: writing the instrument definition failed\n");
+      return 1;
+    }
+    return status;
   }
   return jarvis::node_main<GoldenStrategy>(argc, argv);
 }

@@ -106,13 +106,13 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 - [x] task: risk — `TradingState`、允许命令矩阵、KillSwitch（§10.2、§10.3）
 - [x] task: risk — 内核内限速（按时钟对齐的固定窗口，由输入的 ts 推进，§10.4）
 - [x] task: risk — 事后监控：日内亏损、回撤、保证金率（§10.5）
-- [ ] task: specs — `TradingState.tla`（含令牌桶）与映射头
-- [ ] task: specs — `Matching.tla` 与映射头
-- [ ] task: tools — `tools/tla/behaviours.py`、`trace_driver`、`jarvis trace-export`（§18.2）
+- [x] task: specs — `TradingState.tla`（含限速窗口）与映射头
+- [x] task: specs — `Matching.tla`（排队位置成交模型）与映射头
+- [x] task: tools — `tools/tla/behaviours.py`、`trace_driver`、`jarvis trace-export`、`tools/tla/check_trace.py`（§18.2）
 - [ ] task: python — 回测 `RunReport`：成交、手续费、盈亏，并标注所用数据与成交模型
 - [ ] task: examples — `examples/py/mm_quote.py` 与 `examples/cpp/pegged_mm.cpp`，只供测试与 soak
-- [ ] task: harness — `OrderLifecycle` 正向与反向 trace validation 进入 CI
-- [ ] task: harness — `TradingState`、`Matching` 的不变量检查与生成行为进入 CI
+- [x] task: harness — `OrderLifecycle` 正向与反向 trace validation 进入 CI（反向用 golden 用例 `replay_orders` 的日志）
+- [x] task: harness — `TradingState`、`Matching` 的不变量检查与生成行为进入 CI
 - [x] task: harness — 性质测试：成交守恒、仓位等于成交流之和、`open_exposure()` 等于逐单求和
 - [x] task: harness — 热基准 `oms/apply_order_event`、`risk/gate_a`、`risk/gate_b`、`step/quote_to_command`
 - [x] task: harness — 热基准 `sim/match_top_of_book`、`sim/match_queue_position`

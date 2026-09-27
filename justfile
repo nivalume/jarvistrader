@@ -73,11 +73,16 @@ tla spec="all":
 tla-changed base="main":
     {{python}} tools/tla/run_tlc.py --changed --base {{base}} --worktree
 
-trace-forward spec:
-    @echo "trace-forward {{spec}}: SKIPPED - forward trace validation arrives with OrderLifecycle (plan.md M3)"
+# Forward trace validation (docs/architecture.md 18.2): fresh TLC behaviours through the code,
+# after checking that the committed set ctest replays is current.
+trace-forward spec num="2000" depth="24" seed="1": (build "dev")
+    {{python}} tools/tla/behaviours.py --check tests/trace/behaviours/{{spec}}.txt
+    {{python}} tools/tla/behaviours.py --spec {{spec}} --num {{num}} --depth {{depth}} --seed {{seed}}
+    build/dev/bin/trace_driver build/tla/behaviours/{{spec}}.txt
 
-trace-backward log spec:
-    @echo "trace-backward {{log}} {{spec}}: SKIPPED - 'jarvis trace-export' arrives in plan.md M3"
+# Backward trace validation: an event log (or run directory) projected on the spec, checked by TLC.
+trace-backward log spec="OrderLifecycle": (build "dev")
+    {{python}} tools/tla/check_trace.py --jarvis build/dev/bin/jarvis --spec {{spec}} --log {{log}}
 
 fuzz target="smoke" time="60":
     cmake --preset fuzz

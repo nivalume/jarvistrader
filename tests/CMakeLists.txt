@@ -52,7 +52,8 @@ jarvis_add_layer_test(model SOURCES cpp/test_model.cpp SUITES unit property zero
 jarvis_add_layer_test(data SOURCES cpp/test_data.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(cost SOURCES cpp/test_cost.cpp SUITES unit property LIBS jarvis::kernel)
 jarvis_add_layer_test(portfolio SOURCES cpp/test_portfolio.cpp SUITES unit property LIBS jarvis::kernel)
-jarvis_add_layer_test(risk SOURCES cpp/test_risk.cpp SUITES unit property LIBS jarvis::kernel)
+jarvis_add_layer_test(risk SOURCES cpp/test_risk.cpp SUITES unit property conformance LIBS jarvis::kernel)
+target_compile_definitions(test_risk PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 jarvis_add_layer_test(engine SOURCES cpp/test_engine.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(execution SOURCES cpp/test_execution.cpp SUITES unit property conformance LIBS jarvis::kernel)
 target_compile_definitions(test_execution PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -82,3 +83,16 @@ add_test(
           --root "${PROJECT_SOURCE_DIR}/tests/golden" --bin "${CMAKE_BINARY_DIR}"
 )
 set_tests_properties(golden.all PROPERTIES LABELS "golden")
+
+# Forward trace validation (docs/architecture.md 18.2): TLC behaviours of the specs, replayed
+# through the implementation. The committed files are small; the formal CI job regenerates them
+# (behaviours.py --check) and replays larger fresh sets.
+add_executable(trace_driver trace/trace_driver.cpp trace/behaviour_file.cpp)
+target_link_libraries(trace_driver PRIVATE jarvis::kernel)
+set_target_properties(trace_driver PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_dependencies(jarvis_tests trace_driver)
+foreach(spec IN ITEMS OrderLifecycle TradingState Matching)
+  add_test(NAME trace.${spec}
+           COMMAND trace_driver "${PROJECT_SOURCE_DIR}/tests/trace/behaviours/${spec}.txt")
+  set_tests_properties(trace.${spec} PROPERTIES LABELS "conformance;trace")
+endforeach()

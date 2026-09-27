@@ -1,0 +1,25 @@
+# Orders against the simulated venue (the orders plan of tests/cpp/golden_node.cpp). The run log
+# must match byte for byte and replay must reproduce it; the log projected on OrderLifecycle
+# (`jarvis trace-export`) must match too, and the formal job checks that trace with TLC
+# (tools/tla/check_trace.py --golden).
+commands = [
+  ["{bin}/bin/golden_node", "catalog", "--seed", "7", "--out", "{out}/catalog", "--instrument"],
+  ["{bin}/bin/golden_node", "--config", "{case}/node.toml", "--set", "data.catalog={out}/catalog",
+   "--out", "{out}/run"],
+  ["{bin}/bin/jarvis", "dump", "{out}/run", "--no-header", "--out", "{out}/run.txt"],
+  ["{bin}/bin/golden_node", "--replay", "{out}/run"],
+  ["{bin}/bin/jarvis", "trace-export", "{out}/run", "--spec", "OrderLifecycle", "--out",
+   "{out}/trace"],
+]
+
+[[compare]]
+produced = "run.txt"
+expected = "expected.run.txt"
+
+[[compare]]
+produced = "trace/OrderLifecycleTrace.tla"
+expected = "expected.OrderLifecycleTrace.tla"
+
+[[compare]]
+produced = "trace/OrderLifecycleTrace.cfg"
+expected = "expected.OrderLifecycleTrace.cfg"

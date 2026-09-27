@@ -780,7 +780,7 @@ Binance USDⓈ-M 的持仓模式（`dualSidePosition`）是账户级设置，并
 | 最小名义（`MIN_NOTIONAL`）、单笔最大名义 | | 是 |
 | 价格带（相对 mark 或 last 的偏离） | | 是 |
 | 未完成订单数上限 | | 是 |
-| 提交与改单速率（令牌桶） | | 是 |
+| 提交与改单速率（固定窗口） | | 是 |
 | `reduceOnly` / `positionSide` 与 OMS 模式一致 | | 是 |
 | 保证金占用、可用余额 | | 是 |
 | GTD 到期时间未过 | | 是 |
@@ -853,7 +853,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 | `MaxOrderNotionalRule` | B | `[risk]` | `NOTIONAL_EXCEEDS_MAX_PER_ORDER` |
 | `PriceBandRule` | B | `[risk]`，参考 mark 或 last | `PRICE_OUTSIDE_BAND` |
 | `MaxOpenOrdersRule` | B | `MAX_NUM_ORDERS` 与 `[risk]` 取小 | `OPEN_ORDERS_EXCEEDED` |
-| `RateLimitRule` | B | 令牌桶（10.4） | `RATE_LIMIT_EXCEEDED` |
+| `RateLimitRule` | B | 固定窗口（10.4） | `RATE_LIMIT_EXCEEDED` |
 | `PositionModeRule` | B | 账户模式 | `POSITION_SIDE_INVALID`、`REDUCE_ONLY_INVALID` |
 | `MarginRule` | B | Portfolio、`MarginModel` | `MARGIN_INSUFFICIENT` |
 | `GtdExpiryRule` | B | 时钟 | `GTD_ALREADY_EXPIRED` |
@@ -905,14 +905,14 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 - 续期由内核定时器驱动，续期命令经 order-sender 发出，续期失败作为健康事件处理。
 - 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时。
 
-### 10.4 令牌桶与权重反馈
+### 10.4 限速窗口与权重反馈
 
 - 限速状态在内核内（`jarvis/risk/rate_limit.hpp`），所以回测与实盘按同样的规则限速。Binance 按与时钟对齐的固定窗口计数，内核同样用固定窗口：一个窗口在两个间隔整数倍之间最多放行 `limit` 笔。窗口由输入的 ts 推进，状态是输入的函数，不需要定时器。
 - USDⓈ-M 的窗口：账户下单数每 10 秒与每分钟（`[risk] orders_per_10s = 250`、`orders_per_minute = 1000`，交易所上限为 300 与 1200），新单与改单各计一笔，撤单不计。IP 请求权重由适配器按连接统计（M4）。默认值低于交易所上限，给重连与对账请求留出余量。
 - 限速是 Gate B 的最后一条规则，只有其他规则都通过时才消耗额度。
 - 适配器把响应头 `X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*` 与 WS API 响应中的 `rateLimits` 回灌为 `RateLimitFeedback` 事件，内核据此校正估计值。
-- 收到 HTTP 429 立即把相关桶清零并退避；收到 418（IP 封禁）进入 `Degraded` 并告警。
-- `PeggedQuote` 等执行算法在生成子单前查询剩余令牌，令牌不足时只更新移动了的一侧。
+- 收到 HTTP 429 立即把相关窗口的余量清零并退避；收到 418（IP 封禁）进入 `Degraded` 并告警。
+- `PeggedQuote` 等执行算法在生成子单前查询剩余额度，额度不足时只更新移动了的一侧。
 
 ### 10.5 事后监控
 
@@ -1302,7 +1302,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 | `jarvis replay <run-dir> [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
-| `jarvis trace-export <log> --spec <X>` | 按规约变量投影日志，生成 `Trace.tla`（第 18 节） |
+| `jarvis trace-export <log> --spec <X> --out <dir>` | 按规约变量投影日志，生成 `<X>Trace.tla` 与 `.cfg`（第 18.2 节） |
 
 ### 16.5 Parquet 互转
 
@@ -1468,14 +1468,14 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | --- | --- | --- | --- |
 | `OrderLifecycle` | 订单状态机（第 8 节） | 状态转移属于允许集合；`filled_qty ≤ quantity`；`leaves_qty = quantity − filled_qty`；同一 `trade_id` 不重复计入；`Pending*` 期间的成交保留 `previous_status` | TLC 模型检查；正向与反向 trace validation |
 | `Reconciliation` | 对账协议（第 15 节） | 交易所被建模为会重排、重复、延迟用户流消息，并可在任意时刻给出快照的进程；进入 `Synced` 时本地订单与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏；`Synced` 之前 TradingState 为 `Halted` | TLC 模型检查；正向与反向 trace validation |
-| `TradingState` | 风控状态与令牌桶（第 10 节） | 只有列出的角色能转移状态；`Halted → Active` 只能经 admin；`Halted` 下没有提交通过；令牌数不为负；任一窗口内通过的提交数不超过容量 | TLC 模型检查；不变量加生成行为 |
-| `Matching` | 回测撮合器与执行算法（第 11、12 节） | 价格—时间优先；成交守恒（taker 成交量等于各 maker 成交量之和）；撮合后簿不交叉；`GTX` 从不吃单；排队位置单调不增 | TLC 模型检查；不变量加生成行为 |
+| `TradingState` | 风控状态与限速窗口（第 10.2、10.4 节） | 只有 admin 命令能放松 base，监控只收紧；`Halted` 下除撤单外没有命令通过；同步期间一律 `Halted`，降级期间从不 `Active`；任一窗口内通过的订单与改单数不超过上限（撤单不计） | TLC 模型检查；正向 trace validation（`RiskEngine`，含规约不允许的命令必须被拒绝） |
+| `Matching` | 模拟撮合的排队位置成交模型（第 12.3 节），单个买单 | 成交量不超过订单数量；post-only 从不吃单；在自身价位只有前方排队量耗尽后才成交；前方排队量不超过该价位总量且只减不增。多订单的价格—时间优先与成交守恒由 `test_matching` 的性质测试覆盖 | TLC 模型检查；正向 trace validation（`SimulatedExchange` 的 `QueuePosition` 模型） |
 | `DepthSync` | 订单簿同步（第 14.3 节） | 只有在事件链连续时才应用；`Synced` 状态下本地簿等于交易所簿（交易所簿抽象建模）；每次断链都导致重新同步；策略从不看到未同步的簿 | TLC 模型检查；不变量加生成行为 |
 
 ### 18.2 正向与反向验证
 
-- **正向**：`tools/tla/behaviours.py` 用 TLC 的模拟与导出模式生成行为（动作序列与状态），输出 JSON。`trace_driver` 经 `specs/map/<spec>_actions.hpp` 把规约动作映射为内核事件，逐步调用 `step`，并在每一步比较实现状态在规约变量上的投影。第一处偏差即失败，报告 `seq` 与动作。
-- **反向**：`jarvis trace-export <log> --spec <X>` 把事件日志投影为规约变量上的一条行为 `Trace.tla`，由 TLC 检查它是否是规约的合法行为（精化）以及是否满足不变量。PR 中对 golden 日志运行，nightly 对最近一次 soak 日志运行。
+- **正向**：`specs/tla/<Spec>Behaviours.tla` 在规约之上加变量 `action`，记录每一步的动作及其参数；`OrderLifecycle` 与 `TradingState` 还记录上一状态中规约允许的事件或命令。`tools/tla/behaviours.py` 以 TLC 模拟模式（`-simulate file=...`）生成行为，写成每行一个状态的文本文件（`step <动作> <参数> | <变量>=<值> ...`）。`tests/trace/trace_driver` 经 `specs/map/<spec>_actions.hpp` 把动作映射为实现的输入：OMS 的订单事件、`RiskEngine` 的触发与命令、`SimulatedExchange` 的行情与下单。每一步比较实现状态在规约变量上的投影，并检查规约不允许的事件或命令被实现拒绝。第一处偏差即失败，报告行为编号、步号与动作；规约的某个动作在整个文件中从未出现也算失败。`tests/trace/behaviours/` 中提交的小行为集由 ctest 回放（标签 `trace`）；CI 的 formal job 先用 `behaviours.py --check` 确认它与规约同步，再以运行编号为种子生成 2000 条新行为回放；nightly 每个规约回放 20000 条。
+- **反向**：`jarvis trace-export <log> --spec OrderLifecycle --out <dir>` 把日志中每个订单的事件按日志顺序投影为规约动作。venue 的订单事件来自输入；内核自己施加的事件由命令输出恢复：`SubmitOrder` 为创建与 `SUBMITTED`，`OrderDenied` 为 `DENIED`，`ModifyOrder` 为 `PENDING_UPDATE`，`CancelOrder` 为 `PENDING_CANCEL`。一个新的 OMS 用内核自己的代码施加这些事件；被拒绝的事件记为 refused 步，规约也必须不允许它。每一步还记录实现施加后的订单状态，规约到达的状态必须与之相同。数量以该订单全部数量的最大公约数为单位，保证落在 TLC 的整数范围内。生成的 `OrderLifecycleTrace.tla` 由 TLC 检查（`tools/tla/check_trace.py`）：无法继续的一步表现为死锁，脚本报告订单、日志 `seq`、动作与实现的状态。golden 用例 `replay_orders` 固定一份导出的 trace，formal job 对它运行 TLC；nightly 对最近一次 soak 日志运行（M4 起）。
 
 ### 18.3 规约与代码的同步规则
 
@@ -1506,7 +1506,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | tick 到命令、命令到 socket 的延迟 | 端到端延迟 |
 | 重连次数、行情陈旧时长 | 连接健康 |
 | 对账差异数 | 本地与交易所的一致性 |
-| 各令牌桶余量、429/418 次数 | 限速 |
+| 各限速窗口余量、429/418 次数 | 限速 |
 | 按原因分类的拒单数 | 风控行为 |
 | TradingState、Node 状态 | 当前运行状态 |
 | 敞口与限额之比 | 风险 |

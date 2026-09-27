@@ -170,6 +170,7 @@ add_library(
   jarvis/node/state_text.cpp
   jarvis/node/backtest_node.cpp
   jarvis/node/node_cli.cpp
+  jarvis/node/trace_export.cpp
 )
 add_library(jarvis::shell ALIAS jarvis_shell)
 target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)

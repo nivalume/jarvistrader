@@ -1,0 +1,809 @@
+# Behaviours of Matching (specs/tla/MatchingBehaviours.tla), written by
+# tools/tla/behaviours.py; regenerate with its --check/--out options, never by hand.
+spec Matching num 150 depth 12 seed 1
+const MaxQty 4
+const MaxLevel 5
+const MaxTrade 4
+behaviour 1
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 2
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Rest | ahead=1 filled=0 lastFill=NONE level=1 phase=RESTING postOnly=FALSE qty=1 taker=0
+step TradeAt 3 | ahead=0 filled=1 lastFill=AT level=1 phase=DONE postOnly=FALSE qty=1 taker=0
+end
+behaviour 3
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 4
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 1 | ahead=1 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=4 taker=1
+step TradeAt 1 | ahead=0 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Level 4 | ahead=0 filled=1 lastFill=TAKE level=4 phase=RESTING postOnly=FALSE qty=4 taker=1
+step TradeAt 2 | ahead=0 filled=3 lastFill=AT level=4 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Cross 5 | ahead=0 filled=4 lastFill=CROSS level=4 phase=DONE postOnly=FALSE qty=4 taker=1
+end
+behaviour 5
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 6
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 4 | ahead=0 filled=3 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 7
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 8
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 9
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 10
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 4 | ahead=0 filled=4 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 11
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 12
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 13
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 4 | ahead=0 filled=4 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 14
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 15
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Rest | ahead=3 filled=0 lastFill=NONE level=3 phase=RESTING postOnly=FALSE qty=1 taker=0
+step Through 1 | ahead=3 filled=1 lastFill=THROUGH level=3 phase=DONE postOnly=FALSE qty=1 taker=0
+end
+behaviour 16
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 4 | ahead=0 filled=4 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 17
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 18
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 19
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 2 | ahead=5 filled=2 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=3 taker=2
+step Through 4 | ahead=5 filled=3 lastFill=THROUGH level=5 phase=DONE postOnly=FALSE qty=3 taker=2
+end
+behaviour 20
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Rest | ahead=5 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Cross 1 | ahead=5 filled=1 lastFill=CROSS level=5 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Through 1 | ahead=5 filled=2 lastFill=THROUGH level=5 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Gone | ahead=0 filled=2 lastFill=THROUGH level=0 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Cross 3 | ahead=0 filled=4 lastFill=CROSS level=0 phase=DONE postOnly=FALSE qty=4 taker=0
+end
+behaviour 21
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Rest | ahead=5 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=FALSE qty=1 taker=0
+step Through 2 | ahead=5 filled=1 lastFill=THROUGH level=5 phase=DONE postOnly=FALSE qty=1 taker=0
+end
+behaviour 22
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 23
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 24
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 25
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 4 | ahead=0 filled=4 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 26
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 27
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 28
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Rest | ahead=4 filled=0 lastFill=NONE level=4 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 5 | ahead=4 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=TRUE qty=3 taker=0
+step TradeAt 2 | ahead=2 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=TRUE qty=3 taker=0
+step TradeAt 2 | ahead=0 filled=2 lastFill=AT level=2 phase=RESTING postOnly=TRUE qty=3 taker=0
+step TradeAt 2 | ahead=0 filled=3 lastFill=AT level=2 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 29
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 30
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 31
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 1 | ahead=3 filled=1 lastFill=TAKE level=3 phase=RESTING postOnly=FALSE qty=2 taker=1
+step Level 4 | ahead=3 filled=1 lastFill=TAKE level=4 phase=RESTING postOnly=FALSE qty=2 taker=1
+step Through 2 | ahead=3 filled=2 lastFill=THROUGH level=4 phase=DONE postOnly=FALSE qty=2 taker=1
+end
+behaviour 32
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 33
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 34
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 3 | ahead=0 filled=1 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 35
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 36
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 37
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Rest | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=FALSE qty=2 taker=0
+step Level 4 | ahead=2 filled=0 lastFill=NONE level=4 phase=RESTING postOnly=FALSE qty=2 taker=0
+step Cross 4 | ahead=2 filled=2 lastFill=CROSS level=4 phase=DONE postOnly=FALSE qty=2 taker=0
+end
+behaviour 38
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 3 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 39
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 40
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 41
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 42
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 43
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 3 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 44
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 1 | ahead=3 filled=1 lastFill=TAKE level=3 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Level 1 | ahead=1 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=3 taker=1
+step TradeAt 1 | ahead=0 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Cross 2 | ahead=0 filled=3 lastFill=CROSS level=1 phase=DONE postOnly=FALSE qty=3 taker=1
+end
+behaviour 45
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Rest | ahead=1 filled=0 lastFill=NONE level=1 phase=RESTING postOnly=FALSE qty=1 taker=0
+step TradeAt 2 | ahead=0 filled=1 lastFill=AT level=1 phase=DONE postOnly=FALSE qty=1 taker=0
+end
+behaviour 46
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Rest | ahead=3 filled=0 lastFill=NONE level=3 phase=RESTING postOnly=FALSE qty=2 taker=0
+step Through 4 | ahead=3 filled=2 lastFill=THROUGH level=3 phase=DONE postOnly=FALSE qty=2 taker=0
+end
+behaviour 47
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 48
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 49
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 50
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 51
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 52
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 53
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Rest | ahead=3 filled=0 lastFill=NONE level=3 phase=RESTING postOnly=FALSE qty=1 taker=0
+step Cross 1 | ahead=3 filled=1 lastFill=CROSS level=3 phase=DONE postOnly=FALSE qty=1 taker=0
+end
+behaviour 54
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 55
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 56
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 2 | ahead=0 filled=2 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 57
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 4 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 58
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 59
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 60
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 61
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 62
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 63
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 4 | ahead=0 filled=1 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 64
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 65
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=2 taker=0
+step Rest | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=TRUE qty=2 taker=0
+step Cross 3 | ahead=2 filled=2 lastFill=CROSS level=2 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 66
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 4 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 67
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 68
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 2 | ahead=2 filled=2 lastFill=TAKE level=2 phase=RESTING postOnly=FALSE qty=4 taker=2
+step Level 5 | ahead=2 filled=2 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=4 taker=2
+step Cross 5 | ahead=2 filled=4 lastFill=CROSS level=5 phase=DONE postOnly=FALSE qty=4 taker=2
+end
+behaviour 69
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 4 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 70
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Rest | ahead=5 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=TRUE qty=1 taker=0
+step Level 2 | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=TRUE qty=1 taker=0
+step Through 3 | ahead=2 filled=1 lastFill=THROUGH level=2 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 71
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 72
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 73
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 74
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 75
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 76
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 1 | ahead=1 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Cross 3 | ahead=1 filled=3 lastFill=CROSS level=1 phase=DONE postOnly=FALSE qty=3 taker=1
+end
+behaviour 77
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 78
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 79
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 80
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 2 | ahead=0 filled=1 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 81
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 1 | ahead=5 filled=1 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=2 taker=1
+step Cross 3 | ahead=5 filled=2 lastFill=CROSS level=5 phase=DONE postOnly=FALSE qty=2 taker=1
+end
+behaviour 82
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 83
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 1 | ahead=5 filled=1 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Through 1 | ahead=5 filled=2 lastFill=THROUGH level=5 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Level 0 | ahead=0 filled=2 lastFill=THROUGH level=0 phase=RESTING postOnly=FALSE qty=3 taker=1
+step Through 4 | ahead=0 filled=3 lastFill=THROUGH level=0 phase=DONE postOnly=FALSE qty=3 taker=1
+end
+behaviour 84
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 1 | ahead=0 filled=1 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 85
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 86
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 2 | ahead=2 filled=2 lastFill=TAKE level=2 phase=RESTING postOnly=FALSE qty=3 taker=2
+step Cross 1 | ahead=2 filled=3 lastFill=CROSS level=2 phase=DONE postOnly=FALSE qty=3 taker=2
+end
+behaviour 87
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Rest | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=FALSE qty=2 taker=0
+step Cross 4 | ahead=2 filled=2 lastFill=CROSS level=2 phase=DONE postOnly=FALSE qty=2 taker=0
+end
+behaviour 88
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 89
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 90
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 91
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 3 | ahead=0 filled=3 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 92
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Rest | ahead=0 filled=0 lastFill=NONE level=0 phase=RESTING postOnly=FALSE qty=2 taker=0
+step TradeAt 3 | ahead=0 filled=2 lastFill=AT level=0 phase=DONE postOnly=FALSE qty=2 taker=0
+end
+behaviour 93
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 5 | ahead=0 filled=3 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 94
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 95
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 2 | ahead=5 filled=2 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=3 taker=2
+step TradeAt 2 | ahead=3 filled=2 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=3 taker=2
+step TradeAt 3 | ahead=0 filled=2 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=3 taker=2
+step Cross 4 | ahead=0 filled=3 lastFill=CROSS level=5 phase=DONE postOnly=FALSE qty=3 taker=2
+end
+behaviour 96
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Rest | ahead=4 filled=0 lastFill=NONE level=4 phase=RESTING postOnly=FALSE qty=4 taker=0
+step TradeAt 3 | ahead=1 filled=0 lastFill=NONE level=4 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=RESTING postOnly=FALSE qty=4 taker=0
+step Through 2 | ahead=0 filled=2 lastFill=THROUGH level=4 phase=RESTING postOnly=FALSE qty=4 taker=0
+step TradeAt 3 | ahead=0 filled=4 lastFill=AT level=4 phase=DONE postOnly=FALSE qty=4 taker=0
+end
+behaviour 97
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 98
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 2 | ahead=1 filled=2 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=4 taker=2
+step Gone | ahead=0 filled=2 lastFill=TAKE level=0 phase=RESTING postOnly=FALSE qty=4 taker=2
+step Cross 3 | ahead=0 filled=4 lastFill=CROSS level=0 phase=DONE postOnly=FALSE qty=4 taker=2
+end
+behaviour 99
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=3 taker=0
+step Rest | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 3 | ahead=2 filled=0 lastFill=NONE level=3 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 5 | ahead=2 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Cross 5 | ahead=2 filled=3 lastFill=CROSS level=5 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 100
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 3 | ahead=0 filled=3 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 101
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 102
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 1 | ahead=5 filled=1 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=2 taker=1
+step TradeAt 3 | ahead=2 filled=1 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=2 taker=1
+step Through 1 | ahead=2 filled=2 lastFill=THROUGH level=5 phase=DONE postOnly=FALSE qty=2 taker=1
+end
+behaviour 103
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 104
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 2 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 105
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 4 | ahead=0 filled=1 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 106
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 2 | ahead=0 filled=1 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 107
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 1 | ahead=0 filled=1 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 108
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 109
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 110
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 111
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 112
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 113
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=1 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 114
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 5 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 115
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 1 | ahead=1 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=2 taker=1
+step Through 4 | ahead=1 filled=2 lastFill=THROUGH level=1 phase=DONE postOnly=FALSE qty=2 taker=1
+end
+behaviour 116
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 1 | ahead=1 filled=1 lastFill=TAKE level=1 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Level 5 | ahead=1 filled=1 lastFill=TAKE level=5 phase=RESTING postOnly=FALSE qty=4 taker=1
+step TradeAt 3 | ahead=0 filled=3 lastFill=AT level=5 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Level 2 | ahead=0 filled=3 lastFill=AT level=2 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Level 3 | ahead=0 filled=3 lastFill=AT level=3 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Gone | ahead=0 filled=3 lastFill=AT level=0 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Cross 3 | ahead=0 filled=4 lastFill=CROSS level=0 phase=DONE postOnly=FALSE qty=4 taker=1
+end
+behaviour 117
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 5 | ahead=0 filled=2 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 118
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=3 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=3 taker=0
+step Take 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 119
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=3 taker=0
+step Rest | ahead=3 filled=0 lastFill=NONE level=3 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Cross 1 | ahead=3 filled=1 lastFill=CROSS level=3 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 5 | ahead=3 filled=1 lastFill=CROSS level=5 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Level 1 | ahead=0 filled=1 lastFill=CROSS level=1 phase=RESTING postOnly=TRUE qty=3 taker=0
+step Through 3 | ahead=0 filled=3 lastFill=THROUGH level=1 phase=DONE postOnly=TRUE qty=3 taker=0
+end
+behaviour 120
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 5 | ahead=0 filled=4 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=4 taker=4
+end
+behaviour 121
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=0 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 122
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 123
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 4 | ahead=0 filled=3 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 124
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 5 | ahead=0 filled=3 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 125
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 2 | ahead=0 filled=2 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 126
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 5 | ahead=0 filled=2 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 127
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Rest | ahead=2 filled=0 lastFill=NONE level=2 phase=RESTING postOnly=TRUE qty=1 taker=0
+step Level 1 | ahead=1 filled=0 lastFill=NONE level=1 phase=RESTING postOnly=TRUE qty=1 taker=0
+step Through 4 | ahead=1 filled=1 lastFill=THROUGH level=1 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 128
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=1 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 129
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 5 | ahead=0 filled=2 lastFill=TAKE level=5 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 130
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 1 | ahead=2 filled=1 lastFill=TAKE level=2 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Cross 2 | ahead=2 filled=3 lastFill=CROSS level=2 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Cross 5 | ahead=2 filled=4 lastFill=CROSS level=2 phase=DONE postOnly=FALSE qty=4 taker=1
+end
+behaviour 131
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=0 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 132
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 133
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 4 | ahead=0 filled=2 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 134
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=2 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=TRUE qty=2 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=1 phase=DONE postOnly=TRUE qty=2 taker=0
+end
+behaviour 135
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 5 | ahead=0 filled=1 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 136
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 1 | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 2 | ahead=2 filled=2 lastFill=TAKE level=2 phase=RESTING postOnly=FALSE qty=3 taker=2
+step Level 4 | ahead=2 filled=2 lastFill=TAKE level=4 phase=RESTING postOnly=FALSE qty=3 taker=2
+step Cross 5 | ahead=2 filled=3 lastFill=CROSS level=4 phase=DONE postOnly=FALSE qty=3 taker=2
+end
+behaviour 137
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=1 taker=0
+step Take 1 | ahead=0 filled=1 lastFill=TAKE level=3 phase=DONE postOnly=FALSE qty=1 taker=1
+end
+behaviour 138
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 3 | ahead=0 filled=0 lastFill=NONE level=5 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 139
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 5 | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=3 taker=0
+step Rest | ahead=5 filled=0 lastFill=NONE level=5 phase=RESTING postOnly=FALSE qty=3 taker=0
+step Through 4 | ahead=5 filled=3 lastFill=THROUGH level=5 phase=DONE postOnly=FALSE qty=3 taker=0
+end
+behaviour 140
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 5 | ahead=0 filled=0 lastFill=NONE level=3 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 141
+step Init | ahead=0 filled=0 lastFill=NONE level=1 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 3 | ahead=0 filled=3 lastFill=TAKE level=0 phase=RESTING postOnly=FALSE qty=4 taker=3
+step Level 2 | ahead=0 filled=3 lastFill=TAKE level=2 phase=RESTING postOnly=FALSE qty=4 taker=3
+step Through 3 | ahead=0 filled=4 lastFill=THROUGH level=2 phase=DONE postOnly=FALSE qty=4 taker=3
+end
+behaviour 142
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=TRUE qty=4 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 143
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=TRUE qty=4 taker=0
+step Take 1 | ahead=0 filled=0 lastFill=NONE level=4 phase=DONE postOnly=TRUE qty=4 taker=0
+end
+behaviour 144
+step Init | ahead=0 filled=0 lastFill=NONE level=5 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 3 | ahead=0 filled=2 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 145
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=4 taker=0
+step Level 0 | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=4 taker=0
+step Take 1 | ahead=0 filled=1 lastFill=TAKE level=0 phase=RESTING postOnly=FALSE qty=4 taker=1
+step Through 3 | ahead=0 filled=4 lastFill=THROUGH level=0 phase=DONE postOnly=FALSE qty=4 taker=1
+end
+behaviour 146
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 3 | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=TRUE qty=1 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=TRUE qty=1 taker=0
+step Take 4 | ahead=0 filled=0 lastFill=NONE level=2 phase=DONE postOnly=TRUE qty=1 taker=0
+end
+behaviour 147
+step Init | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 3 | ahead=0 filled=3 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 148
+step Init | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 5 | ahead=0 filled=3 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=3 taker=3
+end
+behaviour 149
+step Init | ahead=0 filled=0 lastFill=NONE level=3 phase=NEW postOnly=FALSE qty=2 taker=0
+step Level 2 | ahead=0 filled=0 lastFill=NONE level=2 phase=NEW postOnly=FALSE qty=2 taker=0
+step Take 5 | ahead=0 filled=2 lastFill=TAKE level=2 phase=DONE postOnly=FALSE qty=2 taker=2
+end
+behaviour 150
+step Init | ahead=0 filled=0 lastFill=NONE level=0 phase=NEW postOnly=FALSE qty=3 taker=0
+step Level 4 | ahead=0 filled=0 lastFill=NONE level=4 phase=NEW postOnly=FALSE qty=3 taker=0
+step Take 4 | ahead=0 filled=3 lastFill=TAKE level=4 phase=DONE postOnly=FALSE qty=3 taker=3
+end

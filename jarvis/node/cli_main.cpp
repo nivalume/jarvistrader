@@ -8,6 +8,7 @@
 //   jarvis roundtrip INPUT --out FILE
 //   jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]
 //   jarvis replay RUN_DIR [--until SEQ] [--dump-state]
+//   jarvis trace-export LOG_DIR --spec NAME --out DIR
 //
 // Exit status: 0 success, 1 failure or difference, 2 usage error, 3 replay divergence.
 
@@ -42,6 +43,7 @@
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
 #include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 
 namespace {
@@ -63,6 +65,7 @@ constexpr std::string_view kUsageText =
     "  jarvis dump DIR [--out FILE] [--no-header] [--limit N]\n"
     "  jarvis roundtrip INPUT --out FILE\n"
     "  jarvis replay RUN_DIR [--until SEQ] [--dump-state]\n"
+    "  jarvis trace-export LOG_DIR --spec NAME --out DIR\n"
     "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
@@ -445,6 +448,27 @@ int cmd_config(const Args& args) {
 
 } // namespace
 
+// Backward trace validation (docs/architecture.md 18.2): the log projected on a spec.
+int cmd_trace_export(const Args& args) {
+  const auto spec = args.option("--spec");
+  const auto out = args.option("--out");
+  if (args.positional.size() != 1 || !spec || !out) {
+    return usage("trace-export needs a log directory, --spec and --out");
+  }
+  node::TraceExportSummary summary;
+  std::string error;
+  const Status s = node::export_trace(std::string{args.positional[0]}, std::string{*spec},
+                                      std::string{*out}, summary, error);
+  if (!jarvis::core::ok(s)) {
+    std::cerr << "jarvis: trace-export: " << error << "\n";
+    return kFailed;
+  }
+  std::cout << "trace-export: " << *spec << ": " << summary.orders << " orders, " << summary.steps
+            << " steps (" << summary.refused << " refused), " << summary.skipped
+            << " events of unknown orders skipped -> " << *out << "\n";
+  return kOk;
+}
+
 int main(int argc, char** argv) {
   const std::span<char*> all{argv, static_cast<std::size_t>(argc)};
   if (all.size() < 2) {
@@ -482,6 +506,10 @@ int main(int argc, char** argv) {
     constexpr std::array<std::string_view, 1> kValues = {"--until"};
     constexpr std::array<std::string_view, 1> kFlags = {"--dump-state"};
     return parse_args(rest, kValues, kFlags, args) ? cmd_replay(args) : kUsage;
+  }
+  if (command == "trace-export") {
+    constexpr std::array<std::string_view, 2> kValues = {"--spec", "--out"};
+    return parse_args(rest, kValues, {}, args) ? cmd_trace_export(args) : kUsage;
   }
   if (command == "--help" || command == "help") {
     std::cout << kUsageText;
