@@ -22,4 +22,12 @@ gating = false
 [groups.codec]
 gating = true
 
+# Cross-core hand-offs vary with core placement and machine load more than single-thread code.
+[groups.live]
+gating = true
+
+[benchmarks."ring/spsc_roundtrip"]
+max_regression_pct = 25.0
+abs_floor_ns = 20.0
+
 # Core-path thresholds tighten to 3% once the self-hosted benchmark runner exists (decision D21).

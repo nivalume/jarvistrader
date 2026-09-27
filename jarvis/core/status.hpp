@@ -25,6 +25,7 @@ enum class Status : std::uint8_t {
   Truncated,
   EndOfStream,
   IoError,
+  WouldBlock, // nothing yet: a live source that has no input at the moment, but will have
 };
 
 [[nodiscard]] constexpr bool ok(Status status) noexcept { return status == Status::Ok; }
@@ -65,6 +66,8 @@ enum class Status : std::uint8_t {
     return "EndOfStream";
   case Status::IoError:
     return "IoError";
+  case Status::WouldBlock:
+    return "WouldBlock";
   }
   return "Unknown";
 }

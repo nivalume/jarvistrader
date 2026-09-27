@@ -63,6 +63,17 @@ concept Recorder =
       { r.record(key, event) } -> std::same_as<core::Status>;
     };
 
+// Real time (sandbox, live): the clock, and the hand-off of what arrived since the last call.
+// `pump` moves arrived inputs into the source, stamped at `now`; the source returns WouldBlock
+// when it has nothing. `idle` runs when nothing is due (yield, Python's on_idle hook).
+template <typename P>
+concept Pump = requires(P& p, const P& cp, core::UnixNanos now) {
+  { cp.now() } -> std::same_as<core::UnixNanos>;
+  { p.pump(now) } -> std::same_as<core::Status>;
+  { p.idle(now) } -> std::same_as<core::Status>;
+  { cp.stop_requested() } -> std::same_as<bool>;
+};
+
 struct DriverOptions {
   std::optional<core::UnixNanos> start; // data before start is skipped
   std::optional<core::UnixNanos> end;   // data at or after end is not stepped; timers due
@@ -135,7 +146,101 @@ public:
     return core::Status::Ok;
   }
 
+  // The same input sequence in real time: an input is stepped once the clock has reached its
+  // time, and every input the pump delivers is stamped with the clock's reading, so the log is
+  // a backtest input sequence that happened to arrive in real time and replays the same way.
+  // A batch closes when the next input has a later ts or when nothing more is due. The run
+  // ends when the pump asks to stop (ShutdownRequested) or a strategy error halts the node.
+  template <Pump P> [[nodiscard]] core::Status run_realtime(P& pump, RunSummary& out) {
+    summary_ = RunSummary{};
+    core::Status s = start(pump.now());
+    while (core::ok(s) && !engine_->halt_requested() && !pump.stop_requested()) {
+      const core::UnixNanos now = pump.now();
+      s = pump.pump(now);
+      if (!core::ok(s)) {
+        return s;
+      }
+      bool moved = false;
+      s = advance_until(now, moved);
+      if (core::ok(s) && !moved) {
+        s = close_batch();
+        if (core::ok(s)) {
+          s = pump.idle(now);
+        }
+      }
+    }
+    if (!core::ok(s)) {
+      return s;
+    }
+    summary_.halted = engine_->halt_requested();
+    core::UnixNanos final_ts = pump.now();
+    final_ts = final_ts < last_ts_ ? last_ts_ : final_ts;
+    for (const auto reason :
+         {model::LifecycleReason::ShutdownRequested, model::LifecycleReason::Drained}) {
+      s = transition(reason, final_ts);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    s = close_batch();
+    if (!core::ok(s)) {
+      return s;
+    }
+    summary_.state = lifecycle_.state();
+    summary_.last_ts = last_ts_;
+    out = summary_;
+    return core::Status::Ok;
+  }
+
 private:
+  // Steps everything due at `now` or before, earliest first.
+  core::Status advance_until(core::UnixNanos now, bool& moved) {
+    while (!engine_->halt_requested()) {
+      if constexpr (VenueSource<Source>) {
+        std::optional<core::UnixNanos> venue;
+        const core::Status s = source_->next_venue_time(venue);
+        if (!core::ok(s)) {
+          return s;
+        }
+        const std::optional<core::UnixNanos> input = source_->next_input_time();
+        core::FiredTimer due;
+        const bool timer = engine_->next_timer(due);
+        const bool ready = (venue && !(now < *venue)) || (input && !(now < *input)) ||
+                           (timer && !(now < due.deadline));
+        if (!ready) {
+          return core::Status::Ok;
+        }
+        // advance() takes the earliest of the three; all of them are due.
+        const core::Status a = advance(venue && !(now < *venue) ? venue : std::nullopt,
+                                       input && !(now < *input) ? input : std::nullopt);
+        if (!core::ok(a)) {
+          return a;
+        }
+        moved = true;
+      } else {
+        core::EventKey key;
+        model::Event event;
+        const core::Status s = source_->next(key, event);
+        if (s == core::Status::WouldBlock || s == core::Status::EndOfStream) {
+          return fire_timers(now, true, &moved);
+        }
+        if (!core::ok(s)) {
+          return s;
+        }
+        core::Status f = fire_timers(key.ts, true, &moved);
+        if (core::ok(f)) {
+          f = feed(key, event);
+          ++summary_.data_events;
+          moved = true;
+        }
+        if (!core::ok(f)) {
+          return f;
+        }
+      }
+    }
+    return core::Status::Ok;
+  }
+
   // Init -> Running at ts0, with the preamble stepped while Syncing.
   core::Status start(core::UnixNanos ts0) {
     summary_.first_ts = ts0;
@@ -267,10 +372,13 @@ private:
   }
 
   // Fires every timer due at `limit` (inclusive) or before it (exclusive).
-  core::Status fire_timers(core::UnixNanos limit, bool inclusive) {
+  core::Status fire_timers(core::UnixNanos limit, bool inclusive, bool* fired = nullptr) {
     core::FiredTimer due;
     while (!engine_->halt_requested() && engine_->next_timer(due) &&
            (due.deadline < limit || (inclusive && due.deadline == limit))) {
+      if (fired != nullptr) {
+        *fired = true;
+      }
       const core::UnixNanos ts = due.deadline < last_ts_ ? last_ts_ : due.deadline;
       const core::Status s = feed(core::EventKey{ts, kKernelSource, 0},
                                   model::Event{model::TimerFired{due.key, due.deadline, ts}});

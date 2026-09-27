@@ -64,6 +64,9 @@ struct VenueLoopConfig {
   std::uint32_t commands = 4096;    // commands in flight
   std::optional<core::UnixNanos> start;
   std::optional<core::UnixNanos> end;
+  // Sandbox: the market data is real and already arrived, so the node sees it when the venue
+  // does (no feed delay, ts_init kept); order latency still applies.
+  bool live_feed = false;
 };
 
 struct VenueLoopStats {
@@ -355,6 +358,9 @@ private:
         source_done_ = true;
         return core::Status::Ok;
       }
+      if (s == core::Status::WouldBlock) {
+        return core::Status::Ok; // a live source: nothing has arrived yet
+      }
       if (!core::ok(s)) {
         return s;
       }
@@ -386,12 +392,20 @@ private:
     }
     Delayed d;
     d.key = lookahead_key_;
-    d.key.ts =
-        fifo(last_data_,
-             core::UnixNanos{venue_time.value() +
-                             latency_.delay(++data_serial_, cost::LatencyHop::Feed).value()});
+    if (config_.live_feed) {
+      // Real market data reaches the node and the simulated venue together: no feed delay,
+      // and ts_init stays the arrival time the IO thread stamped.
+      d.key.ts = fifo(last_data_, venue_time);
+    } else {
+      d.key.ts =
+          fifo(last_data_,
+               core::UnixNanos{venue_time.value() +
+                               latency_.delay(++data_serial_, cost::LatencyHop::Feed).value()});
+    }
     d.event = lookahead_event_;
-    detail::set_ts_init(d.event, d.key.ts);
+    if (!config_.live_feed) {
+      detail::set_ts_init(d.event, d.key.ts);
+    }
     if (auto* deltas = std::get_if<model::OrderBookDeltas>(&d.event)) {
       const std::size_t n = deltas->deltas.size();
       s = pool_.alloc(n, d.offset);
@@ -401,7 +415,9 @@ private:
       const std::span<model::OrderBookDelta> copy = pool_.at(d.offset, n);
       for (std::size_t i = 0; i < n; ++i) {
         copy[i] = deltas->deltas[i];
-        copy[i].ts_init = d.key.ts;
+        if (!config_.live_feed) {
+          copy[i].ts_init = d.key.ts;
+        }
       }
       deltas->deltas = copy;
       d.deltas = n;

@@ -130,5 +130,5 @@ if(TARGET jarvis_adapter)
 endif()
 
 if(TARGET jarvis_live)
-  jarvis_add_layer_test(live SOURCES cpp/test_live.cpp SUITES unit LIBS jarvis::live)
+  jarvis_add_layer_test(live SOURCES cpp/test_live.cpp cpp/test_rings.cpp SUITES unit LIBS jarvis::live)
 endif()

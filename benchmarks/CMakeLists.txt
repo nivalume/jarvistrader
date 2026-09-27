@@ -21,3 +21,8 @@ jarvis_add_bench_group(
 if(TARGET jarvis_adapter)
   jarvis_add_bench_group(codec SOURCES hot/bench_codec.cpp LIBS jarvis::adapter)
 endif()
+
+# The live rings: header-only, but they belong to the live shell and cross threads.
+if(TARGET jarvis_live)
+  jarvis_add_bench_group(live SOURCES hot/bench_ring.cpp LIBS jarvis::live)
+endif()

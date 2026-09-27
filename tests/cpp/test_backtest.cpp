@@ -438,3 +438,91 @@ TEST_SUITE("zero-alloc") {
     CHECK(summary.batches == 1'001);
   }
 }
+
+namespace {
+
+class LivePushSource {
+public:
+  void push(EventKey key, const md::Event& event) { items_.push_back(Keyed{key, event}); }
+  Status next(EventKey& key, md::Event& event) {
+    if (index_ >= items_.size()) {
+      return Status::WouldBlock;
+    }
+    key = items_[index_].key;
+    event = items_[index_].event;
+    ++index_;
+    return Status::Ok;
+  }
+
+private:
+  std::vector<Keyed> items_;
+  std::size_t index_ = 0;
+};
+
+// A virtual clock stepping by 250 ns when idle, jumping to arrivals.
+class StepPump {
+public:
+  StepPump(std::vector<Keyed> arrivals, LivePushSource& source, std::uint64_t start,
+           std::uint64_t stop)
+      : arrivals_{std::move(arrivals)}, source_{&source}, now_{start}, stop_{stop} {}
+  [[nodiscard]] UnixNanos now() const { return UnixNanos{now_}; }
+  Status pump(UnixNanos now) {
+    while (next_ < arrivals_.size() && !(now < arrivals_[next_].key.ts)) {
+      Keyed k = arrivals_[next_++];
+      k.key.ts = now;
+      source_->push(k.key, k.event);
+    }
+    return Status::Ok;
+  }
+  Status idle(UnixNanos /*now*/) {
+    std::uint64_t next = now_ + 250;
+    if (next_ < arrivals_.size() && arrivals_[next_].key.ts.value() < next) {
+      next = arrivals_[next_].key.ts.value();
+    }
+    now_ = next;
+    return Status::Ok;
+  }
+  [[nodiscard]] bool stop_requested() const { return now_ >= stop_; }
+
+private:
+  std::vector<Keyed> arrivals_;
+  LivePushSource* source_;
+  std::uint64_t now_;
+  std::uint64_t stop_;
+  std::size_t next_ = 0;
+};
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("in real time, timers fire once the clock reaches them, between arrivals") {
+    const std::vector<Keyed> data = {{key(1000, 1, 1), trade(1000, 1000)},
+                                     {key(2000, 1, 2), trade(2000, 1001)},
+                                     {key(5000, 1, 3), trade(5000, 1002)}};
+    Echo echo;
+    echo.timer_at = 1500;
+    echo.period = 1000;
+    std::vector<std::string> live_calls;
+    echo.log = &live_calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    LivePushSource source;
+    MemoryRecorder recorder;
+    bt::Driver driver{engine, source, recorder};
+    StepPump pump{data, source, 1000, 5600};
+    bt::RunSummary summary;
+    REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+
+    bt::DriverOptions options;
+    options.end = UnixNanos{5600};
+    const Run back = run_echo(data, echo, options);
+    // The same calls in the same order; only the stop comes at a different time.
+    REQUIRE(live_calls.size() == back.calls.size());
+    for (std::size_t i = 0; i + 1 < live_calls.size(); ++i) {
+      CHECK(live_calls[i] == back.calls[i]);
+    }
+    CHECK(summary.timers == 5); // 1500, 2500, 3500, 4500, 5500
+    CHECK(summary.data_events == 3);
+    CHECK(summary.state == md::NodeState::Stopped);
+  }
+}

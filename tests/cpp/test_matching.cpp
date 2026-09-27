@@ -638,3 +638,164 @@ TEST_SUITE("property") {
     });
   }
 }
+
+namespace {
+
+// A live source: the pump pushes what arrived; nothing yet is WouldBlock, not the end.
+class PushSource {
+public:
+  void push(EventKey key, const m::Event& event) { items_.push_back(Keyed{key, event}); }
+  Status next(EventKey& key, m::Event& event) {
+    if (index_ >= items_.size()) {
+      return Status::WouldBlock;
+    }
+    key = items_[index_].key;
+    event = items_[index_].event;
+    ++index_;
+    return Status::Ok;
+  }
+
+private:
+  std::vector<Keyed> items_;
+  std::size_t index_ = 0;
+};
+
+// A virtual clock that jumps to the next arrival (or by `step` when idle) and delivers each
+// arrival stamped with the clock, as the live pump does with what the IO threads hand over.
+class FakePump {
+public:
+  FakePump(std::vector<Keyed> arrivals, PushSource& source, std::uint64_t start, std::uint64_t stop)
+      : arrivals_{std::move(arrivals)}, source_{&source}, now_{start}, stop_{stop} {}
+  [[nodiscard]] UnixNanos now() const { return UnixNanos{now_}; }
+  Status pump(UnixNanos now) {
+    while (next_ < arrivals_.size() && !(now < arrivals_[next_].key.ts)) {
+      Keyed k = arrivals_[next_++];
+      k.key.ts = now;
+      source_->push(k.key, k.event);
+    }
+    return Status::Ok;
+  }
+  Status idle(UnixNanos /*now*/) {
+    ++idles;
+    std::uint64_t next = now_ + 250;
+    if (next_ < arrivals_.size() && arrivals_[next_].key.ts.value() < next) {
+      next = arrivals_[next_].key.ts.value();
+    }
+    now_ = next;
+    return Status::Ok;
+  }
+  [[nodiscard]] bool stop_requested() const { return now_ >= stop_; }
+  std::uint64_t idles = 0;
+
+private:
+  std::vector<Keyed> arrivals_;
+  PushSource* source_;
+  std::uint64_t now_;
+  std::uint64_t stop_;
+  std::size_t next_ = 0;
+};
+
+VenueRun run_realtime_venue(std::uint64_t seed, std::uint64_t jitter, std::uint64_t& idles) {
+  VenueRun out;
+  PushSource source;
+  bt::VenueLoopConfig vc;
+  vc.sim = Venue::config(bt::FillModel::TopOfBook, bt::StpMode::None);
+  vc.out_ns = 1000;
+  vc.in_ns = 500;
+  vc.jitter_ns = jitter;
+  vc.seed = seed;
+  vc.pending = 64;
+  vc.commands = 64;
+  vc.delta_pool = 256;
+  vc.live_feed = true;
+  bt::VenueLoop<PushSource> loop{vc, source};
+  REQUIRE(loop.exchange().on_data(m::Event{perpetual()}, UnixNanos{0}) == Status::Ok);
+  st::KernelConfig kc;
+  kc.instruments = 4;
+  kc.strategies = 2;
+  kc.trading.risk.orders_per_10s = 0;
+  kc.trading.risk.orders_per_minute = 0;
+  st::StaticStrategySet<Buyer> set{Buyer{&out.log}};
+  jarvis::engine::Engine engine{kc, set};
+  const std::array<m::Event, 1> preamble = {m::Event{perpetual()}};
+  bt::DriverOptions options;
+  options.preamble = preamble;
+  bt::Driver driver{engine, loop, out.recorder, options};
+  FakePump pump{market(), source, 1000, 8000};
+  REQUIRE(driver.run_realtime(pump, out.summary) == Status::Ok);
+  idles = pump.idles;
+  return out;
+}
+
+VenueRun run_backtest_live_feed(std::uint64_t seed, std::uint64_t jitter) {
+  VenueRun out;
+  VectorSource source{market()};
+  bt::VenueLoopConfig vc;
+  vc.sim = Venue::config(bt::FillModel::TopOfBook, bt::StpMode::None);
+  vc.out_ns = 1000;
+  vc.in_ns = 500;
+  vc.jitter_ns = jitter;
+  vc.seed = seed;
+  vc.pending = 64;
+  vc.commands = 64;
+  vc.delta_pool = 256;
+  vc.live_feed = true;
+  bt::VenueLoop<VectorSource> loop{vc, source};
+  REQUIRE(loop.exchange().on_data(m::Event{perpetual()}, UnixNanos{0}) == Status::Ok);
+  st::KernelConfig kc;
+  kc.instruments = 4;
+  kc.strategies = 2;
+  kc.trading.risk.orders_per_10s = 0;
+  kc.trading.risk.orders_per_minute = 0;
+  st::StaticStrategySet<Buyer> set{Buyer{&out.log}};
+  jarvis::engine::Engine engine{kc, set};
+  const std::array<m::Event, 1> preamble = {m::Event{perpetual()}};
+  bt::DriverOptions options;
+  options.preamble = preamble;
+  bt::Driver driver{engine, loop, out.recorder, options};
+  REQUIRE(driver.run(out.summary) == Status::Ok);
+  return out;
+}
+
+std::vector<std::byte> encoded(const Keyed& k) {
+  std::vector<std::byte> buffer(m::wire::kRecordHeaderSize + m::wire::kMaxPayload + 4);
+  std::size_t written = 0;
+  REQUIRE(m::wire::encode_record(k.key, k.event, buffer, written) == Status::Ok);
+  buffer.resize(written);
+  return buffer;
+}
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("a real-time run records what a backtest of the same arrivals records") {
+    for (const std::uint64_t jitter : {std::uint64_t{0}, std::uint64_t{700}}) {
+      std::uint64_t idles = 0;
+      const VenueRun live = run_realtime_venue(3, jitter, idles);
+      const VenueRun back = run_backtest_live_feed(3, jitter);
+      CHECK(idles > 0);
+      CHECK(live.log == back.log);
+      // Everything up to the end of the data matches record for record. The endings differ:
+      // the backtest closes the last batch with EndOfData and Drained inside it; the real-time
+      // run closed it when it went idle, and later stops (ShutdownRequested, Drained, BatchEnd).
+      REQUIRE(live.recorder.inputs.size() >= 4);
+      REQUIRE(back.recorder.inputs.size() >= 3);
+      std::vector<Keyed> a{live.recorder.inputs.begin(), live.recorder.inputs.end() - 4};
+      std::vector<Keyed> b{back.recorder.inputs.begin(), back.recorder.inputs.end() - 3};
+      REQUIRE(a.size() == b.size());
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        INFO("input " << i << " " << describe({a[i]})[0] << " vs " << describe({b[i]})[0]);
+        CHECK(encoded(a[i]) == encoded(b[i]));
+      }
+      CHECK(live.recorder.outputs.size() == back.recorder.outputs.size());
+      CHECK(live.summary.venue_answers == back.summary.venue_answers);
+      CHECK(live.summary.venue_answers >= 2); // accepted and filled
+      const auto& inputs = live.recorder.inputs;
+      CHECK(std::get<m::NodeLifecycle>(inputs[inputs.size() - 3].event).reason ==
+            m::LifecycleReason::ShutdownRequested);
+      CHECK(std::get<m::NodeLifecycle>(inputs[inputs.size() - 2].event).reason ==
+            m::LifecycleReason::Drained);
+      CHECK(std::holds_alternative<m::BatchEnd>(inputs.back().event));
+    }
+  }
+}
