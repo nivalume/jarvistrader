@@ -68,6 +68,9 @@ private:
 // Kernel capacities and the strategy error policy from [node] and [risk].
 [[nodiscard]] strategy::KernelConfig kernel_config(const NodeConfig& config);
 [[nodiscard]] strategy::ErrorPolicy error_policy(const NodeConfig& config);
+// Strategy i issues orders under [[strategies]][i].id (a nautilus StrategyId, "<name>-<tag>");
+// the default "strategy-00<i+1>" stays for entries without a valid one.
+void name_strategies(const NodeConfig& config, strategy::KernelServices& kernel);
 
 // Opens one LogSource per catalog stream that [data] selects. The merge keeps pointers into
 // `sources`, so it must not be resized afterwards.
@@ -119,6 +122,7 @@ template <strategy::StrategySet SS, InputHook Hook>
     options.end = config.data.range->end;
   }
   engine::Engine<SS> engine{kernel_config(config), strategies, error_policy(config)};
+  name_strategies(config, engine.kernel());
   if (config.persistence.mode == PersistenceMode::None) {
     NullRecorder<Hook> recorder{hook};
     backtest::Driver driver{engine, merge, recorder, options};

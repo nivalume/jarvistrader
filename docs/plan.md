@@ -90,10 +90,12 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 
 - [x] task: specs — `OrderLifecycle.tla`（含 jarvis 新增的 `Submitted → Expired`）与 `specs/map/order_lifecycle_actions.hpp`（§8.1、§18）
 - [x] task: execution — `OrderCore` 与订单状态转移表，转移表由规约核对，含 `apply` 阶段的 `previous_status` 规则
-- [ ] task: execution — OMS：Netting、成交按 `(symbol, orderId, tradeId)` 去重、in-flight 集合、`open_exposure()`、按策略的归因账本
-- [ ] task: execution — `ExecutionEngine`：命令路由、事件推进状态机、`OrderDenied` 回送策略
+- [x] task: execution — OMS：按 `ClientOrderId` 开放寻址索引、成交按 trade id 去重、已关闭订单按关闭顺序淘汰、按 instrument 与策略统计未完成数量（Netting）
+- [ ] task: execution — `open_exposure()`（持仓 + 在途子单 + 父单剩余量）与按策略的归因账本，依赖 Portfolio
+- [x] task: execution — `ExecutionEngine`：命令作为输出、venue 事件推进状态机、`OrderDenied` 与内核产生的订单事件回送策略的 `on_order_event`
 - [ ] task: execution — `ExecAlgorithm` concept、`AlgoState` 竞技场、`AlgoContext`（子单经 Gate B、生成前查询令牌）与直通模式
-- [ ] task: strategy — `Context` 的下单与查询方法、订单意图工厂（§9.4）
+- [x] task: strategy — `Context` 的下单方法（`submit`、`modify`、`cancel`、`cancel_all`）、订单与 instrument 查询、意图工厂，C++ 与 Python 同名（§9.4）
+- [ ] task: strategy — `Context` 的 `position`、`account`、`exposure`、`trading_state` 查询，依赖 Portfolio 与风控
 - [ ] task: cost — `FeeModel`（档位、BNB 抵扣、资金费）、`SlippageModel`、`LatencyModel`（§11.1）
 - [ ] task: backtest — `SimulatedExchange`：实现 `VenueClient` concept、双时间线、延迟事件入队（§12.1、§12.2）
 - [ ] task: backtest — 成交模型 `TopOfBookCross` 与 `QueuePosition`（以 `TradeTick` 消耗前方排队量，§12.3）

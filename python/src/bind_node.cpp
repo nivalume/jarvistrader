@@ -15,6 +15,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -33,6 +34,8 @@
 #include "jarvis/data/book.hpp"
 #include "jarvis/data/features.hpp"
 #include "jarvis/data/subscription.hpp"
+#include "jarvis/model/instruments.hpp"
+#include "jarvis/model/order_events.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/build_info.hpp"
 #include "jarvis/node/config.hpp"
@@ -44,6 +47,7 @@
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/strategy/trading.hpp"
 
 namespace jarvis::py {
 
@@ -203,7 +207,8 @@ constexpr std::string_view kCallbackNames[] = { // NOLINT(cppcoreguidelines-avoi
     "on_trade_batch",
     "on_quote_batch",
     "on_timer",
-    "on_error"};
+    "on_error",
+    "on_order_event"};
 
 enum Callback : std::uint8_t {
   kOnStart,
@@ -224,6 +229,7 @@ enum Callback : std::uint8_t {
   kOnQuoteBatch,
   kOnTimer,
   kOnError,
+  kOnOrderEvent,
   kCallbackCount
 };
 
@@ -547,11 +553,22 @@ struct HostVTable {
       return h.call(ctx, kOnError, nb::cast(e, nb::rv_policy::copy));
     });
   }
+  static Status on_order_event(void* p, st::Context& ctx, const m::OrderEvent& e) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnOrderEvent)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnOrderEvent, [&] {
+      h.gil_->acquire();
+      nb::object event = std::visit([](const auto& x) { return event_to_py(m::Event{x}); }, e);
+      return h.call(ctx, kOnOrderEvent, event);
+    });
+  }
 };
 
-const st::StrategyVTable PyStrategyHost::kVTable{&HostVTable::on_start, &HostVTable::on_stop,
-                                                 &HostVTable::on_data,  &HostVTable::on_batch,
-                                                 &HostVTable::on_timer, &HostVTable::on_error};
+const st::StrategyVTable PyStrategyHost::kVTable{
+    &HostVTable::on_start, &HostVTable::on_stop,  &HostVTable::on_data,       &HostVTable::on_batch,
+    &HostVTable::on_timer, &HostVTable::on_error, &HostVTable::on_order_event};
 
 // ---- node setup -----------------------------------------------------------------------------
 
@@ -1015,13 +1032,188 @@ void bind_context(nb::module_& mod) {
             c.views->push_back(obj);
             return obj;
           },
-          nb::arg("instrument_id"), "The instrument's book, or None without a book subscription.");
+          nb::arg("instrument_id"), "The instrument's book, or None without a book subscription.")
+      .def(
+          "instrument",
+          [](const PyContext& c, nb::handle iid) -> nb::object {
+            m::Instrument def;
+            if (!c.get().instrument(instrument_of(iid), def)) {
+              return nb::none();
+            }
+            return std::visit([](const auto& i) { return event_to_py(m::Event{i}); }, def);
+          },
+          nb::arg("instrument_id"), "The instrument's definition, or None before one arrived.")
+      .def_static(
+          "limit",
+          [](nb::handle iid, m::OrderSide side, nb::handle qty, nb::handle price,
+             m::TimeInForce tif, bool post_only, bool reduce_only) {
+            m::Quantity q;
+            m::Price p;
+            from_py(qty, q, "quantity");
+            from_py(price, p, "price");
+            return st::OrderIntent::limit(instrument_of(iid), side, q, p, tif, post_only,
+                                          reduce_only);
+          },
+          nb::arg("instrument_id"), nb::arg("side"), nb::arg("quantity"), nb::arg("price"),
+          nb::arg("time_in_force") = m::TimeInForce::Gtc, nb::arg("post_only") = false,
+          nb::arg("reduce_only") = false, "A LIMIT order intent.")
+      .def_static(
+          "market",
+          [](nb::handle iid, m::OrderSide side, nb::handle qty, bool reduce_only) {
+            m::Quantity q;
+            from_py(qty, q, "quantity");
+            return st::OrderIntent::market(instrument_of(iid), side, q, reduce_only);
+          },
+          nb::arg("instrument_id"), nb::arg("side"), nb::arg("quantity"),
+          nb::arg("reduce_only") = false, "A MARKET order intent (IOC).")
+      .def(
+          "submit",
+          [](const PyContext& c, const st::OrderIntent& intent) {
+            m::ClientOrderId id;
+            check(c.get().submit(intent, id), "submit");
+            return id;
+          },
+          nb::arg("intent"),
+          "Submits an order and returns its ClientOrderId. A denied order is not an error: "
+          "OrderDenied arrives in on_order_event after this callback returns.")
+      .def(
+          "modify",
+          [](const PyContext& c, nb::handle cid, nb::handle qty, nb::handle price) {
+            m::ClientOrderId id;
+            std::optional<m::Quantity> q;
+            std::optional<m::Price> p;
+            from_py(cid, id, "client_order_id");
+            from_py(qty, q, "quantity");
+            from_py(price, p, "price");
+            const Status s = c.get().modify(id, q, p);
+            if (s == Status::InvalidState) {
+              return false;
+            }
+            check(s, "modify");
+            return true;
+          },
+          nb::arg("client_order_id"), nb::arg("quantity") = nb::none(),
+          nb::arg("price") = nb::none(),
+          "Requests a new quantity and/or price for a LIMIT order. False when the order cannot "
+          "be modified now (closed, or a cancel is pending).")
+      .def(
+          "cancel",
+          [](const PyContext& c, nb::handle cid) {
+            m::ClientOrderId id;
+            from_py(cid, id, "client_order_id");
+            const Status s = c.get().cancel(id);
+            if (s == Status::InvalidState) {
+              return false;
+            }
+            check(s, "cancel");
+            return true;
+          },
+          nb::arg("client_order_id"),
+          "Requests a cancel. False when the order is closed or a cancel is already pending.")
+      .def(
+          "cancel_all",
+          [](const PyContext& c, nb::handle iid) {
+            std::uint32_t n = 0;
+            if (iid.is_none()) {
+              check(c.get().cancel_all(n), "cancel_all");
+            } else {
+              check(c.get().cancel_all(instrument_of(iid), n), "cancel_all");
+            }
+            return n;
+          },
+          nb::arg("instrument_id") = nb::none(),
+          "Cancels every cancelable order of this strategy (of one instrument when given); "
+          "returns how many cancels were sent.")
+      .def(
+          "order",
+          [](const PyContext& c, nb::handle cid) -> nb::object {
+            m::ClientOrderId id;
+            from_py(cid, id, "client_order_id");
+            st::OrderView view;
+            if (!c.get().order(id, view)) {
+              return nb::none();
+            }
+            return nb::cast(view, nb::rv_policy::copy);
+          },
+          nb::arg("client_order_id"), "A copy of one of this strategy's orders, or None.")
+      .def(
+          "open_orders",
+          [](const PyContext& c, nb::handle iid) {
+            std::vector<st::OrderView> views(64);
+            const std::optional<m::InstrumentId> id =
+                iid.is_none() ? std::nullopt : std::optional{instrument_of(iid)};
+            for (;;) {
+              const std::size_t n = id ? c.get().open_orders(*id, views)
+                                       : c.get().open_orders(std::span<st::OrderView>{views});
+              if (n <= views.size()) {
+                views.resize(n);
+                break;
+              }
+              views.resize(n);
+            }
+            return views;
+          },
+          nb::arg("instrument_id") = nb::none(),
+          "Copies of this strategy's open orders (of one instrument when given).");
+}
+
+template <typename T, typename F> auto rw(F T::*member, const char* name) {
+  return std::pair{
+      [member](const T& self) { return to_py(self.*member); },
+      [member, name](T& self, nb::handle value) { from_py(value, self.*member, name); }};
+}
+
+void bind_orders(nb::module_& mod) {
+  nb::class_<st::OrderIntent> intent(
+      mod, "OrderIntent",
+      "What a strategy asks for; the kernel assigns the ClientOrderId and runs the risk checks. "
+      "Build one with Context.limit or Context.market and adjust its fields before submit.");
+  intent.def(nb::init<>());
+  const auto field = [&intent](auto member, const char* name) {
+    auto [get, set] = rw(member, name);
+    intent.def_prop_rw(name, get, set);
+  };
+  field(&st::OrderIntent::instrument_id, "instrument_id");
+  field(&st::OrderIntent::side, "side");
+  field(&st::OrderIntent::type, "order_type");
+  field(&st::OrderIntent::quantity, "quantity");
+  field(&st::OrderIntent::price, "price");
+  field(&st::OrderIntent::time_in_force, "time_in_force");
+  field(&st::OrderIntent::post_only, "post_only");
+  field(&st::OrderIntent::reduce_only, "reduce_only");
+  field(&st::OrderIntent::expire_time, "expire_time");
+
+  nb::class_<st::OrderView> view(mod, "OrderView",
+                                 "A copy of one order: identity, terms and current state.");
+  const auto ro = [&view](auto member, const char* name) {
+    view.def_prop_ro(name, [member](const st::OrderView& v) { return to_py(v.*member); });
+  };
+  ro(&st::OrderView::client_order_id, "client_order_id");
+  ro(&st::OrderView::venue_order_id, "venue_order_id");
+  ro(&st::OrderView::instrument_id, "instrument_id");
+  ro(&st::OrderView::side, "side");
+  ro(&st::OrderView::type, "order_type");
+  ro(&st::OrderView::time_in_force, "time_in_force");
+  ro(&st::OrderView::post_only, "post_only");
+  ro(&st::OrderView::reduce_only, "reduce_only");
+  ro(&st::OrderView::price, "price");
+  ro(&st::OrderView::status, "status");
+  ro(&st::OrderView::quantity, "quantity");
+  ro(&st::OrderView::filled, "filled_qty");
+  ro(&st::OrderView::leaves, "leaves_qty");
+  ro(&st::OrderView::avg_px, "avg_px");
+  ro(&st::OrderView::ts_init, "ts_init");
+  view.def("__repr__", [](const st::OrderView& v) {
+    return "OrderView(" + std::string{v.client_order_id.view()} + " " +
+           std::string{m::to_string(v.status)} + ")";
+  });
 }
 
 } // namespace
 
 void bind_node(nb::module_& mod) {
   bind_data_types(mod);
+  bind_orders(mod);
   bind_context(mod);
 
   nb::class_<NativeSpec>(mod, "NativeSpec", "A registered C++ strategy and its parameters.")

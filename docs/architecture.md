@@ -378,9 +378,10 @@ int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); } 
 | --- | --- | --- |
 | 行情 | `TradeTick`、`QuoteTick`、`OrderBookDeltas`、`Bar`、`MarkPriceUpdate`、`IndexPriceUpdate`、`FundingRateUpdate`、`InstrumentStatus`、`LiquidationOrder`（扩展类型） | md-io 线程或 `ReplaySource` |
 | venue | 订单事件（Accepted、Rejected、Canceled、Expired、Updated、Filled 等）、`AccountState`、`VenueSnapshot`、`RateLimitFeedback` | ud-io、order-sender 的回执、`SimulatedExchange` |
+| 参考数据 | instrument 定义（`CurrencyPair`、`CryptoPerpetual`、`CryptoFuture`） | exchangeInfo、目录中的 instrument 文件 |
 | 时间 | `TimerFired`、`BatchEnd` | timer 线程、core 线程 |
 | 控制 | `AdminCommand`、`Shutdown`、`ParamUpdate`、`TargetPosition`（控制面）、`Health*` | admin 线程、控制面通道 |
-| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志 |
+| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、venue 命令（`SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CancelAllOrders`）、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志 |
 
 ### 5.2 全序键
 
@@ -411,6 +412,7 @@ ADR 0001 原文的键是 `(ts, source_id, row)`，本文把 `row` 推广为 `seq
 - Node 生命周期转移、策略错误（包括 Python 回调超时）
 - admin 命令、控制面事件
 - 限速反馈（`X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*`）
+- instrument 定义：tick、步长、过滤器与保证金参数决定风控与撮合的结果，回放必须看到运行时的同一份定义，而不是回放时刻交易所的定义
 
 ### 5.5 排空优先级
 
@@ -805,6 +807,8 @@ C++ 的 `Strategy` concept 要求以下成员函数中的任意子集，未实�
 
 Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 
+订单事件的投递顺序：venue 事件先推进 OMS，被接受后立即投递给订单所属策略；OMS 拒绝的转移、重复成交和未知订单的事件只计数、不投递。内核为命令产生的事件（`OrderSubmitted`、`OrderDenied`、`OrderPendingUpdate`、`OrderPendingCancel`）在引起它的回调返回后、同一步内按命令发出的顺序投递，这些投递中再发出的命令也在同一步内处理，总数受 `order_events` 容量约束。被停用的策略不再收到任何事件，内核撤销它的全部未完成订单。
+
 `Context` 的主要方法：
 
 | 类别 | 方法 |
@@ -843,6 +847,8 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 | `GtdExpiryRule` | B | 时钟 | `GTD_ALREADY_EXPIRED` |
 
 撤单与查询不经过风控。
+
+规则目录之前先做结构检查（`jarvis/risk/order_checks.hpp`），确认意图对其 instrument 是一张合法的单。原因码：`INSTRUMENT_UNKNOWN`（还没有 instrument 定义）、`ORDER_TYPE_UNSUPPORTED`、`TIME_IN_FORCE_UNSUPPORTED`、`POST_ONLY_INVALID`、`QUANTITY_NOT_POSITIVE`、`QUANTITY_INVALID_PRECISION`、`PRICE_MISSING`、`PRICE_UNEXPECTED`、`PRICE_NOT_POSITIVE`、`PRICE_INVALID_PRECISION`、`GTD_EXPIRE_TIME_MISSING`、`GTD_ALREADY_EXPIRED`，以及 OMS 已满且没有可淘汰的已关闭订单时的 `OMS_CAPACITY_EXCEEDED`。
 
 ### 10.2 TradingState
 

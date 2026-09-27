@@ -85,13 +85,21 @@ enum class RecordKind : std::uint16_t {
   NodeLifecycle = 52,
   StrategyError = 53,
   Shutdown = 54,
+  CurrencyPair = 60,
+  CryptoPerpetual = 61,
+  CryptoFuture = 62,
   // Kernel outputs.
   FeatureUpdate = 0x8001,
   StrategyRecord = 0x8002,
+  SubmitOrder = 0x8003,
+  ModifyOrder = 0x8004,
+  CancelOrder = 0x8005,
+  CancelAllOrders = 0x8006,
+  OrderDeniedOutput = 0x8007, // a model::OrderDenied the risk gates produced
 };
 
 // Same order as the alternatives of model::Event.
-inline constexpr std::array<RecordKind, 33> kKindByAlternative = {
+inline constexpr std::array<RecordKind, 36> kKindByAlternative = {
     RecordKind::TradeTick,
     RecordKind::QuoteTick,
     RecordKind::OrderBookDeltas,
@@ -125,6 +133,9 @@ inline constexpr std::array<RecordKind, 33> kKindByAlternative = {
     RecordKind::NodeLifecycle,
     RecordKind::StrategyError,
     RecordKind::Shutdown,
+    RecordKind::CurrencyPair,
+    RecordKind::CryptoPerpetual,
+    RecordKind::CryptoFuture,
 };
 static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 
@@ -133,8 +144,10 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 }
 
 // Same order as the alternatives of model::Output.
-inline constexpr std::array<RecordKind, 2> kOutputKindByAlternative = {RecordKind::FeatureUpdate,
-                                                                       RecordKind::StrategyRecord};
+inline constexpr std::array<RecordKind, 7> kOutputKindByAlternative = {
+    RecordKind::FeatureUpdate,    RecordKind::StrategyRecord, RecordKind::SubmitOrder,
+    RecordKind::ModifyOrder,      RecordKind::CancelOrder,    RecordKind::CancelAllOrders,
+    RecordKind::OrderDeniedOutput};
 static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
 
 [[nodiscard]] constexpr RecordKind kind_of(const Output& output) noexcept {
@@ -209,10 +222,26 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "StrategyError";
   case RecordKind::Shutdown:
     return "Shutdown";
+  case RecordKind::CurrencyPair:
+    return "CurrencyPair";
+  case RecordKind::CryptoPerpetual:
+    return "CryptoPerpetual";
+  case RecordKind::CryptoFuture:
+    return "CryptoFuture";
   case RecordKind::FeatureUpdate:
     return "FeatureUpdate";
   case RecordKind::StrategyRecord:
     return "StrategyRecord";
+  case RecordKind::SubmitOrder:
+    return "SubmitOrder";
+  case RecordKind::ModifyOrder:
+    return "ModifyOrder";
+  case RecordKind::CancelOrder:
+    return "CancelOrder";
+  case RecordKind::CancelAllOrders:
+    return "CancelAllOrders";
+  case RecordKind::OrderDeniedOutput:
+    return "OrderDenied";
   }
   return "";
 }
@@ -817,8 +846,22 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::Shutdown:
     decode_as<Shutdown>(r, scratch, out);
     break;
+  case RecordKind::CurrencyPair:
+    decode_as<CurrencyPair>(r, scratch, out);
+    break;
+  case RecordKind::CryptoPerpetual:
+    decode_as<CryptoPerpetual>(r, scratch, out);
+    break;
+  case RecordKind::CryptoFuture:
+    decode_as<CryptoFuture>(r, scratch, out);
+    break;
   case RecordKind::FeatureUpdate:
   case RecordKind::StrategyRecord:
+  case RecordKind::SubmitOrder:
+  case RecordKind::ModifyOrder:
+  case RecordKind::CancelOrder:
+  case RecordKind::CancelAllOrders:
+  case RecordKind::OrderDeniedOutput:
     return core::Status::UnsupportedMessage; // outputs decode with decode_output
   }
   if (!r.ok()) {
@@ -937,21 +980,33 @@ struct RecordView {
   return core::Status::Ok;
 }
 
+namespace detail {
+template <std::size_t I = 0> bool decode_output_as(std::size_t index, Reader& r, Output& out) {
+  if constexpr (I == std::variant_size_v<Output>) {
+    return false;
+  } else {
+    if (index == I) {
+      std::variant_alternative_t<I, Output> o{};
+      get_fields(r, o);
+      out = o;
+      return true;
+    }
+    return decode_output_as<I + 1>(index, r, out);
+  }
+}
+} // namespace detail
+
 [[nodiscard]] inline core::Status decode_output(const RecordView& record, Output& out) {
   RecordKind kind{RecordKind::FeatureUpdate};
   if (!output_kind(record.header.kind, kind)) {
     return core::Status::UnsupportedMessage;
   }
-  Reader r{record.payload};
-  if (kind == RecordKind::FeatureUpdate) {
-    FeatureUpdate o{};
-    get_fields(r, o);
-    out = o;
-  } else {
-    StrategyRecord o{};
-    get_fields(r, o);
-    out = o;
+  std::size_t index = 0;
+  while (kOutputKindByAlternative[index] != kind) {
+    ++index;
   }
+  Reader r{record.payload};
+  detail::decode_output_as(index, r, out);
   if (!r.ok()) {
     return r.status();
   }

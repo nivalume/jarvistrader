@@ -4,6 +4,7 @@
 #include <deque>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -14,9 +15,14 @@
 #include <doctest/doctest.h>
 
 #include "jarvis/core/status.hpp"
+#include "jarvis/execution/execution_engine.hpp"
+#include "jarvis/execution/oms.hpp"
 #include "jarvis/execution/order.hpp"
 #include "jarvis/execution/order_fsm.hpp"
 #include "jarvis/model/generated/enums.hpp"
+#include "jarvis/model/identifiers.hpp"
+#include "jarvis/model/order_events.hpp"
+#include "jarvis/testkit/property.hpp"
 #include "specs/map/order_lifecycle_actions.hpp"
 
 namespace {
@@ -34,6 +40,42 @@ m::Quantity q(std::uint64_t units) {
 }
 
 std::uint64_t units(m::Quantity v) { return v.raw() / 1'000'000'000ULL; }
+
+m::Price px(std::string_view text) {
+  m::Price out;
+  REQUIRE(m::Price::parse(text, out) == Status::Ok);
+  return out;
+}
+
+template <typename Id> Id make_id(const std::string& text) {
+  Id out;
+  REQUIRE(Id::from(text, out) == Status::Ok);
+  return out;
+}
+
+m::ClientOrderId cid(int n) { return make_id<m::ClientOrderId>("C-" + std::to_string(n)); }
+m::TradeId tid(std::string_view text) { return make_id<m::TradeId>(std::string{text}); }
+
+ex::OrderRecord order_record(int n, m::OrderSide side = m::OrderSide::Buy,
+                             std::uint64_t quantity = 2, std::uint32_t slot = 0) {
+  ex::OrderRecord r;
+  r.client_order_id = cid(n);
+  r.side = side;
+  r.slot = slot;
+  r.price = px("100.00");
+  r.state = ex::OrderState{q(quantity)};
+  return r;
+}
+
+// Creates order n and brings it to ACCEPTED.
+std::uint32_t working(ex::Oms& oms, int n, m::OrderSide side = m::OrderSide::Buy,
+                      std::uint64_t quantity = 2, std::uint32_t slot = 0) {
+  std::uint32_t index = ex::kNoIndex;
+  REQUIRE(oms.create(order_record(n, side, quantity, slot), index) == Status::Ok);
+  REQUIRE(oms.apply(index, K::Submitted) == Status::Ok);
+  REQUIRE(oms.apply(index, K::Accepted) == Status::Ok);
+  return index;
+}
 
 using Triple = std::tuple<std::string, std::string, std::string>;
 
@@ -260,5 +302,185 @@ TEST_SUITE("unit") {
     REQUIRE(ex::kind_of(m::OrderEvent{m::OrderCancelRejected{}}, k));
     CHECK(k == K::CancelRejected);
     CHECK(jarvis::specmap::order_lifecycle::kinds_match());
+  }
+}
+
+TEST_SUITE("unit") {
+  TEST_CASE("the OMS finds orders by ClientOrderId and refuses a second order with the same id") {
+    ex::Oms oms{8, 32};
+    std::uint32_t a = ex::kNoIndex;
+    std::uint32_t b = ex::kNoIndex;
+    REQUIRE(oms.create(order_record(1), a) == Status::Ok);
+    REQUIRE(oms.create(order_record(2), b) == Status::Ok);
+    CHECK(oms.find(cid(1)) == a);
+    CHECK(oms.find(cid(2)) == b);
+    CHECK(oms.find(cid(3)) == ex::kNoIndex);
+    std::uint32_t again = ex::kNoIndex;
+    CHECK(oms.create(order_record(1), again) == Status::AlreadyExists);
+    CHECK(oms.live() == 2);
+    CHECK(oms.at(a).state.status() == OrderStatus::Initialized);
+  }
+
+  TEST_CASE("a trade fills an order once and the average price is truncated") {
+    ex::Oms oms{8, 32};
+    const std::uint32_t i = working(oms, 1);
+    REQUIRE(oms.fill(i, tid("t1"), q(1), px("100.50")) == Status::Ok);
+    CHECK(oms.fill(i, tid("t1"), q(1), px("100.50")) == Status::DuplicateFill);
+    CHECK(oms.at(i).state.status() == OrderStatus::PartiallyFilled);
+    REQUIRE(oms.fill(i, tid("t2"), q(1), px("101.05")) == Status::Ok);
+    CHECK(oms.at(i).state.status() == OrderStatus::Filled);
+    m::Price avg;
+    REQUIRE(ex::Oms::average_price(oms.at(i), 3, avg));
+    CHECK(avg == px("100.775"));
+    REQUIRE(ex::Oms::average_price(oms.at(i), 2, avg));
+    CHECK(avg == px("100.77")); // truncated toward zero, never rounded up
+    CHECK(oms.fill(i, tid("t3"), q(1), px("100.00")) == Status::InvalidTransition);
+  }
+
+  TEST_CASE("voids name an earlier trade and never exceed it") {
+    ex::Oms oms{8, 32};
+    const std::uint32_t i = working(oms, 1, m::OrderSide::Sell, 3);
+    REQUIRE(oms.fill(i, tid("t1"), q(2), px("100.00")) == Status::Ok);
+    CHECK(oms.void_fill(i, tid("zz"), q(1), px("100.00")) == Status::InvalidArgument);
+    CHECK(oms.void_fill(i, tid("t1"), q(3), px("100.00")) == Status::InvalidArgument);
+    REQUIRE(oms.void_fill(i, tid("t1"), q(2), px("100.00")) == Status::Ok);
+    CHECK(oms.at(i).state.status() == OrderStatus::Accepted);
+    m::Price avg;
+    CHECK_FALSE(ex::Oms::average_price(oms.at(i), 2, avg));
+  }
+
+  TEST_CASE("a full OMS evicts its oldest closed order, never an open one") {
+    ex::Oms oms{2, 8};
+    std::uint32_t a = ex::kNoIndex;
+    std::uint32_t b = ex::kNoIndex;
+    std::uint32_t c = ex::kNoIndex;
+    REQUIRE(oms.create(order_record(1), a) == Status::Ok);
+    REQUIRE(oms.create(order_record(2), b) == Status::Ok);
+    CHECK(oms.create(order_record(3), c) == Status::CapacityExceeded);
+    REQUIRE(oms.apply(b, K::Denied) == Status::Ok);
+    REQUIRE(oms.apply(a, K::Denied) == Status::Ok);
+    REQUIRE(oms.create(order_record(3), c) == Status::Ok);
+    CHECK(c == b); // order 2 closed first, so it goes first
+    CHECK(oms.find(cid(2)) == ex::kNoIndex);
+    CHECK(oms.find(cid(1)) == a);
+    CHECK(oms.find(cid(3)) == c);
+    CHECK(oms.live() == 2);
+  }
+
+  TEST_CASE("evicted orders give their fill records back") {
+    ex::Oms oms{1, 2};
+    std::uint32_t i = working(oms, 1, m::OrderSide::Buy, 2);
+    REQUIRE(oms.fill(i, tid("t1"), q(1), px("100.00")) == Status::Ok);
+    REQUIRE(oms.fill(i, tid("t2"), q(1), px("100.00")) == Status::Ok);
+    i = working(oms, 2, m::OrderSide::Buy, 2); // evicts order 1 and frees both records
+    CHECK(oms.fill(i, tid("t1"), q(1), px("100.00")) == Status::Ok);
+    CHECK(oms.fill(i, tid("t2"), q(1), px("100.00")) == Status::Ok);
+  }
+
+  TEST_CASE("open quantity sums the leaves of open orders per side") {
+    ex::Oms oms{8, 32};
+    const std::uint32_t a = working(oms, 1, m::OrderSide::Buy, 3);
+    working(oms, 2, m::OrderSide::Sell, 2);
+    const std::uint32_t c = working(oms, 3, m::OrderSide::Sell, 5, 1);
+    REQUIRE(oms.fill(a, tid("t1"), q(1), px("100.00")) == Status::Ok);
+    REQUIRE(oms.apply(c, K::Canceled) == Status::Ok);
+    oms.at(a).strategy = 1;
+    const ex::OpenQuantity all = oms.open_quantity(0);
+    CHECK(all.buy_raw == q(2).raw());
+    CHECK(all.sell_raw == q(2).raw());
+    CHECK(all.orders == 2);
+    CHECK(oms.open_quantity(0, std::uint16_t{1}).orders == 1);
+    CHECK(oms.open_quantity(1).orders == 0);
+  }
+
+  TEST_CASE("venue events: acceptance records the venue id; the rest is told apart") {
+    ex::Oms oms{8, 32};
+    std::uint32_t i = ex::kNoIndex;
+    REQUIRE(oms.create(order_record(1), i) == Status::Ok);
+    REQUIRE(oms.apply(i, K::Submitted) == Status::Ok);
+
+    m::OrderAccepted accepted;
+    accepted.header.client_order_id = cid(1);
+    accepted.venue_order_id = make_id<m::VenueOrderId>("88");
+    std::uint32_t index = ex::kNoIndex;
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{accepted}, index) == ex::EventOutcome::Applied);
+    CHECK(index == i);
+    CHECK(oms.at(i).venue_order_id == make_id<m::VenueOrderId>("88"));
+
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{accepted}, index) ==
+          ex::EventOutcome::Refused); // ACCEPTED --ACCEPTED--> is not a transition
+
+    m::OrderFilled fill;
+    fill.header.client_order_id = cid(1);
+    fill.trade_id = tid("t1");
+    fill.last_qty = q(1);
+    fill.last_px = px("100.00");
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{fill}, index) == ex::EventOutcome::Applied);
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{fill}, index) ==
+          ex::EventOutcome::DuplicateFill);
+    fill.trade_id = tid("t2");
+    fill.last_qty = q(5);
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{fill}, index) ==
+          ex::EventOutcome::Refused); // an overfill
+
+    m::OrderCanceled unknown;
+    unknown.header.client_order_id = cid(9);
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{unknown}, index) ==
+          ex::EventOutcome::UnknownOrder);
+    m::OrderInitialized init;
+    init.header.client_order_id = cid(1);
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{init}, index) == ex::EventOutcome::Refused);
+
+    m::OrderUpdated updated;
+    updated.header.client_order_id = cid(1);
+    updated.quantity = q(4);
+    updated.price = px("99.50");
+    CHECK(ex::apply_order_event(oms, m::OrderEvent{updated}, index) == ex::EventOutcome::Applied);
+    CHECK(units(oms.at(i).state.quantity()) == 4);
+    CHECK(oms.at(i).price == px("99.50"));
+  }
+}
+
+TEST_SUITE("property") {
+  TEST_CASE("the OMS index agrees with a reference model through creates, closes and evictions") {
+    jarvis::testkit::for_all([](jarvis::testkit::Gen& gen) {
+      constexpr std::uint32_t kOrders = 16;
+      ex::Oms oms{kOrders, 64};
+      std::map<int, bool> present; // order -> closed?
+      std::deque<int> closed;      // closing order, oldest first
+      int next = 0;
+      for (int step = 0; step < 400; ++step) {
+        if (gen.chance(3, 5)) {
+          std::uint32_t index = ex::kNoIndex;
+          const Status s = oms.create(order_record(next), index);
+          if (present.size() == kOrders && closed.empty()) {
+            REQUIRE(s == Status::CapacityExceeded);
+            continue;
+          }
+          REQUIRE(s == Status::Ok);
+          if (present.size() == kOrders) {
+            present.erase(closed.front());
+            closed.pop_front();
+          }
+          present[next++] = false;
+        } else if (!present.empty()) {
+          auto it = present.begin();
+          std::advance(it, static_cast<long>(gen.below(present.size())));
+          if (!it->second) {
+            REQUIRE(oms.apply(oms.find(cid(it->first)), K::Denied) == Status::Ok);
+            it->second = true;
+            closed.push_back(it->first);
+          }
+        }
+        REQUIRE(oms.live() == present.size());
+      }
+      for (int n = 0; n < next; ++n) {
+        const std::uint32_t index = oms.find(cid(n));
+        CHECK((index != ex::kNoIndex) == present.contains(n));
+        if (index != ex::kNoIndex) {
+          CHECK(oms.at(index).client_order_id == cid(n));
+        }
+      }
+    });
   }
 }

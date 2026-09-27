@@ -15,6 +15,11 @@ Callbacks::
     on_liquidation(ctx, order)             on_feature(ctx, feature_id, value, ts)
     on_trade_batch(ctx, batch)             on_quote_batch(ctx, batch)
     on_timer(ctx, timer_id, deadline)      on_error(ctx, error)
+    on_order_event(ctx, event)             every event of this strategy's orders
+
+Orders: ``ctx.submit(ctx.limit(iid, side, qty, price))`` returns the ClientOrderId; the outcome
+(submitted or denied, then the venue's answers) arrives in ``on_order_event``. ``ctx.modify``,
+``ctx.cancel``, ``ctx.cancel_all``, ``ctx.order`` and ``ctx.open_orders`` complete the set.
 
 An exception in a callback becomes a recorded StrategyError; ``risk.on_strategy_error`` decides
 what happens next (by default the strategy stops). Inside callbacks the wall clock and
@@ -32,6 +37,8 @@ BookView = _native.BookView
 Cadence = _native.Cadence
 Context = _native.Context
 DataKind = _native.DataKind
+OrderIntent = _native.OrderIntent
+OrderView = _native.OrderView
 QuoteBatch = _native.QuoteBatch
 TradeBatch = _native.TradeBatch
 
@@ -54,6 +61,7 @@ CALLBACKS = (
     "on_quote_batch",
     "on_timer",
     "on_error",
+    "on_order_event",
 )
 
 
@@ -90,6 +98,8 @@ __all__ = [
     "Cadence",
     "Context",
     "DataKind",
+    "OrderIntent",
+    "OrderView",
     "QuoteBatch",
     "Strategy",
     "TradeBatch",

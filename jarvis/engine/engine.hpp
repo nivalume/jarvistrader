@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 #include "jarvis/core/clock.hpp"
@@ -17,6 +18,8 @@
 #include "jarvis/data/features.hpp"
 #include "jarvis/data/subscription.hpp"
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/instruments.hpp"
+#include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
@@ -30,6 +33,11 @@
 // features it updates, then the bars it completes; within one (row, kind) subscribers are served
 // in subscription order. Subscribers are collected before any callback runs, so a callback that
 // subscribes or unsubscribes changes the next delivery, not the current one.
+//
+// Order events: a venue event is applied to the OMS and delivered to the order's strategy at
+// once; the events the kernel produces for commands (OrderSubmitted, OrderDenied, pending
+// update and cancel) are delivered after the input's other callbacks, in the order the commands
+// were issued, including commands issued by those deliveries.
 
 namespace jarvis::engine {
 
@@ -44,6 +52,14 @@ concept EventSource = requires(S& source, core::EventKey& key, model::Event& eve
 };
 
 // Where outputs go (the event log, the order sender from M3).
+namespace detail {
+template <typename T, typename V> struct is_alternative : std::false_type {};
+template <typename T, typename... A>
+struct is_alternative<T, std::variant<A...>> : std::bool_constant<(std::is_same_v<T, A> || ...)> {};
+template <typename T, typename V>
+inline constexpr bool is_alternative_v = is_alternative<T, V>::value;
+} // namespace detail
+
 template <typename S>
 concept CommandSink = requires(S& sink, const core::EventKey& key, const model::Output& output) {
   { sink.emit(key, output) } -> std::same_as<core::Status>;
@@ -68,7 +84,10 @@ public:
   // Processes one input event.
   [[nodiscard]] core::Status step(const core::EventKey& key, const model::Event& event) {
     k_.current = key;
-    return std::visit([this](const auto& e) { return this->dispatch(e); }, event);
+    k_.trading.begin_step();
+    const core::Status s = std::visit([this](const auto& e) { return this->dispatch(e); }, event);
+    deliver_order_events();
+    return s;
   }
 
   [[nodiscard]] std::span<const model::Output> outputs() const noexcept {
@@ -134,8 +153,12 @@ private:
       return core::Status::Ok;
     } else if constexpr (std::is_same_v<T, model::StrategyError>) {
       return on_strategy_error(e);
+    } else if constexpr (detail::is_alternative_v<T, model::Instrument>) {
+      return k_.define_instrument(model::Instrument{e});
+    } else if constexpr (detail::is_alternative_v<T, model::OrderEvent>) {
+      return on_venue_order_event(model::OrderEvent{e});
     } else {
-      return core::Status::Ok; // order and account events arrive with M3; Shutdown is the node's
+      return core::Status::Ok; // AccountState arrives with the portfolio; Shutdown is the node's
     }
   }
 
@@ -354,7 +377,7 @@ private:
     }
     if constexpr (std::is_same_v<T, model::FeatureUpdate>) {
       if (!calls_.empty()) {
-        static_cast<void>(k_.outputs.push_back(model::Output{value}));
+        static_cast<void>(k_.outputs.emplace_back(std::in_place_type<model::FeatureUpdate>, value));
       }
     }
     const strategy::DataView view{&value};
@@ -442,7 +465,8 @@ private:
               }
             } else if constexpr (!std::is_same_v<V, std::monostate>) {
               if constexpr (std::is_same_v<V, model::FeatureUpdate>) {
-                static_cast<void>(k_.outputs.push_back(model::Output{v}));
+                static_cast<void>(
+                    k_.outputs.emplace_back(std::in_place_type<model::FeatureUpdate>, v));
               }
               call_data(p.strategy, strategy::DataView{&v});
             }
@@ -464,6 +488,37 @@ private:
     if (!core::ok(status)) {
       k_.fail(s, status);
     }
+  }
+
+  // ---- orders -------------------------------------------------------------------------------
+
+  core::Status on_venue_order_event(const model::OrderEvent& e) {
+    StrategyIndex owner = 0;
+    if (k_.trading.on_venue_event(e, owner)) {
+      deliver_order_event(owner, e);
+    }
+    return core::Status::Ok; // refused and unknown events are counted, not fatal
+  }
+
+  void deliver_order_event(StrategyIndex s, const model::OrderEvent& e) {
+    if (s >= ss_->size() || k_.is_disabled(s)) {
+      return;
+    }
+    strategy::Context ctx{k_, s};
+    const core::Status status = ss_->on_order_event(s, ctx, e);
+    if (!core::ok(status)) {
+      k_.fail(s, status);
+    }
+  }
+
+  // The queue has fixed capacity and never reallocates, so entries stay put while callbacks
+  // append to it.
+  void deliver_order_events() {
+    core::FixedVector<strategy::PendingOrderEvent>& events = k_.trading.events;
+    for (std::size_t i = 0; i < events.size(); ++i) {
+      deliver_order_event(events[i].strategy, events[i].event);
+    }
+    events.clear();
   }
 
   // ---- lifecycle, timers, errors ------------------------------------------------------------
@@ -549,16 +604,23 @@ private:
     static_cast<void>(ss_->on_error(s, ctx, e));
     switch (policy_) {
     case strategy::ErrorPolicy::HaltStrategy:
-      k_.disabled[s] = 1;
+      halt_strategy(s);
       break;
     case strategy::ErrorPolicy::HaltNode:
-      k_.disabled[s] = 1;
+      halt_strategy(s);
       k_.halt_requested = true;
       break;
     case strategy::ErrorPolicy::Ignore:
       break;
     }
     return core::Status::Ok;
+  }
+
+  // A halted strategy receives nothing more; its open orders are canceled (section 7.6).
+  void halt_strategy(StrategyIndex s) {
+    k_.disabled[s] = 1;
+    std::uint32_t canceled = 0;
+    static_cast<void>(k_.cancel_all(s, nullptr, canceled));
   }
 
   KernelServices k_;

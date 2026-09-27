@@ -52,6 +52,10 @@ m::Quantity qty(std::string_view text) {
   m::Quantity q;
   return must(m::Quantity::parse(text, q), q);
 }
+m::Money money(std::string_view text) {
+  m::Money v;
+  return must(m::Money::parse(text, v), v);
+}
 m::Decimal dec(std::string_view text) {
   m::Decimal d;
   return must(m::Decimal::parse(text, d), d);
@@ -544,6 +548,42 @@ struct CorpusMakers {
     return Status::Ok;
   }
 
+  // Instrument definitions: the drawn perpetual re-stamped, a spot pair and a dated future.
+  static Status perpetual_def(CorpusGenerator& g, const Perp& inst, m::Event& event) {
+    m::CryptoPerpetual p = inst;
+    p.common.ts_event = g.ts_;
+    p.common.ts_init = g.ts_;
+    if (g.draw(75) % 2 == 0) {
+      p.common.min_notional = money("5 USDT");
+    }
+    event = p;
+    return Status::Ok;
+  }
+
+  static Status pair_def(CorpusGenerator& g, const Perp& inst, m::Event& event) {
+    m::CurrencyPair pair;
+    pair.common = inst.common;
+    const std::string_view spot = inst.common.raw_symbol.view();
+    pair.common.id = iid(std::string{spot} + ".BINANCE");
+    pair.common.ts_event = g.ts_;
+    pair.common.ts_init = g.ts_;
+    event = pair;
+    return Status::Ok;
+  }
+
+  static Status future_def(CorpusGenerator& g, const Perp& inst, m::Event& event) {
+    m::CryptoFuture f;
+    f.common = inst.common;
+    f.common.id = iid(std::string{inst.common.raw_symbol.view()} + "_261225.BINANCE");
+    f.underlying = inst.common.base_currency.value_or(ccy("BTC"));
+    f.activation_ns = core::UnixNanos{kStartNs};
+    f.expiration_ns = core::UnixNanos{1'798'156'800'000'000'000ULL}; // 2026-12-25T00:00:00Z
+    f.common.ts_event = g.ts_;
+    f.common.ts_init = g.ts_;
+    event = f;
+    return Status::Ok;
+  }
+
   using Maker = Status (*)(CorpusGenerator&, const Perp&, m::Event&);
   struct Weighted {
     std::uint32_t weight; // per mille
@@ -552,8 +592,8 @@ struct CorpusMakers {
 
   // A market-data-heavy mix in which every kind has at least 0.9%, so a few hundred events cover
   // all of them. Same order as model::Event.
-  static constexpr std::array<Weighted, 33> kMix = {{
-      {212, &trade},         {215, &quote},         {70, &deltas},          {35, &bar},
+  static constexpr std::array<Weighted, 36> kMix = {{
+      {198, &trade},         {202, &quote},         {70, &deltas},          {35, &bar},
       {43, &mark},           {26, &index},          {17, &funding},         {9, &status},
       {10, &close},          {9, &liquidation},     {34, &initialized},     {10, &denied},
       {10, &emulated},       {10, &released},       {10, &submitted},       {17, &accepted},
@@ -561,7 +601,7 @@ struct CorpusMakers {
       {10, &pending_update}, {10, &pending_cancel}, {10, &modify_rejected}, {10, &cancel_rejected},
       {10, &updated},        {52, &filled},         {10, &fill_voided},     {26, &account_state},
       {26, &timer},          {17, &batch_end},      {9, &lifecycle},        {9, &strategy_error},
-      {10, &shutdown},
+      {10, &shutdown},       {9, &pair_def},        {9, &perpetual_def},    {9, &future_def},
   }};
 };
 

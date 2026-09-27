@@ -10,6 +10,7 @@
 #include "jarvis/model/account.hpp"
 #include "jarvis/model/bar.hpp"
 #include "jarvis/model/data.hpp"
+#include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
 
 namespace jarvis::model {
@@ -183,7 +184,8 @@ struct Shutdown {
 };
 
 // The closed set of kernel input events. Adding an alternative forces every visitor to handle
-// it at compile time.
+// it at compile time. Instrument definitions (exchangeInfo, catalog files) are inputs too, so a
+// replay sees the same tick sizes, filters and margins the run saw.
 using Event =
     std::variant<TradeTick, QuoteTick, OrderBookDeltas, Bar, MarkPriceUpdate, IndexPriceUpdate,
                  FundingRateUpdate, InstrumentStatus, InstrumentClose, LiquidationOrder,
@@ -191,7 +193,8 @@ using Event =
                  OrderAccepted, OrderRejected, OrderCanceled, OrderExpired, OrderTriggered,
                  OrderPendingUpdate, OrderPendingCancel, OrderModifyRejected, OrderCancelRejected,
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
-                 NodeLifecycle, StrategyError, Shutdown>;
+                 NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
+                 CryptoFuture>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.
@@ -200,6 +203,8 @@ using Event =
       [](const auto& e) -> core::UnixNanos {
         if constexpr (requires { e.ts_init; }) {
           return e.ts_init;
+        } else if constexpr (requires { e.common.ts_init; }) {
+          return e.common.ts_init; // instrument definitions
         } else {
           return e.header.ts_init;
         }

@@ -1,6 +1,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -14,7 +16,10 @@
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/execution/order_fsm.hpp"
 #include "jarvis/model/event.hpp"
+#include "jarvis/model/instruments.hpp"
+#include "jarvis/model/order_events.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 #include "jarvis/testkit/alloc.hpp"
@@ -214,6 +219,8 @@ st::KernelConfig small_config() {
   c.buffers = 16;
   c.book_window_levels = 256;
   c.book_overflow_levels = 64;
+  c.trading.orders = 256;
+  c.trading.trades = 1024;
   return c;
 }
 
@@ -724,3 +731,407 @@ TEST_SUITE("zero-alloc") {
     CHECK(trades > 600);
   }
 }
+
+// ---- orders -----------------------------------------------------------------------------------
+// Test strategies write through pointers to state owned by the test (see Recorder above).
+// NOLINTBEGIN(readability-make-member-function-const,readability-convert-member-functions-to-static)
+
+namespace {
+
+namespace ex = jarvis::execution;
+
+template <typename Id> Id make_id(const std::string& text) {
+  Id out;
+  REQUIRE(Id::from(text, out) == Status::Ok);
+  return out;
+}
+
+md::Event perpetual_definition(std::uint64_t ts) {
+  md::CryptoPerpetual p;
+  md::InstrumentCommon& c = p.common;
+  c.id = iid("BTCUSDT-PERP.BINANCE");
+  c.raw_symbol = make_id<md::Symbol>("BTCUSDT");
+  md::Currency btc;
+  md::Currency usdt;
+  REQUIRE(md::Currency::builtin("BTC", btc) == Status::Ok);
+  REQUIRE(md::Currency::builtin("USDT", usdt) == Status::Ok);
+  c.base_currency = btc;
+  c.quote_currency = usdt;
+  c.settlement_currency = usdt;
+  c.price_increment = price("0.1");
+  c.price_precision = 1;
+  c.size_increment = quantity("0.001");
+  c.size_precision = 3;
+  c.multiplier = quantity("1");
+  REQUIRE(md::Decimal::parse("0.05", c.margin_init) == Status::Ok);
+  REQUIRE(md::Decimal::parse("0.025", c.margin_maint) == Status::Ok);
+  c.ts_event = UnixNanos{ts};
+  c.ts_init = UnixNanos{ts};
+  return md::Event{p};
+}
+
+template <typename E> E venue_event(std::uint64_t ts, const md::ClientOrderId& id) {
+  E e;
+  e.header.instrument_id = iid("BTCUSDT-PERP.BINANCE");
+  e.header.client_order_id = id;
+  e.header.ts_event = UnixNanos{ts};
+  e.header.ts_init = UnixNanos{ts};
+  return e;
+}
+md::Event accepted(std::uint64_t ts, const md::ClientOrderId& id, const std::string& venue_id) {
+  auto e = venue_event<md::OrderAccepted>(ts, id);
+  e.venue_order_id = make_id<md::VenueOrderId>(venue_id);
+  return md::Event{e};
+}
+md::Event filled(std::uint64_t ts, const md::ClientOrderId& id, const std::string& trade,
+                 std::string_view qty, std::string_view px) {
+  auto e = venue_event<md::OrderFilled>(ts, id);
+  e.trade_id = make_id<md::TradeId>(trade);
+  e.last_qty = quantity(qty);
+  e.last_px = price(px);
+  return md::Event{e};
+}
+md::Event updated(std::uint64_t ts, const md::ClientOrderId& id, std::string_view qty,
+                  std::string_view px) {
+  auto e = venue_event<md::OrderUpdated>(ts, id);
+  e.quantity = quantity(qty);
+  e.price = price(px);
+  return md::Event{e};
+}
+md::Event canceled(std::uint64_t ts, const md::ClientOrderId& id) {
+  return md::Event{venue_event<md::OrderCanceled>(ts, id)};
+}
+
+std::string order_line(const md::OrderEvent& e) {
+  ex::OrderEventKind kind{};
+  REQUIRE(ex::kind_of(e, kind));
+  std::string line{ex::to_string(kind)};
+  if (const auto* d = std::get_if<md::OrderDenied>(&e)) {
+    line += " ";
+    line += d->reason.view();
+  }
+  return line;
+}
+
+using Script = std::function<Status(st::Context&, int)>;
+
+// Runs `script` in on_start (step 0) and on every trade (steps 1, 2, ...); logs order events.
+struct Trader {
+  Script* script = nullptr;
+  std::vector<std::string>* log = nullptr;
+  int trades = 0;
+
+  Status on_start(st::Context& ctx) {
+    REQUIRE(ctx.subscribe_trades(iid("BTCUSDT-PERP.BINANCE")) == Status::Ok);
+    return (*script)(ctx, 0);
+  }
+  Status on_trade(st::Context& ctx, const md::TradeTick& /*t*/) { return (*script)(ctx, ++trades); }
+  Status on_order_event(st::Context& /*ctx*/, const md::OrderEvent& e) {
+    log->push_back(order_line(e));
+    return Status::Ok;
+  }
+};
+
+template <typename T> std::size_t count_outputs(std::span<const md::Output> outputs) {
+  std::size_t n = 0;
+  for (const md::Output& o : outputs) {
+    n += std::holds_alternative<T>(o) ? 1U : 0U;
+  }
+  return n;
+}
+
+} // namespace
+
+TEST_SUITE("unit") {
+  TEST_CASE("orders go through submit, venue answers, modify and cancel") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids(3);
+    st::OrderView view;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      switch (step) {
+      case 0:
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.0")),
+                           ids[0]) == Status::Ok);
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.05")),
+                           ids[1]) == Status::Ok);
+        {
+          st::OrderIntent market = ctx.market(btc, md::OrderSide::Sell, quantity("0.500"));
+          market.price = price("99.0");
+          REQUIRE(ctx.submit(market, ids[2]) == Status::Ok);
+        }
+        break;
+      case 1:
+        CHECK(ctx.modify(ids[0], std::nullopt, price("99.9")) == Status::Ok);
+        CHECK(ctx.modify(ids[1], std::nullopt, price("99.9")) == Status::InvalidState); // denied
+        break;
+      case 2:
+        CHECK(ctx.cancel(ids[0]) == Status::Ok);
+        CHECK(ctx.cancel(ids[0]) == Status::InvalidState); // one cancel in flight is enough
+        CHECK(ctx.modify(ids[0], quantity("2.000"), std::nullopt) == Status::InvalidState);
+        break;
+      default:
+        REQUIRE(ctx.order(ids[0], view));
+        break;
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "DENIED PRICE_INVALID_PRECISION",
+                                          "DENIED PRICE_UNEXPECTED"});
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 1);
+    CHECK(count_outputs<md::OrderDenied>(engine.outputs()) == 2);
+    CHECK(ids[0].view() == "jarvis-000001-00000001");
+
+    log.clear();
+    REQUIRE(
+        drive(engine,
+              {accepted(3, ids[0], "v1"), trade_at(4, "100.0"), updated(5, ids[0], "1.000", "99.9"),
+               trade_at(6, "99.9"), filled(7, ids[0], "t1", "0.400", "99.9"),
+               filled(8, ids[0], "t1", "0.400", "99.9"), trade_at(9, "99.9")},
+              seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"ACCEPTED", "PENDING_UPDATE", "UPDATED", "PENDING_CANCEL",
+                                          "FILLED"});
+    CHECK(view.status == md::OrderStatus::PendingCancel); // the fill keeps the cancel pending
+    CHECK(view.filled == quantity("0.400"));
+    CHECK(view.leaves == quantity("0.600"));
+    CHECK(view.venue_order_id == make_id<md::VenueOrderId>("v1"));
+    CHECK(view.avg_px == price("99.9"));
+    const std::span<const md::Output> out = engine.outputs();
+    REQUIRE(count_outputs<md::ModifyOrder>(out) == 1);
+    REQUIRE(count_outputs<md::CancelOrder>(out) == 1);
+    for (const md::Output& o : out) {
+      if (const auto* m = std::get_if<md::ModifyOrder>(&o)) {
+        CHECK(m->price == price("99.9"));
+        CHECK(m->quantity == quantity("1.000"));
+        CHECK(m->venue_order_id == make_id<md::VenueOrderId>("v1"));
+      }
+    }
+
+    log.clear();
+    const md::ClientOrderId stranger = make_id<md::ClientOrderId>("other-1");
+    REQUIRE(drive(engine, {canceled(10, ids[0]), canceled(11, ids[0]), canceled(12, stranger)},
+                  seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"CANCELED"});
+    const st::TradingStats& stats = engine.kernel().trading.stats;
+    CHECK(stats.submitted == 1);
+    CHECK(stats.denied == 2);
+    CHECK(stats.duplicate_fills == 1);
+    CHECK(stats.refused_order_events == 1); // CANCELED twice
+    CHECK(stats.unknown_order_events == 1);
+    CHECK(engine.failures().empty());
+  }
+
+  TEST_CASE("orders for an instrument without a definition are denied") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId id;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        md::Instrument def;
+        CHECK_FALSE(ctx.instrument(btc, def));
+        REQUIRE(ctx.submit(ctx.market(btc, md::OrderSide::Buy, quantity("0.001")), id) ==
+                Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {running(1)}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"DENIED INSTRUMENT_UNKNOWN"});
+    REQUIRE(engine.outputs().size() == 1);
+    const auto& denied = std::get<md::OrderDenied>(engine.outputs()[0]);
+    CHECK(denied.header.client_order_id == id);
+    CHECK(denied.header.strategy_id.view() == "strategy-001");
+    CHECK(denied.header.trader_id.view() == "JARVIS-001");
+  }
+
+  TEST_CASE("an instrument definition sets the book tick and is visible to strategies") {
+    std::vector<std::string> log;
+    Script script = [&](st::Context& ctx, int /*step*/) -> Status {
+      md::Instrument def;
+      REQUIRE(ctx.instrument(iid("BTCUSDT-PERP.BINANCE"), def));
+      CHECK(md::common(def).price_increment == price("0.1"));
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    md::InstrumentSlot slot;
+    REQUIRE(engine.kernel().instruments.find(iid("BTCUSDT-PERP.BINANCE"), slot) == Status::Ok);
+    CHECK(engine.kernel().ticks[slot.value] == price("0.1"));
+
+    md::Event bad = perpetual_definition(3);
+    std::get<md::CryptoPerpetual>(bad).common.price_precision = 4; // disagrees with the increment
+    CHECK(engine.step(EventKey{UnixNanos{3}, 0, ++seq}, bad) == Status::InvalidArgument);
+  }
+
+  TEST_CASE("commands issued from on_order_event run in the same step, up to the queue") {
+    // Resubmits after every SUBMITTED: stops only when the event queue is full.
+    struct Chain {
+      std::uint32_t* submitted = nullptr;
+      Status last = Status::Ok;
+      Status on_start(st::Context& ctx) { return submit(ctx); }
+      Status on_order_event(st::Context& ctx, const md::OrderEvent& e) {
+        if (std::holds_alternative<md::OrderSubmitted>(e)) {
+          ++*submitted;
+          last = submit(ctx);
+        }
+        return Status::Ok;
+      }
+      static Status submit(st::Context& ctx) {
+        md::ClientOrderId id;
+        return ctx.submit(ctx.limit(iid("BTCUSDT-PERP.BINANCE"), md::OrderSide::Buy,
+                                    quantity("0.001"), price("100.0")),
+                          id);
+      }
+    };
+    std::uint32_t submitted = 0;
+    st::StaticStrategySet<Chain> set{Chain{&submitted}};
+    st::KernelConfig config = small_config();
+    config.trading.order_events = 8;
+    config.trading.orders = 64;
+    jarvis::engine::Engine engine{config, set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    CHECK(submitted == 8);
+    CHECK(set.get<0>().last == Status::CapacityExceeded);
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 8);
+    CHECK(engine.kernel().trading.events.empty());
+  }
+
+  TEST_CASE("a halted strategy's open orders are canceled") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId id;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Sell, quantity("0.010"), price("101.0")),
+                           id) == Status::Ok);
+        return Status::Ok;
+      }
+      return Status::InvalidState; // the first trade fails the strategy
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    REQUIRE(drive(engine, {accepted(3, id, "v7"), trade_at(4, "100.0")}, seq) == Status::Ok);
+    REQUIRE(engine.failures().size() == 1);
+    engine.clear_outputs();
+    const md::Event error{md::StrategyError{0, md::StrategyErrorKind::Exception, 1, UnixNanos{4}}};
+    REQUIRE(engine.step(EventKey{UnixNanos{4}, 0, ++seq}, error) == Status::Ok);
+    REQUIRE(engine.outputs().size() == 1);
+    const auto& cancel = std::get<md::CancelOrder>(engine.outputs()[0]);
+    CHECK(cancel.client_order_id == id);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "ACCEPTED"}); // nothing after the halt
+  }
+
+  TEST_CASE("event ids are derived from the seed and the input, never repeated") {
+    const auto run = [](std::uint64_t seed) {
+      const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+      std::vector<std::string> log;
+      std::vector<md::Uuid4> event_ids;
+      Script script = [&](st::Context& ctx, int /*step*/) -> Status {
+        for (int i = 0; i < 3; ++i) {
+          md::ClientOrderId id;
+          st::OrderIntent bad = ctx.limit(btc, md::OrderSide::Buy, quantity("1.0"), price("1.0"));
+          REQUIRE(ctx.submit(bad, id) == Status::Ok); // denied: quantity precision
+        }
+        return Status::Ok;
+      };
+      st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+      st::KernelConfig config = small_config();
+      config.seed = seed;
+      jarvis::engine::Engine engine{config, set};
+      std::uint64_t seq = 0;
+      REQUIRE(drive(engine, {perpetual_definition(1), running(2), trade_at(3, "1.0")}, seq) ==
+              Status::Ok);
+      for (const md::Output& o : engine.outputs()) {
+        event_ids.push_back(std::get<md::OrderDenied>(o).header.event_id);
+      }
+      return event_ids;
+    };
+    const std::vector<md::Uuid4> a = run(7);
+    CHECK(a.size() == 6);
+    CHECK(a == run(7));
+    CHECK(a != run(8));
+    CHECK(std::set<md::Uuid4>(a.begin(), a.end()).size() == a.size());
+  }
+}
+
+TEST_SUITE("zero-alloc") {
+  TEST_CASE("submit, venue answers and cancel run without allocating") {
+    // Quotes a bid on every trade and cancels the previous one.
+    struct Quoter {
+      md::ClientOrderId* last = nullptr;
+      std::uint64_t* events = nullptr;
+      Status on_start(st::Context& ctx) {
+        return ctx.subscribe_trades(iid("BTCUSDT-PERP.BINANCE"));
+      }
+      Status on_trade(st::Context& ctx, const md::TradeTick& t) {
+        if (!last->empty()) {
+          static_cast<void>(ctx.cancel(*last));
+        }
+        return ctx.submit(
+            ctx.limit(t.instrument_id, md::OrderSide::Buy, quantity("0.001"), t.price), *last);
+      }
+      Status on_order_event(st::Context& /*ctx*/, const md::OrderEvent& /*e*/) {
+        ++*events;
+        return Status::Ok;
+      }
+    };
+    md::ClientOrderId last;
+    std::uint64_t events = 0;
+    st::StaticStrategySet<Quoter> set{Quoter{&last, &events}};
+    st::KernelConfig config = small_config();
+    config.trading.orders = 32; // eviction of closed orders is part of the steady state
+    jarvis::engine::Engine engine{config, set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    const auto cycle = [&](std::uint64_t ts) {
+      static_cast<void>(engine.step(EventKey{UnixNanos{ts}, 0, ++seq}, trade_at(ts, "100.0")));
+      const md::ClientOrderId id = last;
+      static_cast<void>(
+          engine.step(EventKey{UnixNanos{ts + 1}, 0, ++seq}, accepted(ts + 1, id, "v")));
+      static_cast<void>(
+          engine.step(EventKey{UnixNanos{ts + 2}, 0, ++seq},
+                      filled(ts + 2, id, "t" + std::to_string(ts), "0.001", "100.0")));
+      engine.clear_outputs();
+    };
+    for (std::uint64_t i = 0; i < 100; ++i) {
+      cycle(10 + i * 10);
+    }
+    // Inputs are built before the scope (the helpers allocate strings); inside it only the
+    // ClientOrderId of the venue answers is filled in.
+    std::vector<md::Event> trades;
+    std::vector<md::Event> acks;
+    std::vector<md::Event> fills;
+    for (std::uint64_t i = 0; i < 500; ++i) {
+      const std::uint64_t ts = 10'000 + i * 10;
+      trades.push_back(trade_at(ts, "100.0"));
+      acks.push_back(accepted(ts + 1, last, "v"));
+      fills.push_back(filled(ts + 2, last, "u" + std::to_string(i), "0.001", "100.0"));
+    }
+    const AllocationScope scope;
+    for (std::size_t i = 0; i < trades.size(); ++i) {
+      const std::uint64_t ts = 10'000 + i * 10;
+      static_cast<void>(engine.step(EventKey{UnixNanos{ts}, 0, ++seq}, trades[i]));
+      std::get<md::OrderAccepted>(acks[i]).header.client_order_id = last;
+      static_cast<void>(engine.step(EventKey{UnixNanos{ts + 1}, 0, ++seq}, acks[i]));
+      std::get<md::OrderFilled>(fills[i]).header.client_order_id = last;
+      static_cast<void>(engine.step(EventKey{UnixNanos{ts + 2}, 0, ++seq}, fills[i]));
+      engine.clear_outputs();
+    }
+    CHECK(scope.allocations() == 0);
+    CHECK(engine.failures().empty());
+    CHECK(events > 1500);
+    CHECK(engine.kernel().trading.stats.refused_order_events == 0);
+  }
+}
+// NOLINTEND(readability-make-member-function-const,readability-convert-member-functions-to-static)

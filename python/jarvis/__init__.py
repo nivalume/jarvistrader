@@ -12,7 +12,7 @@ Submodules:
 from . import _core as _core
 from . import determinism, features, log, model
 from .node import Node, main
-from .strategy import Cadence, Context, DataKind, Strategy
+from .strategy import Cadence, Context, DataKind, OrderIntent, OrderView, Strategy
 
 build_info = _core.build_info
 
@@ -23,6 +23,8 @@ __all__ = [
     "Context",
     "DataKind",
     "Node",
+    "OrderIntent",
+    "OrderView",
     "Strategy",
     "build_info",
     "determinism",

@@ -110,7 +110,9 @@ public:
   Replayer(const NodeConfig& config, SS& strategies, const ReplayOptions& options,
            ReplayReport& report)
       : engine_{kernel_config(config), strategies, error_policy(config)}, options_{&options},
-        report_{&report} {}
+        report_{&report} {
+    name_strategies(config, engine_.kernel());
+  }
 
   [[nodiscard]] core::Status run(EventLogReader& reader, std::string& error) {
     model::wire::RecordView record;

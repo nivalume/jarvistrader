@@ -50,6 +50,16 @@ public:
     return Status::Ok;
   }
 
+  // Constructs the element in place. For a large variant such as model::Output this writes only
+  // the active alternative, where push_back(Output{x}) would copy the whole variant twice.
+  template <typename... Args> [[nodiscard]] Status emplace_back(Args&&... args) noexcept {
+    if (items_.size() >= capacity_) {
+      return Status::CapacityExceeded;
+    }
+    items_.emplace_back(std::forward<Args>(args)...);
+    return Status::Ok;
+  }
+
   // Removes the element at `index` by moving the last element into its place. O(1); does not
   // preserve order.
   [[nodiscard]] Status swap_remove(std::size_t index) noexcept {

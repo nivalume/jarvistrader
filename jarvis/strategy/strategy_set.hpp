@@ -27,7 +27,8 @@ namespace jarvis::strategy {
 template <typename SS>
 concept StrategySet =
     requires(SS& ss, StrategyIndex i, Context& ctx, const DataView& data, const BatchView& batch,
-             core::TimerKey key, core::UnixNanos ts, const model::StrategyError& error) {
+             core::TimerKey key, core::UnixNanos ts, const model::StrategyError& error,
+             const model::OrderEvent& order_event) {
       { ss.size() } -> std::convertible_to<std::size_t>;
       { ss.on_start(i, ctx) } -> std::same_as<core::Status>;
       { ss.on_stop(i, ctx) } -> std::same_as<core::Status>;
@@ -35,6 +36,7 @@ concept StrategySet =
       { ss.on_batch(i, ctx, batch) } -> std::same_as<core::Status>;
       { ss.on_timer(i, ctx, key, ts) } -> std::same_as<core::Status>;
       { ss.on_error(i, ctx, error) } -> std::same_as<core::Status>;
+      { ss.on_order_event(i, ctx, order_event) } -> std::same_as<core::Status>;
     };
 
 template <Strategy... S> class StaticStrategySet {
@@ -63,6 +65,9 @@ public:
   core::Status on_error(StrategyIndex i, Context& ctx, const model::StrategyError& error) {
     return visit(i, [&](auto& s) { return invoke_error(s, ctx, error); });
   }
+  core::Status on_order_event(StrategyIndex i, Context& ctx, const model::OrderEvent& e) {
+    return visit(i, [&](auto& s) { return invoke_order_event(s, ctx, e); });
+  }
 
 private:
   template <std::size_t I = 0, typename F> core::Status visit(StrategyIndex i, F&& f) {
@@ -87,6 +92,7 @@ struct StrategyVTable {
   core::Status (*on_batch)(void* self, Context& ctx, const BatchView& batch);
   core::Status (*on_timer)(void* self, Context& ctx, core::TimerKey key, core::UnixNanos ts);
   core::Status (*on_error)(void* self, Context& ctx, const model::StrategyError& error);
+  core::Status (*on_order_event)(void* self, Context& ctx, const model::OrderEvent& event);
 };
 
 template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexcept {
@@ -104,6 +110,9 @@ template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexc
       },
       [](void* self, Context& ctx, const model::StrategyError& error) {
         return invoke_error(*static_cast<S*>(self), ctx, error);
+      },
+      [](void* self, Context& ctx, const model::OrderEvent& event) {
+        return invoke_order_event(*static_cast<S*>(self), ctx, event);
       },
   };
 }
@@ -142,6 +151,9 @@ public:
   }
   core::Status on_error(StrategyIndex i, Context& ctx, const model::StrategyError& error) {
     return entries_[i].vtable->on_error(entries_[i].self, ctx, error);
+  }
+  core::Status on_order_event(StrategyIndex i, Context& ctx, const model::OrderEvent& e) {
+    return entries_[i].vtable->on_order_event(entries_[i].self, ctx, e);
   }
 
 private:

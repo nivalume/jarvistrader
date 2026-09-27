@@ -273,6 +273,27 @@ template <typename F> constexpr void fields(StrategyRecord& e, F&& f) {
   f("strategy_index", e.strategy_index), f("tag", e.tag), f("value", e.value),
       f("ts_init", e.ts_init);
 }
+template <typename F> constexpr void fields(SubmitOrder& e, F&& f) {
+  f("strategy_index", e.strategy_index), f("client_order_id", e.client_order_id),
+      f("instrument_id", e.instrument_id), f("order_side", e.order_side),
+      f("order_type", e.order_type), f("quantity", e.quantity), f("price", e.price),
+      f("time_in_force", e.time_in_force), f("post_only", e.post_only),
+      f("reduce_only", e.reduce_only), f("expire_time", e.expire_time), f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(ModifyOrder& e, F&& f) {
+  f("strategy_index", e.strategy_index), f("client_order_id", e.client_order_id),
+      f("instrument_id", e.instrument_id), f("venue_order_id", e.venue_order_id),
+      f("quantity", e.quantity), f("price", e.price), f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(CancelOrder& e, F&& f) {
+  f("strategy_index", e.strategy_index), f("client_order_id", e.client_order_id),
+      f("instrument_id", e.instrument_id), f("venue_order_id", e.venue_order_id),
+      f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(CancelAllOrders& e, F&& f) {
+  f("strategy_index", e.strategy_index), f("instrument_id", e.instrument_id),
+      f("ts_init", e.ts_init);
+}
 
 // NOLINTEND(readability-function-cognitive-complexity)
 

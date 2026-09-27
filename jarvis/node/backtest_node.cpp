@@ -1,9 +1,16 @@
 #include "jarvis/node/backtest_node.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
+#include <cstdint>
+#include <string>
 #include <utility>
 
+#include "jarvis/core/fixed_string.hpp"
+#include "jarvis/core/fixed_vector.hpp"
+#include "jarvis/model/identifiers.hpp"
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/replay.hpp"
 
@@ -12,6 +19,16 @@ namespace jarvis::node {
 namespace wire = jarvis::model::wire;
 using core::Status;
 
+namespace {
+
+std::string upper(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  return text;
+}
+
+} // namespace
+
 strategy::KernelConfig kernel_config(const NodeConfig& config) {
   strategy::KernelConfig k;
   k.instruments = config.node.capacity.instruments;
@@ -19,7 +36,32 @@ strategy::KernelConfig kernel_config(const NodeConfig& config) {
   k.timers = config.node.capacity.timers;
   k.batch = config.node.capacity.batch;
   k.seed = config.node.seed;
+  // Orders, their fill records (16 per order on average) and the identities they carry: the
+  // ClientOrderId prefix is the node id, the trader "<NODE>-001", the account "<VENUE>-001".
+  constexpr std::uint64_t kTradesPerOrder = 16;
+  k.trading.orders = config.node.capacity.orders;
+  k.trading.trades = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+      std::uint64_t{config.node.capacity.orders} * kTradesPerOrder, UINT32_MAX / 2));
+  static_cast<void>(core::FixedString<8>::from(config.node.id, k.trading.node_tag));
+  if (!config.node.id.empty()) {
+    static_cast<void>(model::TraderId::from(upper(config.node.id) + "-001", k.trading.trader_id));
+  }
+  if (!config.venues.empty()) {
+    static_cast<void>(
+        model::AccountId::from(upper(config.venues.front().id) + "-001", k.trading.account_id));
+  }
   return k;
+}
+
+void name_strategies(const NodeConfig& config, strategy::KernelServices& kernel) {
+  core::FixedVector<model::StrategyId>& ids = kernel.trading.strategy_ids;
+  for (std::size_t i = 0; i < config.strategies.size() && i < ids.size(); ++i) {
+    model::StrategyId id;
+    if (!config.strategies[i].id.empty() &&
+        core::ok(model::StrategyId::from(config.strategies[i].id, id))) {
+      ids[i] = id;
+    }
+  }
 }
 
 strategy::ErrorPolicy error_policy(const NodeConfig& config) {

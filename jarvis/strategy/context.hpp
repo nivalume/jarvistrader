@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "jarvis/core/clock.hpp"
@@ -21,13 +23,16 @@
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instrument_table.hpp"
+#include "jarvis/model/instruments.hpp"
+#include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/strategy/trading.hpp"
 
-// State the engine and the strategies' Context share (docs/architecture.md sections 7.2-7.5):
-// instruments, subscriptions, books, bar aggregators, features, timers and the outputs of the
-// current step. The engine is the only writer outside Context calls; everything is sized from
-// KernelConfig at construction. Books, bar aggregators and delivery buffers are created on first
-// use (subscription or first update) and never after the warm-up.
+// State the engine and the strategies' Context share (docs/architecture.md sections 7.2-7.5 and
+// 9): instruments, subscriptions, books, bar aggregators, features, timers, orders and the
+// outputs of the current step. The engine is the only writer outside Context calls; everything is
+// sized from KernelConfig at construction. Books, bar aggregators and delivery buffers are created
+// on first use (subscription or first update) and never after the warm-up.
 
 namespace jarvis::strategy {
 
@@ -45,6 +50,7 @@ struct KernelConfig {
   std::uint32_t book_window_levels = 16384;
   std::uint32_t book_overflow_levels = 4096;
   std::uint64_t seed = 0;
+  TradingConfig trading;
 };
 
 // What happens to a strategy whose callback failed (risk.on_strategy_error).
@@ -113,6 +119,7 @@ public:
         pending{config.buffers}, dirty_pending{config.buffers}, batches{config.buffers},
         dirty_batches{config.buffers}, outputs{config.outputs},
         failures{std::size_t{config.strategies} * 4U}, disabled{config.strategies},
+        trading{config.trading, config.instruments, config.strategies, config.seed},
         book_types_{config.instruments}, rng_{config.seed} {
     for (std::uint32_t i = 0; i < config.instruments; ++i) {
       static_cast<void>(books.push_back(std::nullopt));
@@ -144,7 +151,7 @@ public:
     }
     r.value = value;
     r.ts_init = current.ts;
-    return outputs.push_back(model::Output{r});
+    return outputs.emplace_back(std::in_place_type<model::StrategyRecord>, r);
   }
 
   // ---- timers -------------------------------------------------------------------------------
@@ -240,6 +247,61 @@ public:
       b.emplace(c);
     }
     return &*b;
+  }
+
+  // An instrument definition (an input event): stored by slot, and its price increment becomes
+  // the book's tick. A redefinition replaces the earlier one.
+  [[nodiscard]] core::Status define_instrument(const model::Instrument& definition) {
+    const core::Status valid = model::validate(definition);
+    if (!core::ok(valid)) {
+      return valid;
+    }
+    const model::InstrumentCommon& c = model::common(definition);
+    model::InstrumentSlot slot;
+    const core::Status s = instruments.intern(c.id, slot);
+    if (!core::ok(s)) {
+      return s;
+    }
+    trading.definitions[slot.value] = definition;
+    ticks[slot.value] = c.price_increment;
+    return core::Status::Ok;
+  }
+
+  [[nodiscard]] bool instrument(const model::InstrumentId& id,
+                                model::Instrument& out) const noexcept {
+    model::InstrumentSlot slot;
+    if (!core::ok(instruments.find(id, slot))) {
+      return false;
+    }
+    const model::Instrument* def = trading.definition(slot.value);
+    if (def == nullptr) {
+      return false;
+    }
+    out = *def;
+    return true;
+  }
+
+  // ---- orders (section 9) -------------------------------------------------------------------
+
+  [[nodiscard]] core::Status submit(StrategyIndex strategy, const OrderIntent& intent,
+                                    model::ClientOrderId& out) {
+    model::InstrumentSlot slot;
+    const std::uint32_t index =
+        core::ok(instruments.find(intent.instrument_id, slot)) ? slot.value : execution::kNoIndex;
+    return trading.submit(current, strategy, intent, index, outputs, out);
+  }
+  [[nodiscard]] core::Status modify(StrategyIndex strategy, const model::ClientOrderId& id,
+                                    std::optional<model::Quantity> quantity,
+                                    std::optional<model::Price> price) {
+    return trading.modify(current, strategy, id, quantity, price, outputs);
+  }
+  [[nodiscard]] core::Status cancel(StrategyIndex strategy,
+                                    const model::ClientOrderId& id) noexcept {
+    return trading.cancel(current, strategy, id, outputs);
+  }
+  [[nodiscard]] core::Status cancel_all(StrategyIndex strategy, const model::InstrumentId* id,
+                                        std::uint32_t& canceled) noexcept {
+    return trading.cancel_all(current, strategy, id, outputs, canceled);
   }
 
   // ---- subscriptions ------------------------------------------------------------------------
@@ -382,6 +444,7 @@ public:
   core::FixedVector<StrategyFailure> failures;
   core::FixedVector<std::uint8_t> disabled; // 1 once a strategy is halted
   bool halt_requested = false;
+  Trading trading;
 
 private:
   [[nodiscard]] static std::uint32_t rows_for(const KernelConfig& c) noexcept {
@@ -543,6 +606,63 @@ public:
 
   [[nodiscard]] bool book(const model::InstrumentId& id, data::BookView& out) const noexcept {
     return k_->book(id, out);
+  }
+  [[nodiscard]] bool instrument(const model::InstrumentId& id,
+                                model::Instrument& out) const noexcept {
+    return k_->instrument(id, out);
+  }
+
+  // ---- orders -------------------------------------------------------------------------------
+  // submit assigns the ClientOrderId and returns Ok even when the risk checks deny the order:
+  // the denial arrives as OrderDenied in on_order_event, like every other order event.
+
+  // Members rather than statics, so strategies write ctx.limit(...) as they do in Python.
+  // NOLINTBEGIN(readability-convert-member-functions-to-static)
+  [[nodiscard]] OrderIntent limit(const model::InstrumentId& id, model::OrderSide side,
+                                  model::Quantity quantity, model::Price price,
+                                  model::TimeInForce tif = model::TimeInForce::Gtc,
+                                  bool post_only = false, bool reduce_only = false) const noexcept {
+    return OrderIntent::limit(id, side, quantity, price, tif, post_only, reduce_only);
+  }
+  [[nodiscard]] OrderIntent market(const model::InstrumentId& id, model::OrderSide side,
+                                   model::Quantity quantity,
+                                   bool reduce_only = false) const noexcept {
+    return OrderIntent::market(id, side, quantity, reduce_only);
+  }
+  // NOLINTEND(readability-convert-member-functions-to-static)
+
+  [[nodiscard]] core::Status submit(const OrderIntent& intent, model::ClientOrderId& out) {
+    return k_->submit(self_, intent, out);
+  }
+  // NotFound: not an order of this strategy. InvalidState: closed, or a cancel is pending.
+  [[nodiscard]] core::Status modify(const model::ClientOrderId& id,
+                                    std::optional<model::Quantity> quantity,
+                                    std::optional<model::Price> price) {
+    return k_->modify(self_, id, quantity, price);
+  }
+  // NotFound: not an order of this strategy. InvalidState: closed, or a cancel is pending.
+  [[nodiscard]] core::Status cancel(const model::ClientOrderId& id) noexcept {
+    return k_->cancel(self_, id);
+  }
+  // Every cancelable order of this strategy, or of this strategy on one instrument.
+  [[nodiscard]] core::Status cancel_all(std::uint32_t& canceled) noexcept {
+    return k_->cancel_all(self_, nullptr, canceled);
+  }
+  [[nodiscard]] core::Status cancel_all(const model::InstrumentId& id,
+                                        std::uint32_t& canceled) noexcept {
+    return k_->cancel_all(self_, &id, canceled);
+  }
+
+  [[nodiscard]] bool order(const model::ClientOrderId& id, OrderView& out) const {
+    return k_->trading.order(self_, id, out);
+  }
+  // Writes up to out.size() open orders of this strategy and returns how many there are.
+  [[nodiscard]] std::size_t open_orders(std::span<OrderView> out) const {
+    return k_->trading.open_orders(self_, nullptr, out);
+  }
+  [[nodiscard]] std::size_t open_orders(const model::InstrumentId& id,
+                                        std::span<OrderView> out) const {
+    return k_->trading.open_orders(self_, &id, out);
   }
 
 private:

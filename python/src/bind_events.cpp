@@ -276,6 +276,11 @@ void bind_events(nb::module_& mod) {
                                 "A kernel feature value (an output record keyed by its input).");
   bind_struct<m::StrategyRecord>(mod, "StrategyRecord",
                                  "A value a strategy recorded with ctx.record(tag, value).");
+  bind_struct<m::SubmitOrder>(mod, "SubmitOrder", "A new order sent to the venue (a command).");
+  bind_struct<m::ModifyOrder>(mod, "ModifyOrder", "A LIMIT order's new quantity and price.");
+  bind_struct<m::CancelOrder>(mod, "CancelOrder", "A cancel request for one order.");
+  bind_struct<m::CancelAllOrders>(mod, "CancelAllOrders",
+                                  "A cancel request for every open order of an instrument.");
 }
 
 nb::object output_to_py(const m::Output& output) {
@@ -283,17 +288,26 @@ nb::object output_to_py(const m::Output& output) {
                     output);
 }
 
-bool output_from_py(nb::handle object, m::Output& out) {
-  if (nb::isinstance<m::FeatureUpdate>(object)) {
-    out = nb::cast<m::FeatureUpdate>(object);
-    return true;
+namespace {
+template <std::size_t I = 0> bool output_from_py_impl(nb::handle object, m::Output& out) {
+  if constexpr (I == std::variant_size_v<m::Output>) {
+    return false;
+  } else {
+    using T = std::variant_alternative_t<I, m::Output>;
+    // OrderDenied is also an input event: only an explicit output wrapper would be ambiguous,
+    // so an OrderDenied object is written as the input kind (see EventLogWriter.append).
+    if constexpr (!std::is_same_v<T, m::OrderDenied>) {
+      if (nb::isinstance<T>(object)) {
+        out = nb::cast<T>(object);
+        return true;
+      }
+    }
+    return output_from_py_impl<I + 1>(object, out);
   }
-  if (nb::isinstance<m::StrategyRecord>(object)) {
-    out = nb::cast<m::StrategyRecord>(object);
-    return true;
-  }
-  return false;
 }
+} // namespace
+
+bool output_from_py(nb::handle object, m::Output& out) { return output_from_py_impl(object, out); }
 
 nb::object event_to_py(const m::Event& event) {
   return std::visit(
