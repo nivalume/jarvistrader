@@ -256,6 +256,35 @@ Status RestClient::close_listen_key(std::string& error) {
   return json_call("DELETE", "/fapi/v1/listenKey", {}, Security::ApiKey, r, error);
 }
 
+Status RestClient::exchange_info(std::string& body, std::string& error) {
+  RestResponse r;
+  const Status s = json_call("GET", "/fapi/v1/exchangeInfo", {}, Security::None, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
+Status RestClient::key_restrictions(KeyRestrictions& out, std::string& error) {
+  RestResponse r;
+  dom::parser parser;
+  dom::element doc;
+  if (const Status s = parsed(
+          json_call("GET", "/sapi/v1/account/apiRestrictions", {}, Security::Signed, r, error),
+          parser, r, doc, error);
+      !core::ok(s)) {
+    return s;
+  }
+  if (doc["ipRestrict"].get_bool().get(out.ip_restrict) != simdjson::SUCCESS ||
+      doc["enableFutures"].get_bool().get(out.enable_futures) != simdjson::SUCCESS ||
+      doc["enableWithdrawals"].get_bool().get(out.enable_withdrawals) != simdjson::SUCCESS ||
+      doc["enableReading"].get_bool().get(out.enable_reading) != simdjson::SUCCESS) {
+    error = "apiRestrictions without ipRestrict, enableFutures, enableWithdrawals or enableReading";
+    return Status::ParseError;
+  }
+  return Status::Ok;
+}
+
 Status RestClient::depth(std::string_view symbol, int limit, std::string& body,
                          std::string& error) {
   RestResponse r;

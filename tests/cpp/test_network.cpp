@@ -37,6 +37,7 @@
 #include "jarvis/network/ws_client.hpp"
 #include "jarvis/network/ws_frame.hpp"
 #include "support/tls_test.hpp"
+#include "support/ws_test.hpp"
 
 namespace {
 
@@ -63,54 +64,12 @@ std::string text_of(std::span<const std::byte> b) {
   return std::string{reinterpret_cast<const char*>(b.data()), b.size()}; // NOLINT
 }
 
-// A server frame (unmasked).
 std::vector<std::byte> server_frame(unsigned first, std::string_view payload) {
-  std::vector<std::byte> out{static_cast<std::byte>(first)};
-  const std::size_t n = payload.size();
-  if (n < 126) {
-    out.push_back(static_cast<std::byte>(n));
-  } else if (n <= 0xFFFF) {
-    out.push_back(static_cast<std::byte>(126));
-    out.push_back(static_cast<std::byte>(n >> 8U));
-    out.push_back(static_cast<std::byte>(n & 0xFFU));
-  } else {
-    out.push_back(static_cast<std::byte>(127));
-    for (int shift = 56; shift >= 0; shift -= 8) {
-      out.push_back(static_cast<std::byte>((static_cast<std::uint64_t>(n) >> shift) & 0xFFU));
-    }
-  }
-  for (const char c : payload) {
-    out.push_back(static_cast<std::byte>(c));
-  }
-  return out;
+  return jarvis::testsupport::ws_server_frame(first, payload);
 }
 
-// Reads one masked client frame from a blocking stream: opcode and unmasked payload.
 template <typename Stream> std::pair<unsigned, std::string> read_client_frame(Stream& s) {
-  std::array<unsigned char, 2> head{};
-  asio::read(s, asio::buffer(head));
-  std::uint64_t len = head[1] & 0x7FU;
-  if (len == 126) {
-    std::array<unsigned char, 2> ext{};
-    asio::read(s, asio::buffer(ext));
-    len = (static_cast<std::uint64_t>(ext[0]) << 8U) | ext[1];
-  } else if (len == 127) {
-    std::array<unsigned char, 8> ext{};
-    asio::read(s, asio::buffer(ext));
-    len = 0;
-    for (const unsigned char b : ext) {
-      len = (len << 8U) | b;
-    }
-  }
-  REQUIRE((head[1] & 0x80U) != 0); // clients mask
-  std::array<unsigned char, 4> mask{};
-  asio::read(s, asio::buffer(mask));
-  std::string payload(len, '\0');
-  asio::read(s, asio::buffer(payload));
-  for (std::size_t i = 0; i < payload.size(); ++i) {
-    payload[i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % 4]);
-  }
-  return {head[0] & 0x0FU, payload};
+  return jarvis::testsupport::read_ws_client_frame(s);
 }
 
 } // namespace

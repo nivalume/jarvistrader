@@ -207,6 +207,10 @@ std::string ws_request(std::string_view id, std::string_view method, Params para
     }
     params.emplace_back("signature", signer->sign(payload));
   }
+  return ws_message(id, method, params);
+}
+
+std::string ws_message(std::string_view id, std::string_view method, const Params& params) {
   std::string out = "{\"id\":";
   json_string(out, id);
   out += ",\"method\":";

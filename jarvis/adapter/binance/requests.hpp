@@ -26,6 +26,12 @@ namespace jarvis::adapter::binance {
 
 using Params = std::vector<std::pair<std::string, std::string>>;
 
+enum class Security : std::uint8_t {
+  None,   // public
+  ApiKey, // the API key (REST: the X-MBX-APIKEY header; WebSocket API: the apiKey parameter)
+  Signed, // plus timestamp, recvWindow and signature (WebSocket API after a logon: no signature)
+};
+
 [[nodiscard]] std::string url_encode(std::string_view text);
 [[nodiscard]] std::string query_string(const Params& params); // values percent-encoded
 
@@ -44,8 +50,11 @@ using Params = std::vector<std::pair<std::string, std::string>>;
 [[nodiscard]] std::string signed_query(Params params, std::int64_t timestamp_ms,
                                        std::int64_t recv_window_ms, const network::Signer& signer);
 
-// A WebSocket API request: {"id":..,"method":..,"params":{..}}. With a signer, apiKey,
-// timestamp and signature are added (session.logon); otherwise only timestamp.
+// {"id":..,"method":..,"params":{..}} with the parameters as given.
+[[nodiscard]] std::string ws_message(std::string_view id, std::string_view method,
+                                     const Params& params);
+// A signed WebSocket API request. With a signer, apiKey, timestamp and signature are added
+// (session.logon, or every request without a logon); otherwise only timestamp.
 [[nodiscard]] std::string ws_request(std::string_view id, std::string_view method, Params params,
                                      std::int64_t timestamp_ms, const network::Signer* signer,
                                      std::string_view api_key = {});

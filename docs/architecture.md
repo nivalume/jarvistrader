@@ -1168,14 +1168,14 @@ Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
 | --- | --- | --- | --- |
 | 行情（高频） | `wss://fstream.binance.com/public/stream?streams=...` | `@depth@100ms`、`@bookTicker` | md-io |
 | 行情（常规） | `wss://fstream.binance.com/market/stream?streams=...` | `@aggTrade`、`@markPrice@1s`、`@kline_*`、`@forceOrder` | md-io |
-| 用户数据流 | listenKey 连接 | `ORDER_TRADE_UPDATE`、`TRADE_LITE`、`ACCOUNT_UPDATE`、`MARGIN_CALL`、`ACCOUNT_CONFIG_UPDATE`、`listenKeyExpired` | ud-io |
+| 用户数据流 | `wss://fstream.binance.com/private/stream`，连接后 `SUBSCRIBE` listenKey | `ORDER_TRADE_UPDATE`、`TRADE_LITE`、`ACCOUNT_UPDATE`、`MARGIN_CALL`、`ACCOUNT_CONFIG_UPDATE`、`listenKeyExpired` | ud-io |
 | WS API | `wss://ws-fapi.binance.com/ws-fapi/v1` | `session.logon`、`order.place`、`order.modify`、`order.cancel`、`order.status` | order-sender |
 | REST | `https://fapi.binance.com` | `exchangeInfo`、`listenKey`、`positionSide/dual`、快照、`countdownCancelAll`、下单兜底 | order-sender 与启动阶段 |
 
 - 流在 `/public` 与 `/market` 之间的归属已于 2026-09-27 对 `fstream.binance.com` 实测核对：`/public` 只推 `bookTicker` 与 depth 流，`/market` 推 `aggTrade`、`markPrice`、`kline` 与 `forceOrder`；旧路径 `/stream` 现在只推 `/public` 的流。订阅在错误路由上的流不会报错，只是没有数据，因此适配器总是按路由拆分订阅（`jarvis/adapter/binance/streams.hpp`）。
 - 单个行情连接最多 1024 个流、24 小时有效；客户端发往服务端的消息每秒不超过 10 条，ping、pong 帧与订阅类控制消息都计入；服务端每 3 分钟发 ping，10 分钟无 pong 即断开。
 - WS API 连接同样 24 小时有效；`session.logon` 只接受 Ed25519 key，登录后请求无需逐条签名。`ORDERS` 限额与 REST 共享，`REQUEST_WEIGHT` 按 IP 单独计算。
-- 用户数据流不能通过 WS API 连接接收，需要单独连接。
+- 用户数据流不能通过 WS API 连接接收，需要单独连接。地址与订阅方式取自 Binance 官方 SDK（`binance-sdk-derivatives-trading-usds-futures` 17.5.0，2026-09 版）：用户流走 `/private` 路由，listenKey 作为流名订阅，事件以组合流信封 `{"stream":"<listenKey>","data":{...}}` 到达。交易所对任意 listenKey 都接受连接且不报错（2026-09-27 实测 `/private/ws/<key>`、`/ws/<key>` 均如此），所以没有账户无法在线验证事件确实从这里推送；testnet 契约测试（M4 harness）会补上这一步。
 
 ### 14.2 流与事件的映射
 
@@ -1227,11 +1227,16 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
   - 签名：REST 对实际发送的查询串签名（HMAC-SHA256 为十六进制，Ed25519 为 base64 再做百分号编码）；WS API 的 `session.logon` 对按名排序的 `k=v&...` 签名，logon 之后的请求不再签名。
   - `RestClient`（`rest_client.hpp`）是阻塞式的，每个线程一个（启动线程、下单线程）。`sync_time` 以往返中点估计偏移，之后签名请求的 `timestamp` 用交易所时钟。
   - REST 下单结果分三种：带回执的 `Ok`；带拒绝码的 `Ok`（HTTP 4xx 且有 `code`，交给 `OrderTracker::on_request_error` 产生 `OrderRejected` 等事件）；结果未知的 `IoError`（5xx、超时、无法解析），订单留在 in-flight 集合，由对账确定结局。5xx 不能当作拒绝：交易所可能已经接受了订单。
+  - `WsApiSession`（`ws_api.hpp`）运行在 order-sender 的 IoContext 上。Ed25519 key 用 `session.logon` 登录，之后请求不再签名；其他 key 逐条签名。请求按 id 与应答配对，订单请求只有三种结局：已确认、被拒（带交易所错误码）、未知（超时未答，或连接断开时仍在途）。未知的订单留给对账；超时后才到的应答照常报告，由 `OrderTracker` 幂等处理。
+  - 24 小时轮换是先建后拆：到期前开第二个连接并登录，新请求改走新连接，旧连接上的请求答完后才关闭，计划内的轮换不会让下单中断。意外断线按退避重连；登录被拒（key 错误或被吊销）不重连，报告后停止。
+  - 2026-09-27 用 `jarvis-capture ws-api-probe` 对生产 `ws-fapi.binance.com` 发 `time` 与 `depth`：应答的 id、状态码与 `rateLimits` 都按预期解码，0 解码错误。
 
 ### 14.5 用户数据流
 
 - `POST /fapi/v1/listenKey` 获取，每 30 分钟 `PUT` 续期（listenKey 有效期 60 分钟），收到 `listenKeyExpired` 或续期失败时重新获取并重连，然后走对账流程。
 - 事件处理：`ORDER_TRADE_UPDATE` 与 `TRADE_LITE` 见第 8 节；`ACCOUNT_UPDATE` 置位余额与仓位，原因为 `FUNDING_FEE` 时产生 `PositionAdjusted(Funding)`；`MARGIN_CALL` 推动 TradingState；`ACCOUNT_CONFIG_UPDATE` 更新杠杆与多资产模式，与配置不符时告警。
+- 连接（`user_stream_session.hpp`）：`UserStreamSession` 在 ud-io 线程上连接 `/private/stream` 并订阅 listenKey，收到订阅确认后才算 live；从此到 `on_down` 之间不会漏事件，`on_down` 之后重连并重新对账。事件帧原样交给调用方录制与解码。24 小时轮换同样先建后拆：新连接订阅成功后两条连接并存一段重叠期（默认 2 秒），同一事件在两条连接上的字节完全相同，重叠期内按全文比对只转发一次，然后关闭旧连接；计划内的轮换因此不需要对账。
+- listenKey（`ListenKeyKeeper`）：创建后每 30 分钟续期；续期失败或流里出现 `listenKeyExpired` 时重新申请。交易所对仍有效的 key 会返回同一个并延长有效期，只有换了新 key 才需要让会话订阅新 key（`set_listen_key` 在每条连接上先订阅新 key、再退订旧 key）。续期是阻塞的 REST 调用，所以 keeper 在允许阻塞的 admin 线程上按 tick 驱动，不在 ud-io 线程上。
 - 实现（M4-D）：`decode_user_report` 把各类事件解析为未解释的报告结构（数值保持字符串，由 `OrderTracker` 按 instrument 精度精确解析）。`ACCOUNT_UPDATE` 只列出变化的资产，`OrderTracker` 把它合并进完整的余额表，再以 `AccountState`（total 为钱包余额）交给内核，因为内核的 `set_account` 整体替换余额。不是本节点发出的订单的回报计数后丢弃，由对账（第 15 节）处理。
 
 ### 14.6 启动检查与 instrument 加载
@@ -1245,6 +1250,8 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 5. 服务器时间偏移在阈值内。
 
 运行中 `exchangeInfo` 的变化（tick size、状态）以 `InstrumentStatus` 或 instrument 更新事件进入内核。
+
+实现（`jarvis/adapter/binance/startup.hpp`）：检查只读，jarvis 从不修改账户设置，不一致由运维处理。先同步时钟，之后的签名请求用交易所时钟；每项都跑完再汇总，报告一次列出所有问题。`status ≠ TRADING` 的 instrument 是警告，杠杆只在配置了时检查。key 权限在现货 API 主机（`GET /sapi/v1/account/apiRestrictions`）上查询：必须能交易合约、不能提现，没有 IP 白名单默认失败（可配置为警告）；testnet 没有这个主机，此时跳过并给出警告。
 
 `exchangeInfo` 到 `CryptoPerpetual` 的映射（`jarvis/adapter/binance/exchange_info.hpp`）与回测目录用的 Python 映射（`python/jarvis/data/binance_instrument.py`）相同：精度取 `tickSize` 与 `stepSize` 去掉末尾零后的小数位，价格与数量上下限按该精度取值，`MIN_NOTIONAL` 以保证金资产计价，保证金率为百分比除以 100。C++ 测试与 pytest 对同一份 testnet 夹具核对同一份期望文件，保证实盘节点与回测看到的 instrument 一致。Gate B 的 PRICE_FILTER、LOT_SIZE、MIN_NOTIONAL 规则直接读取这些字段。
 
@@ -1373,6 +1380,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - **C++ 单元与性质测试**：doctest，每层一个测试二进制（`tests/cpp/test_<layer>.cpp`）以控制编译时间；ctest 标签 `unit`、`property`、`conformance`、`golden`。性质测试使用 `jarvis::testkit::Gen`（splitmix64），由 `JARVIS_PROP_SEED` 与 `JARVIS_PROP_ITERS` 控制，CI 用三个固定种子。
 - **pytest**（`python/tests`）：nautilus 字符串格式往返、`Node` 与 `Strategy` API、Python 策略回放、确定性守卫。
 - **golden trace**：每个 `tests/golden/<case>/case.toml` 是一组命令加上要逐字节比较的产物，`expected.sha256` 防止期望文件被手工改动；`just golden-update` 重新生成，变更在 review 中可见。M2 的回放用例（`replay_trade`、`replay_batch`、`replay_quote`、`replay_book`、`replay_bar`、`replay_feature`、`example_trade_logger`）由测试专用程序 `golden_node`（`tests/cpp/golden_node.cpp`）生成确定的数据目录，运行一个按 `plan` 参数订阅的策略，比较运行日志的文本转储，并用 `--replay` 核对输出可重算。数据生成对编译器无关：每条语句只取一次随机数，避免函数实参求值顺序在 GCC 与 Clang 之间不同。
+- **mock venue**：适配器的连接层对回环服务端测试，证书在测试时生成。`ScriptedHttpsServer` 按顺序回放 HTTP 响应并记录请求；`ScriptedWssServer`（`tests/cpp/support/ws_test.hpp`）每个连接一个线程，按脚本回复客户端消息，也可以主动推送、正常关闭或直接断开，用来覆盖登录、超时、断线、24 小时轮换与重复事件。
 - **环境等价测试**：sandbox 录制 → 同一策略文件的 backtest 回放，命令流逐字节相同（第 4.6 节）。
 - **确定性指纹**：CI 的 determinism job 比较 `rel` 与 `det-o0` 两个构建写出的语料日志（`tools/fingerprint_gate.sh`）；golden 用例在 dev（GCC、Clang）、rel 与 det-o0 构建上产出相同的文本。里程碑验收在真实数据上重复这项比较（`tools/m2_acceptance.sh`）。
 - **sanitizer**：现有 `dev` preset（ASan + UBSan）× gcc-13 / clang-18 / AppleClang 矩阵；新增 `tsan` preset 覆盖 shell 中的环与 IO 线程；新增 `fuzz` preset（`-fsanitize=fuzzer`）覆盖 Codec、WebSocket 帧层、HTTP 解析，语料入库，PR 中每个目标 60 秒，nightly 10 分钟。

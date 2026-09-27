@@ -7,6 +7,7 @@
 //
 //   jarvis-capture decode FILE --exchange-info JSON [--symbols A,B]
 //   jarvis-capture depth-check --exchange-info JSON --symbols SYMBOL --seconds N
+//   jarvis-capture ws-api-probe [--url URL] [--symbols SYMBOL]
 //
 // `record` reconnects with backoff until the time is up. `dump --jsonl` prints the text
 // messages one per line; `--timed` prefixes each with its arrival time ("<recv_ns> <json>"),
@@ -15,7 +16,9 @@
 // if any message fails to decode. `depth-check` syncs the production depth stream with snapshots
 // from the WebSocket API and, every 15 seconds, syncs a second book from a fresh snapshot on
 // the same stream; when both reach the same update id their top 100 levels per side must be
-// equal. It exits 1 on any mismatch or if no comparison was made.
+// equal. It exits 1 on any mismatch or if no comparison was made. `ws-api-probe` checks the
+// WebSocket API session against the venue with its public methods (time, depth) and prints the
+// answers and rate limits; it exits 1 unless both are answered.
 
 #include <array>
 #include <atomic>
@@ -39,6 +42,7 @@
 #include "jarvis/adapter/binance/exchange_info.hpp"
 #include "jarvis/adapter/binance/json_codec.hpp"
 #include "jarvis/adapter/binance/rest_codec.hpp"
+#include "jarvis/adapter/binance/ws_api.hpp"
 #include "jarvis/adapter/codec.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/raw_frames.hpp"
@@ -620,13 +624,77 @@ int depth_check(const Options& o) {
   return !failed && check.checks > 0 && check.mismatches == 0 && codec.stats().errors == 0 ? 0 : 1;
 }
 
+bool run_until_ready(net::IoContext& io, const binance::WsApiSession& session,
+                     const std::string& down, std::chrono::steady_clock::time_point deadline) {
+  while (!session.ready() && down.empty() && std::chrono::steady_clock::now() < deadline) {
+    io.run_for(std::chrono::milliseconds{50});
+  }
+  if (!session.ready()) {
+    std::fprintf(stderr, "not connected: %s\n", down.empty() ? "timeout" : down.c_str());
+    return false;
+  }
+  return true;
+}
+
+int ws_api_probe(const Options& o) {
+  net::IoContext io;
+  binance::WsApiConfig config;
+  if (!o.urls.empty()) {
+    config.url = o.urls.front();
+  }
+  binance::WsApiHandlers handlers;
+  std::string down;
+  handlers.on_down = [&down](const std::string& reason) { down = reason; };
+  handlers.on_limits = [](std::span<const jarvis::model::RateLimitFeedback> limits) {
+    for (const jarvis::model::RateLimitFeedback& l : limits) {
+      std::printf("  rate limit %s per %llu s: %u of %u\n",
+                  l.kind == jarvis::model::RateLimitKind::Orders ? "ORDERS" : "REQUEST_WEIGHT",
+                  static_cast<unsigned long long>(l.interval_ns / 1'000'000'000), l.used, l.limit);
+    }
+  };
+  binance::WsApiSession session{io, config, handlers};
+  session.start();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+  if (!run_until_ready(io, session, down, deadline)) {
+    return 1;
+  }
+  int answered = 0;
+  const auto report = [&answered](const char* what) {
+    return [&answered, what](Status s, const binance::WsAnswer& a, std::string_view json) {
+      std::printf("%s: %s status %d%s%.*s\n", what, ok(s) ? "answered" : "failed", a.status,
+                  json.empty() ? "" : " ",
+                  static_cast<int>(std::min<std::size_t>(json.size(), 160)), json.data());
+      answered += ok(s) && a.status == 200 ? 1 : 0;
+    };
+  };
+  std::string error;
+  const std::string symbol = o.symbols.value_or("BTCUSDT");
+  if (!ok(session.request("time", {}, binance::Security::None, report("time"), error)) ||
+      !ok(session.request("depth", {{"symbol", symbol}, {"limit", "5"}}, binance::Security::None,
+                          report("depth"), error))) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+  while (answered < 2 && std::chrono::steady_clock::now() < deadline + std::chrono::seconds{10}) {
+    io.run_for(std::chrono::milliseconds{50});
+  }
+  const binance::WsApiStats st = session.stats();
+  std::printf("sent %llu, unmatched %llu, decode errors %llu\n",
+              static_cast<unsigned long long>(st.sent),
+              static_cast<unsigned long long>(st.unmatched),
+              static_cast<unsigned long long>(st.decode_errors));
+  session.stop();
+  io.run_for(std::chrono::milliseconds{500});
+  return answered == 2 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   Options o;
   const std::span<char*> args{argv + 1, static_cast<std::size_t>(argc > 0 ? argc - 1 : 0)};
   if (!parse(args, o) || o.positional.empty()) {
-    std::fprintf(stderr, "usage: jarvis-capture record|dump|decode|depth-check ...\n");
+    std::fprintf(stderr, "usage: jarvis-capture record|dump|decode|depth-check|ws-api-probe ...\n");
     return 2;
   }
   if (o.positional[0] == "record") {
@@ -640,6 +708,9 @@ int main(int argc, char** argv) {
   }
   if (o.positional[0] == "depth-check") {
     return depth_check(o);
+  }
+  if (o.positional[0] == "ws-api-probe") {
+    return ws_api_probe(o);
   }
   std::fprintf(stderr, "unknown command %s\n", o.positional[0].c_str());
   return 2;

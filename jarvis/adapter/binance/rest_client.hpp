@@ -23,12 +23,6 @@
 
 namespace jarvis::adapter::binance {
 
-enum class Security : std::uint8_t {
-  None,   // public
-  ApiKey, // X-MBX-APIKEY header (listenKey)
-  Signed, // header plus timestamp, recvWindow and signature
-};
-
 struct RestConfig {
   std::string base_url = "https://fapi.binance.com";
   std::string api_key;
@@ -46,6 +40,14 @@ struct RestResponse {
   std::string error_msg;
   std::vector<model::RateLimitFeedback> limits;
   std::optional<std::int64_t> retry_after_s;
+};
+
+// What an API key may do (GET /sapi/v1/account/apiRestrictions, on api.binance.com).
+struct KeyRestrictions {
+  bool ip_restrict = false;
+  bool enable_futures = false;
+  bool enable_withdrawals = false;
+  bool enable_reading = false;
 };
 
 // A symbol's position settings (GET /fapi/v2/positionRisk).
@@ -68,6 +70,7 @@ public:
   // GET /fapi/v1/time; signed requests then carry the venue's clock.
   [[nodiscard]] core::Status sync_time(std::string& error);
   [[nodiscard]] std::int64_t time_offset_ms() const noexcept { return offset_ms_; }
+  void set_time_offset(std::int64_t ms) noexcept { offset_ms_ = ms; } // measured elsewhere
   [[nodiscard]] bool banned() const;
   // Rate feedback of every response since the last call to this.
   [[nodiscard]] std::vector<model::RateLimitFeedback> take_limits();
@@ -76,6 +79,9 @@ public:
   [[nodiscard]] core::Status multi_assets_mode(bool& on, std::string& error);
   [[nodiscard]] core::Status position_risk(std::string_view symbol, PositionRisk& out,
                                            std::string& error);
+  [[nodiscard]] core::Status exchange_info(std::string& body, std::string& error);
+  // On a client for the spot API host: the key's permissions.
+  [[nodiscard]] core::Status key_restrictions(KeyRestrictions& out, std::string& error);
   [[nodiscard]] core::Status create_listen_key(std::string& key, std::string& error);
   [[nodiscard]] core::Status keep_alive_listen_key(std::string& error);
   [[nodiscard]] core::Status close_listen_key(std::string& error);
@@ -91,8 +97,9 @@ public:
   [[nodiscard]] core::Status cancel(const Params& order, PlaceAck& ack, RequestError& refusal,
                                     bool& refused, std::string& error);
 
+  [[nodiscard]] std::int64_t now_ms() const; // local UTC milliseconds
+
 private:
-  [[nodiscard]] std::int64_t now_ms() const;
   [[nodiscard]] core::Status json_call(std::string_view method, std::string_view path,
                                        Params params, Security security, RestResponse& out,
                                        std::string& error);

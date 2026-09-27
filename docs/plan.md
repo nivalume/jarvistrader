@@ -128,18 +128,18 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [x] task: network — RFC 6455 客户端帧层：握手、仅出站掩码、分片重组、ping/pong/close（`ws_frame`、`WsClient`，含 TLS 回环测试与 `on_close` 内重连测试）
 - [x] task: network — HTTP/1.1 keep-alive 客户端（picohttpparser 解析响应与 chunked；`HttpsClient` 阻塞式，超时与一次重试）
 - [x] task: network — `Signer` 接口：HMAC-SHA256 与 Ed25519（`EVP_DigestSign`），密钥引用 `env:`、`file:`
-- [ ] task: network — 连接管理：24 小时计划重连、指数退避、`Health*` 事件
+- [ ] task: network — 连接管理：24 小时计划重连、指数退避、`Health*` 事件：WS API 与用户流会话已实现先建后拆的 24 小时轮换与退避重连；`Health*` 事件随 M4-E
 - [x] task: adapter — `Codec` concept 与 `JsonCodec`（simdjson on-demand，数值直接解析为定点，§13.3）：`jarvis/adapter/codec.hpp`、`jarvis/adapter/binance/json_codec.hpp`；只用有序字段查找（fuzz 发现无序查找回绕的未定义行为）
 - [x] task: adapter — 行情流解码：aggTrade → `TradeTick`、bookTicker → `QuoteTick`、markPrice → mark、index、funding，kline → `Bar`，forceOrder → `LiquidationOrder`（§14.2）；depth 帧解码为 `DepthDiff`，同步后产出 `OrderBookDeltas` 随 M4-C
 - [x] task: specs — `DepthSync.tla` 与映射头（`specs/tla/DepthSync.tla`、`specs/map/depth_sync_actions.hpp`；交易所簿抽象建模，含丢事件、断线与滞后快照）
 - [x] task: adapter — depth 同步状态机与快照请求的专用令牌桶（§14.3）：`DepthSync`、`DepthBooks`（共享 `risk::RateLimiter` 预算、轮流取用），REST 与 WS API 快照解码，每侧档位上限。2026-09-27 生产环境实测（`jarvis-capture depth-check`，快照经 WS API）：BTCUSDT 5 分钟 19 次、ETHUSDT 3 分钟 11 次独立重同步，与主簿在同一更新号的前 100 档全部相同，0 缺口、0 解码错误；加上每侧 2000 档上限后 BTCUSDT 再跑 3 分钟 11 次，同样全部相同（不设上限时 5 分钟内每侧增长到约 3300 档）
 - [x] task: adapter — `exchangeInfo` 加载 instrument，由 filters 生成 Gate B 规则（§14.6）：filters 落到 `InstrumentCommon` 字段，Gate B 规则直接读取；与 Python 目录映射对同一 testnet 夹具逐字段一致
-- [ ] task: adapter — 启动检查：持仓模式、杠杆与保证金模式、key 权限与 IP 白名单、服务器时间偏移
-- [ ] task: adapter — 用户数据流：listenKey 获取与每 30 分钟续期、`listenKeyExpired` 处理、事件解码、`TRADE_LITE` 与 `ORDER_TRADE_UPDATE` 合并（§8.3、§14.5）：事件解码、`OrderTracker`、Lite 成交与手续费补记（内核 `Oms::take_pending_commission`、`Portfolio::on_commission`）、余额表合并已完成；listenKey 生命周期随 WS/REST 客户端
-- [ ] task: adapter — WS API：`session.logon`（Ed25519）、`order.place`、`order.modify`、`order.cancel`、`order.status`，错误码映射（§8.2、§14.4）：请求构造与签名、应答解码（回执、错误码、`rateLimits`）已完成（`requests.hpp`）；会话与连接管理随 M4-D3
+- [x] task: adapter — 启动检查：持仓模式、杠杆与保证金模式、key 权限与 IP 白名单、服务器时间偏移：`run_startup_checks`（另含 exchangeInfo 与多资产模式；只读，一次列出全部问题），对脚本化 HTTPS 服务端测试
+- [x] task: adapter — 用户数据流：listenKey 获取与每 30 分钟续期、`listenKeyExpired` 处理、事件解码、`TRADE_LITE` 与 `ORDER_TRADE_UPDATE` 合并（§8.3、§14.5）：事件解码、`OrderTracker`、Lite 成交与手续费补记（内核 `Oms::take_pending_commission`、`Portfolio::on_commission`）、余额表合并；`UserStreamSession`（订阅确认后 live、断线重连、轮换重叠期按全文去重）与 `ListenKeyKeeper`（续期、失败或过期时重新申请）。把 `listenKeyExpired` 接到 keeper 随 M4-E 的运行时
+- [x] task: adapter — WS API：`session.logon`（Ed25519）、`order.place`、`order.modify`、`order.cancel`、`order.status`，错误码映射（§8.2、§14.4）：请求构造与签名、应答解码（`requests.hpp`），`WsApiSession`（登录、按 id 配对、确认/拒绝/未知三种结局、超时、断线重连、先建后拆的 24 小时轮换；`order.status` 等走通用 `request`），对 mock venue 测试；2026-09-27 对生产 `ws-fapi` 用 `jarvis-capture ws-api-probe` 验证应答格式
 - [x] task: adapter — REST 兜底下单与快照接口：`RestClient`（签名、时间偏移、listenKey、持仓模式与 positionRisk、depth 快照、下单改单撤单；4xx 带码为拒绝，5xx 与超时为结果未知），对脚本化 HTTPS 服务端测试
 - [ ] task: adapter — 权重与订单数令牌桶的 `RateLimitFeedback` 回灌，HTTP 429 退避与 418 处理（§14.7）：内核事件 `RateLimitFeedback` 与 `RateLimiter::feedback`、响应头与 `rateLimits` 解析、418 封禁期间快速失败已完成；把反馈接到内核随 M4-E 的运行时
-- [ ] task: adapter — 核对行情流在 `/public` 与 `/market` 路由间的归属及用户数据流连接地址，写入适配器配置（开放问题）：路由已于 2026-09-27 实测并写入 `jarvis/adapter/binance/streams.hpp`（`/stream` 只剩 `/public` 的流）；用户数据流地址随 M4-D
+- [x] task: adapter — 核对行情流在 `/public` 与 `/market` 路由间的归属及用户数据流连接地址，写入适配器配置（开放问题）：路由已于 2026-09-27 实测并写入 `jarvis/adapter/binance/streams.hpp`（`/stream` 只剩 `/public` 的流）；用户数据流为 `/private/stream` 加 `SUBSCRIBE` listenKey，取自 Binance 官方 SDK 17.5.0，没有账户无法在线验证，由 testnet 契约测试补上
 - [ ] task: live — md-io、ud-io、timer、admin、order-sender 线程，入站、出站与回执 SPSC 环（§7.1）
 - [ ] task: live — 原始帧录制与解码日志录制，`jarvis redecode`（§13.4）
 - [ ] task: live — `SandboxWiring`：`RingSource`、`SimulatedExchange`（真实定时器，触发写入日志）、`MonotonicClock`
