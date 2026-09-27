@@ -1222,6 +1222,11 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 - WS API 不可用时退回 REST 下单，同样签名，同样受令牌桶约束。
 - 每个命令先写入 WAL（`barrier` 模式下等待落盘）再发送；发出而未收到回执的命令组成 in-flight 集合，是对账的输入。
 - `timestamp` 与 `recvWindow`（默认 5000 毫秒）按服务器时间偏移校正；偏移与 `-5028`（超出撮合引擎 recvWindow）作为指标监控。
+- 实现（M4-D）：`jarvis/adapter/binance/requests.hpp` 不做 I/O，把内核命令变成请求参数，再变成签名的 REST 查询串或 WS API 请求；应答变成 `PlaceAck`、`RequestError` 与 `RateLimitFeedback`。
+  - 订单参数：post-only 限价单用 `GTX`；`newOrderRespType=ACK`，成交只从用户数据流得到；`order.modify` 需要 side，命令里没有，由调用方传入（`OrderTracker` 记录了每个订单的方向）；撤单按 client order id。
+  - 签名：REST 对实际发送的查询串签名（HMAC-SHA256 为十六进制，Ed25519 为 base64 再做百分号编码）；WS API 的 `session.logon` 对按名排序的 `k=v&...` 签名，logon 之后的请求不再签名。
+  - `RestClient`（`rest_client.hpp`）是阻塞式的，每个线程一个（启动线程、下单线程）。`sync_time` 以往返中点估计偏移，之后签名请求的 `timestamp` 用交易所时钟。
+  - REST 下单结果分三种：带回执的 `Ok`；带拒绝码的 `Ok`（HTTP 4xx 且有 `code`，交给 `OrderTracker::on_request_error` 产生 `OrderRejected` 等事件）；结果未知的 `IoError`（5xx、超时、无法解析），订单留在 in-flight 集合，由对账确定结局。5xx 不能当作拒绝：交易所可能已经接受了订单。
 
 ### 14.5 用户数据流
 
@@ -1246,6 +1251,12 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 ### 14.7 限速
 
 默认的自限速低于交易所上限：请求权重每分钟 2400、订单每 10 秒 300、每分钟 1200。具体数值取自配置，并由 `RateLimitFeedback` 事件校正（第 10.4 节）。HTTP 429 立即退避，418 进入 `Degraded`。
+
+实现（M4-D）：
+
+- REST 响应头 `X-MBX-USED-WEIGHT-<n><unit>` 与 `X-MBX-ORDER-COUNT-<n><unit>`、WS API 应答的 `rateLimits` 数组，都解析为 `RateLimitFeedback{kind, interval_ns, used, limit}`。
+- `ORDERS` 类交给内核：`RateLimiter::feedback` 把对应窗口的已用量抬高到交易所报告的值，只升不降，所以本地计数偏少时会被纠正，不会因为反馈把预算放宽。`REQUEST_WEIGHT` 由适配器自己的桶使用。
+- 429 带 `Retry-After`，调用方按它退避。418 表示 IP 被封：`RestClient` 在 `Retry-After`（缺省 120 秒）之前让所有调用立即以 `InvalidState` 失败，不再发出请求，避免封禁时间延长。
 
 ---
 

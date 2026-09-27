@@ -217,6 +217,8 @@ if(JARVIS_BUILD_LIVE)
     jarvis/adapter/binance/exchange_info.cpp
     jarvis/adapter/binance/json_codec.cpp
     jarvis/adapter/binance/order_tracker.cpp
+    jarvis/adapter/binance/requests.cpp
+    jarvis/adapter/binance/rest_client.cpp
     jarvis/adapter/binance/rest_codec.cpp
     jarvis/adapter/binance/streams.cpp
     jarvis/adapter/binance/user_stream.cpp

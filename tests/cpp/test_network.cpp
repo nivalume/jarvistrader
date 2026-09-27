@@ -36,11 +36,16 @@
 #include "jarvis/network/url.hpp"
 #include "jarvis/network/ws_client.hpp"
 #include "jarvis/network/ws_frame.hpp"
+#include "support/tls_test.hpp"
 
 namespace {
 
 namespace net = jarvis::network;
 using jarvis::core::Status;
+using jarvis::testsupport::header_value;
+using jarvis::testsupport::make_certificate;
+using jarvis::testsupport::read_head;
+using jarvis::testsupport::TempDir;
 
 std::vector<std::byte> bytes(std::initializer_list<unsigned> v) {
   std::vector<std::byte> out;
@@ -80,62 +85,6 @@ std::vector<std::byte> server_frame(unsigned first, std::string_view payload) {
   return out;
 }
 
-class TempDir {
-public:
-  TempDir() {
-    path_ = std::filesystem::temp_directory_path() /
-            ("jarvis-net-" + std::to_string(::getpid()) + "-" + std::to_string(counter_++));
-    std::filesystem::create_directories(path_);
-  }
-  ~TempDir() {
-    std::error_code ec;
-    std::filesystem::remove_all(path_, ec);
-  }
-  TempDir(const TempDir&) = delete;
-  TempDir& operator=(const TempDir&) = delete;
-  [[nodiscard]] std::string file(std::string_view name) const { return (path_ / name).string(); }
-
-private:
-  static inline int counter_ = 0;
-  std::filesystem::path path_;
-};
-
-// A self-signed certificate for localhost and 127.0.0.1 (its own CA).
-void make_certificate(const std::string& cert_path, const std::string& key_path) {
-  EVP_PKEY* key = EVP_EC_gen("P-256");
-  REQUIRE(key != nullptr);
-  X509* x = X509_new();
-  X509_set_version(x, 2);
-  ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
-  X509_gmtime_adj(X509_getm_notBefore(x), -60);
-  X509_gmtime_adj(X509_getm_notAfter(x), 3600);
-  X509_set_pubkey(x, key);
-  X509_NAME* name = X509_get_subject_name(x);
-  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                             reinterpret_cast<const unsigned char*>("localhost"), -1, -1,
-                             0); // NOLINT
-  X509_set_issuer_name(x, name);
-  X509V3_CTX ctx;
-  X509V3_set_ctx_nodb(&ctx);
-  X509V3_set_ctx(&ctx, x, x, nullptr, nullptr, 0);
-  for (const auto& [nid, value] : {std::pair{NID_subject_alt_name, "DNS:localhost,IP:127.0.0.1"},
-                                   std::pair{NID_basic_constraints, "critical,CA:TRUE"}}) {
-    X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx, nid, value);
-    REQUIRE(ext != nullptr);
-    X509_add_ext(x, ext, -1);
-    X509_EXTENSION_free(ext);
-  }
-  REQUIRE(X509_sign(x, key, EVP_sha256()) > 0);
-  BIO* cert = BIO_new_file(cert_path.c_str(), "w");
-  PEM_write_bio_X509(cert, x);
-  BIO_free(cert);
-  BIO* priv = BIO_new_file(key_path.c_str(), "w");
-  PEM_write_bio_PrivateKey(priv, key, nullptr, nullptr, 0, nullptr, nullptr);
-  BIO_free(priv);
-  X509_free(x);
-  EVP_PKEY_free(key);
-}
-
 // Reads one masked client frame from a blocking stream: opcode and unmasked payload.
 template <typename Stream> std::pair<unsigned, std::string> read_client_frame(Stream& s) {
   std::array<unsigned char, 2> head{};
@@ -162,25 +111,6 @@ template <typename Stream> std::pair<unsigned, std::string> read_client_frame(St
     payload[i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % 4]);
   }
   return {head[0] & 0x0FU, payload};
-}
-
-template <typename Stream> std::string read_head(Stream& s) {
-  std::string head;
-  char c = 0;
-  while (head.find("\r\n\r\n") == std::string::npos) {
-    asio::read(s, asio::buffer(&c, 1));
-    head += c;
-  }
-  return head;
-}
-
-std::string header_value(const std::string& head, std::string_view name) {
-  const std::size_t at = head.find(std::string{name} + ": ");
-  if (at == std::string::npos) {
-    return {};
-  }
-  const std::size_t start = at + name.size() + 2;
-  return head.substr(start, head.find("\r\n", start) - start);
 }
 
 } // namespace

@@ -121,8 +121,9 @@ endif()
 
 if(TARGET jarvis_adapter)
   jarvis_add_layer_test(adapter SOURCES cpp/test_binance_adapter.cpp cpp/test_depth_sync.cpp
-                        cpp/test_order_tracker.cpp
-                        SUITES unit golden property LIBS jarvis::adapter jarvis::shell jarvis::testkit)
+                        cpp/test_order_tracker.cpp cpp/test_binance_requests.cpp
+                        SUITES unit golden property
+                        LIBS jarvis::adapter jarvis::shell jarvis::testkit jarvis_asio)
   target_compile_definitions(test_adapter PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()
 
