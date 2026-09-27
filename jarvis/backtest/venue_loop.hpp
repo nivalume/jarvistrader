@@ -213,7 +213,7 @@ public:
     if (!core::ok(s)) {
       return s;
     }
-    if (lookahead_) {
+    if (lookahead_ && !data_blocked()) {
       out = lookahead_key_.ts;
     }
     if (!commands_.empty() && (!out || commands_.front().at < *out)) {
@@ -241,8 +241,8 @@ public:
     if (!core::ok(s)) {
       return s;
     }
-    const bool take_data =
-        lookahead_ && (commands_.empty() || !(commands_.front().at < lookahead_key_.ts));
+    const bool take_data = lookahead_ && !data_blocked() &&
+                           (commands_.empty() || !(commands_.front().at < lookahead_key_.ts));
     if (take_data) {
       return process_data();
     }
@@ -318,6 +318,12 @@ public:
   }
 
 private:
+  // With a live feed one market data event is in flight at a time: the venue sees the next one
+  // after the node has stepped this one. A burst of arrivals (a backlog after a slow callback)
+  // then waits in the live source instead of overrunning the queues and the delta pool; with
+  // no feed delay the order the node and the venue see the data in is the same either way.
+  [[nodiscard]] bool data_blocked() const noexcept { return config_.live_feed && !data_.empty(); }
+
   struct Delayed {
     core::EventKey key;
     model::Event event;

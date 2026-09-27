@@ -286,6 +286,10 @@ Status venue_loop_config(const NodeConfig& config, const strategy::KernelConfig&
   }
   c.instruments = kernel.instruments;
   c.strategies = kernel.strategies;
+  // The venue's books hold what the kernel's hold: a live depth feed keeps levels far from the
+  // touch (up to 2000 per side), which the smaller defaults cannot.
+  c.book_levels = kernel.book_window_levels;
+  c.book_overflow_levels = kernel.book_overflow_levels;
   c.orders = kernel.trading.orders;
   c.margin = kernel.trading.margin;
   c.account_id = kernel.trading.account_id;

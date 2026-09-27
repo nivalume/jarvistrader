@@ -512,6 +512,32 @@ check_margin = false
     CHECK(has_error(errors, "risk.price_band_bps", ""));
   }
 
+  TEST_CASE("the simulated venue's books hold what the kernel's hold") {
+    // A live depth feed keeps up to 2000 levels per side, many far from the touch; the venue
+    // must accept every book update the kernel accepts (a sandbox run once stopped on it).
+    node::NodeConfig c;
+    REQUIRE(parse(R"toml(
+[node]
+id = "mm01"
+
+[[venues]]
+id = "binance_usdm"
+kind = "binance_usdm"
+
+[venues.sim]
+fill_model = "queue_position"
+)toml",
+                  c)
+                .empty());
+    const jarvis::strategy::KernelConfig k = node::kernel_config(c);
+    jarvis::backtest::VenueLoopConfig vc;
+    std::string error;
+    REQUIRE(node::venue_loop_config(c, k, vc, error) == Status::Ok);
+    CHECK(vc.sim.book_levels == k.book_window_levels);
+    CHECK(vc.sim.book_overflow_levels == k.book_overflow_levels);
+    CHECK(vc.sim.book_overflow_levels >= 2000);
+  }
+
   TEST_CASE("configuration errors name the path and line of every problem") {
     node::NodeConfig c;
     const auto errors = parse(R"toml(

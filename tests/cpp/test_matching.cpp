@@ -156,6 +156,7 @@ struct Venue {
     c.instruments = 4;
     c.orders = 64;
     c.book_levels = 1024;
+    c.book_overflow_levels = 256;
     REQUIRE(jarvis::cost::MakerTakerFees::schedule("binance_usdm_vip0", c.fees) == Status::Ok);
     return c;
   }
@@ -797,5 +798,81 @@ TEST_SUITE("unit") {
             m::LifecycleReason::Drained);
       CHECK(std::holds_alternative<m::BatchEnd>(inputs.back().event));
     }
+  }
+}
+
+TEST_SUITE("unit") {
+  TEST_CASE("a burst of arrivals larger than the venue queues does not overrun them") {
+    // 300 quotes arrive at once (a backlog after a slow callback) with room for 64 in flight.
+    std::vector<Keyed> burst;
+    for (std::uint64_t i = 0; i < 300; ++i) {
+      burst.push_back(
+          {EventKey{UnixNanos{1000}, 1, i + 1},
+           quote(1000, i % 2 == 0 ? "100.0" : "100.1", i % 2 == 0 ? "100.1" : "100.2")});
+    }
+    VenueRun out;
+    PushSource source;
+    bt::VenueLoopConfig vc;
+    vc.sim = Venue::config(bt::FillModel::TopOfBook, bt::StpMode::None);
+    vc.out_ns = 1000;
+    vc.in_ns = 500;
+    vc.pending = 64;
+    vc.commands = 64;
+    vc.delta_pool = 256;
+    vc.live_feed = true;
+    bt::VenueLoop<PushSource> loop{vc, source};
+    REQUIRE(loop.exchange().on_data(m::Event{perpetual()}, UnixNanos{0}) == Status::Ok);
+    st::KernelConfig kc;
+    kc.instruments = 4;
+    kc.strategies = 2;
+    kc.trading.risk.orders_per_10s = 0;
+    kc.trading.risk.orders_per_minute = 0;
+    st::StaticStrategySet<Buyer> set{Buyer{&out.log}};
+    jarvis::engine::Engine engine{kc, set};
+    const std::array<m::Event, 1> preamble = {m::Event{perpetual()}};
+    bt::DriverOptions options;
+    options.preamble = preamble;
+    bt::Driver driver{engine, loop, out.recorder, options};
+    FakePump pump{burst, source, 1000, 4000};
+    REQUIRE(driver.run_realtime(pump, out.summary) == Status::Ok);
+    CHECK(out.summary.data_events == 300);
+    CHECK(out.summary.venue_answers >= 2); // the market buy: accepted, filled
+  }
+}
+
+TEST_SUITE("unit") {
+  TEST_CASE("the simulated exchange takes a deep book spread far from the touch") {
+    // 2000 levels per side a hundred ticks apart, as a live depth snapshot can hold: most lie
+    // outside the window and must fit the overflow the kernel's books have.
+    bt::SimConfig c = Venue::config(bt::FillModel::QueuePosition, bt::StpMode::None);
+    c.book_levels = 16384;
+    c.book_overflow_levels = 4096;
+    bt::SimulatedExchange sim{c};
+    REQUIRE(sim.on_data(m::Event{perpetual()}, UnixNanos{1}) == Status::Ok);
+    std::vector<m::OrderBookDelta> deltas;
+    for (int side = 0; side < 2; ++side) {
+      for (std::int64_t i = 0; i < 2000; ++i) {
+        m::OrderBookDelta d;
+        d.action = m::BookAction::Add;
+        const std::int64_t tenths = side == 0 ? 1'000'000 - i * 100 : 1'000'001 + i * 100;
+        REQUIRE(m::Price::from_raw(tenths * 100'000'000, 1, d.order.price) == Status::Ok);
+        REQUIRE(m::Quantity::from_raw(1'000'000'000, 3, d.order.size) == Status::Ok);
+        d.order.side = side == 0 ? m::OrderSide::Buy : m::OrderSide::Sell;
+        d.flags = m::flag_bit(m::RecordFlag::F_SNAPSHOT);
+        deltas.push_back(d);
+      }
+    }
+    deltas.back().flags |= m::flag_bit(m::RecordFlag::F_LAST);
+    m::OrderBookDeltas book;
+    book.instrument_id = btc();
+    book.deltas = deltas;
+    CHECK(sim.on_data(m::Event{book}, UnixNanos{2}) == Status::Ok);
+    // The old default overflow (a quarter of the window) cannot hold it.
+    bt::SimConfig small = c;
+    small.book_levels = 4096;
+    small.book_overflow_levels = 1024;
+    bt::SimulatedExchange tight{small};
+    REQUIRE(tight.on_data(m::Event{perpetual()}, UnixNanos{1}) == Status::Ok);
+    CHECK(tight.on_data(m::Event{book}, UnixNanos{2}) == Status::CapacityExceeded);
   }
 }

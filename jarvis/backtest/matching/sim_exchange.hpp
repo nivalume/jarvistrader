@@ -66,10 +66,11 @@ struct SimConfig {
   cost::MakerTakerFees fees; // zero unless set
   std::uint32_t instruments = 64;
   std::uint32_t strategies = 8;
-  std::uint32_t orders = 4096;      // resting orders
-  std::uint32_t book_levels = 4096; // L2 window per instrument
-  std::uint32_t walk_levels = 64;   // levels one taker order may consume
-  std::uint32_t events = 4096;      // venue events per call
+  std::uint32_t orders = 4096;               // resting orders
+  std::uint32_t book_levels = 4096;          // L2 window per instrument, in ticks
+  std::uint32_t book_overflow_levels = 1024; // L2 levels per side outside the window
+  std::uint32_t walk_levels = 64;            // levels one taker order may consume
+  std::uint32_t events = 4096;               // venue events per call
   portfolio::Margin margin = portfolio::StandardMargin{};
   model::AccountId account_id;
   model::TraderId trader_id;
@@ -333,7 +334,7 @@ private:
       bc.tick = model::common(m.instrument).price_increment;
       bc.size_precision = model::common(m.instrument).size_precision;
       bc.window_levels = config_.book_levels;
-      bc.overflow_levels = config_.book_levels / 4;
+      bc.overflow_levels = config_.book_overflow_levels;
       m.book.emplace(bc);
     }
     for (const model::OrderBookDelta& delta : d.deltas) {
