@@ -755,6 +755,7 @@ nb::dict summary_dict(const node::BacktestResult& r) {
   d["batches"] = s.batches;
   d["timers"] = s.timers;
   d["strategy_errors"] = s.strategy_errors;
+  d["venue_answers"] = s.venue_answers;
   d["halted"] = s.halted;
   d["state"] = std::string{m::to_string(s.state)};
   d["first_ts"] = s.first_ts.value();

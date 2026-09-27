@@ -53,6 +53,7 @@ class RunResult:
     batches: int
     timers: int
     strategy_errors: int
+    venue_answers: int  # order events from the simulated venue ([venues.sim])
     halted: bool
     state: str
     first_ts: int
@@ -68,7 +69,8 @@ class RunResult:
         lines = [
             f"run: {self.directory or '(not recorded)'}",
             f"inputs: {self.inputs} (data {self.data_events}, batches {self.batches}, "
-            f"timers {self.timers}, strategy errors {self.strategy_errors})",
+            f"timers {self.timers}, strategy errors {self.strategy_errors}, "
+            f"venue answers {self.venue_answers})",
             f"outputs: {self.outputs}",
             f"skipped: {self.skipped}",
             f"state: {self.state}" + (" (halted by a strategy error)" if self.halted else ""),

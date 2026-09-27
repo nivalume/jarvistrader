@@ -26,6 +26,7 @@ enum class AccountMode : std::uint8_t { OneWay, Hedge };
 enum class OmsKind : std::uint8_t { Netting, Hedging };
 enum class Endpoint : std::uint8_t { Prod, Testnet };
 enum class FillModel : std::uint8_t { TopOfBook, QueuePosition };
+enum class SelfTradePrevention : std::uint8_t { None, ExpireTaker, ExpireMaker, ExpireBoth };
 enum class Codec : std::uint8_t { Json, Sbe };
 enum class OnStrategyError : std::uint8_t { HaltStrategy, HaltNode, Ignore };
 enum class PersistenceMode : std::uint8_t { None, Async, Barrier };
@@ -75,7 +76,9 @@ struct Latency {
 struct SimSection {
   FillModel fill_model = FillModel::TopOfBook;
   Latency latency;
-  std::string fee_schedule;
+  std::string fee_schedule;           // empty: binance_usdm_vip0
+  std::vector<model::Money> balances; // the simulated account's starting balances
+  SelfTradePrevention stp = SelfTradePrevention::None;
 };
 
 struct VenueConfig {

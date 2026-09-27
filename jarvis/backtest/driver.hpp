@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <variant>
 
 #include "jarvis/core/clock.hpp"
@@ -25,6 +26,12 @@
 //   - strategy failures: each one the engine reports becomes a StrategyError input right after
 //     the step that caused it. A failure inside on_error itself is not converted again.
 //
+// With a venue loop as the source (VenueLoop, section 12.2), the driver also runs the simulated
+// venue: it always processes the earliest of the next venue-side event (market data the venue
+// matches on, a command arriving), the next timer and the next kernel input (delayed market
+// data, a venue answer), in that order on a tie, and hands the commands of every step to the
+// venue loop.
+//
 // Every input the driver steps is recorded first, with the key (ts, source_id, seq): seq is the
 // driver's own counter from 1, source_id is the data source's id, or kKernelSource for the
 // inputs the driver synthesises. The engine's outputs follow their input. The recording is
@@ -34,8 +41,22 @@
 namespace jarvis::backtest {
 
 inline constexpr std::uint16_t kKernelSource = 0;
+// source_id of the simulated venue's answers (the same value as backtest::kVenueSource).
+inline constexpr std::uint16_t kVenueSourceId = 0xFFFE;
 
 // Receives every input before it is stepped (`record`) and every output after (`emit`).
+// A source that also runs a simulated venue (VenueLoop).
+template <typename S>
+concept VenueSource =
+    requires(S& s, std::optional<core::UnixNanos>& t, core::EventKey& key, model::Event& event,
+             core::UnixNanos now, std::span<const model::Output> outputs) {
+      { s.next_venue_time(t) } -> std::same_as<core::Status>;
+      { s.next_input_time() } -> std::same_as<std::optional<core::UnixNanos>>;
+      { s.process_venue() } -> std::same_as<core::Status>;
+      { s.pop_input(key, event) } -> std::same_as<bool>;
+      { s.on_outputs(now, outputs) } -> std::same_as<core::Status>;
+    };
+
 template <typename R>
 concept Recorder =
     engine::CommandSink<R> && requires(R& r, const core::EventKey& key, const model::Event& event) {
@@ -46,6 +67,9 @@ struct DriverOptions {
   std::optional<core::UnixNanos> start; // data before start is skipped
   std::optional<core::UnixNanos> end;   // data at or after end is not stepped; timers due
                                         // before end still fire
+  // Inputs stepped while the node is Syncing (instrument definitions, the account snapshot):
+  // what reconciliation provides in live, before strategies start.
+  std::span<const model::Event> preamble;
 };
 
 struct RunSummary {
@@ -56,13 +80,16 @@ struct RunSummary {
   std::uint64_t batches = 0;
   std::uint64_t timers = 0;
   std::uint64_t strategy_errors = 0;
-  bool halted = false; // a strategy error stopped the node (ErrorPolicy::HaltNode)
+  std::uint64_t venue_answers = 0; // order events from the simulated venue
+  bool halted = false;             // a strategy error stopped the node (ErrorPolicy::HaltNode)
   model::NodeState state = model::NodeState::Init;
   core::UnixNanos first_ts;
   core::UnixNanos last_ts;
 };
 
-template <strategy::StrategySet SS, engine::EventSource Source, Recorder Rec> class Driver {
+template <strategy::StrategySet SS, typename Source, Recorder Rec>
+  requires engine::EventSource<Source> || VenueSource<Source>
+class Driver {
 public:
   Driver(engine::Engine<SS>& engine, Source& source, Rec& recorder, DriverOptions options = {})
       : engine_{&engine}, source_{&source}, recorder_{&recorder}, options_{options},
@@ -70,41 +97,14 @@ public:
 
   [[nodiscard]] core::Status run(RunSummary& out) {
     summary_ = RunSummary{};
-    core::EventKey key;
-    model::Event event;
-    core::Status s = next_data(key, event);
-    bool have = core::ok(s);
-    if (!have && s != core::Status::EndOfStream) {
+    core::Status s = core::Status::Ok;
+    if constexpr (VenueSource<Source>) {
+      s = run_venue();
+    } else {
+      s = run_plain();
+    }
+    if (!core::ok(s)) {
       return s;
-    }
-    const core::UnixNanos ts0 = options_.start.value_or(have ? key.ts : core::UnixNanos{});
-    summary_.first_ts = ts0;
-    for (const auto reason :
-         {model::LifecycleReason::Configured, model::LifecycleReason::RunRequested,
-          model::LifecycleReason::Started, model::LifecycleReason::Synced}) {
-      s = transition(reason, ts0);
-      if (!core::ok(s)) {
-        return s;
-      }
-    }
-    while (have && !engine_->halt_requested()) {
-      s = fire_timers(key.ts, true);
-      if (!core::ok(s)) {
-        return s;
-      }
-      if (engine_->halt_requested()) {
-        break;
-      }
-      s = feed(key, event);
-      if (!core::ok(s)) {
-        return s;
-      }
-      ++summary_.data_events;
-      s = next_data(key, event);
-      have = core::ok(s);
-      if (!have && s != core::Status::EndOfStream) {
-        return s;
-      }
     }
     summary_.halted = engine_->halt_requested();
     if (!summary_.halted && options_.end) {
@@ -136,6 +136,108 @@ public:
   }
 
 private:
+  // Init -> Running at ts0, with the preamble stepped while Syncing.
+  core::Status start(core::UnixNanos ts0) {
+    summary_.first_ts = ts0;
+    for (const auto reason :
+         {model::LifecycleReason::Configured, model::LifecycleReason::RunRequested,
+          model::LifecycleReason::Started}) {
+      const core::Status s = transition(reason, ts0);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    for (const model::Event& e : options_.preamble) {
+      const core::Status s = feed(core::EventKey{ts0, kKernelSource, 0}, e);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    return transition(model::LifecycleReason::Synced, ts0);
+  }
+
+  core::Status run_plain() {
+    core::EventKey key;
+    model::Event event;
+    core::Status s = next_data(key, event);
+    bool have = core::ok(s);
+    if (!have && s != core::Status::EndOfStream) {
+      return s;
+    }
+    s = start(options_.start.value_or(have ? key.ts : core::UnixNanos{}));
+    if (!core::ok(s)) {
+      return s;
+    }
+    while (have && !engine_->halt_requested()) {
+      s = fire_timers(key.ts, true);
+      if (!core::ok(s)) {
+        return s;
+      }
+      if (engine_->halt_requested()) {
+        break;
+      }
+      s = feed(key, event);
+      if (!core::ok(s)) {
+        return s;
+      }
+      ++summary_.data_events;
+      s = next_data(key, event);
+      have = core::ok(s);
+      if (!have && s != core::Status::EndOfStream) {
+        return s;
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  // The earliest of venue side, timer and kernel input, in that order on a tie.
+  core::Status run_venue() {
+    std::optional<core::UnixNanos> venue;
+    core::Status s = source_->next_venue_time(venue);
+    if (!core::ok(s)) {
+      return s;
+    }
+    s = start(options_.start.value_or(venue.value_or(core::UnixNanos{})));
+    if (!core::ok(s)) {
+      return s;
+    }
+    while (!engine_->halt_requested()) {
+      s = source_->next_venue_time(venue);
+      if (!core::ok(s)) {
+        return s;
+      }
+      const std::optional<core::UnixNanos> input = source_->next_input_time();
+      if (!venue && !input) {
+        break; // timers after the last event fire up to data.range's end, as without a venue
+      }
+      s = advance(venue, input);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  // One venue-mode move: the venue side, a timer or a kernel input, whichever is earliest.
+  core::Status advance(const std::optional<core::UnixNanos>& venue,
+                       const std::optional<core::UnixNanos>& input) {
+    core::FiredTimer due;
+    const bool timer = engine_->next_timer(due);
+    if (venue && (!timer || !(due.deadline < *venue)) && (!input || !(*input < *venue))) {
+      return source_->process_venue();
+    }
+    if (timer && (!input || !(*input < due.deadline))) {
+      return fire_timers(due.deadline, true);
+    }
+    core::EventKey key;
+    model::Event event;
+    if (!source_->pop_input(key, event)) {
+      return core::Status::Ok;
+    }
+    (key.source_id == kVenueSourceId ? summary_.venue_answers : summary_.data_events) += 1;
+    return feed(key, event);
+  }
+
   // The next data event inside [start, end); EndOfStream past the end.
   core::Status next_data(core::EventKey& key, model::Event& event) {
     while (true) {
@@ -214,6 +316,12 @@ private:
     s = engine_->step(key, event);
     if (!core::ok(s)) {
       return s;
+    }
+    if constexpr (VenueSource<Source>) {
+      s = source_->on_outputs(key.ts, engine_->outputs());
+      if (!core::ok(s)) {
+        return s;
+      }
     }
     summary_.outputs += engine_->outputs().size();
     s = engine_->flush_outputs(*recorder_);

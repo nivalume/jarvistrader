@@ -5,6 +5,10 @@
 //                            and its rejection, alternately, so the order returns to ACCEPTED)
 //   risk/gate_a              the Gate A rules on one limit order
 //   risk/gate_b              the Gate B rules on the same order (without the rate limit)
+//   sim/match_top_of_book    SimulatedExchange::on_data of a quote with 20 resting orders on
+//                            the book (none crossed), top-of-book fill model
+//   sim/match_queue_position the same with the queue-position model, alternating quotes and
+//                            trades at a resting price (the queue ahead shrinks, never to zero)
 //   step/quote_to_command    Engine::step of a quote whose callback submits a limit order through
 //                            both gates into the OMS (a SubmitOrder output), followed by the
 //                            venue's OrderRejected that closes it, so the OMS stays at steady
@@ -17,6 +21,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include "jarvis/backtest/matching/sim_exchange.hpp"
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/execution/execution_engine.hpp"
@@ -141,6 +146,50 @@ void gate_b(benchmark::State& state) {
   }
 }
 
+template <jarvis::backtest::FillModel Model> void match(benchmark::State& state) {
+  jarvis::backtest::SimConfig config;
+  config.fill_model = Model;
+  config.instruments = 4;
+  config.orders = 64;
+  jarvis::backtest::SimulatedExchange sim{config};
+  static_cast<void>(sim.on_data(m::Event{perpetual()}, UnixNanos{1}));
+  m::QuoteTick quote;
+  quote.instrument_id = btc();
+  quote.bid_price = px(649'990);
+  quote.ask_price = px(650'000);
+  quote.bid_size = qty(1'000'000); // 1000 BTC at the touch: the queue never empties
+  quote.ask_size = qty(1'000'000);
+  static_cast<void>(sim.on_data(m::Event{quote}, UnixNanos{2}));
+  for (int i = 0; i < 10; ++i) {
+    for (const m::OrderSide side : {m::OrderSide::Buy, m::OrderSide::Sell}) {
+      m::SubmitOrder s;
+      static_cast<void>(m::ClientOrderId::from(std::string{side == m::OrderSide::Buy ? "b" : "s"} +
+                                                   std::to_string(i),
+                                               s.client_order_id));
+      s.instrument_id = btc();
+      s.order_side = side;
+      s.quantity = qty(10);
+      s.price = side == m::OrderSide::Buy ? px(649'990 - i) : px(650'000 + i);
+      static_cast<void>(sim.on_command(m::Output{s}, UnixNanos{3}));
+    }
+  }
+  m::TradeTick trade;
+  trade.instrument_id = btc();
+  trade.price = px(649'990);
+  trade.size = qty(1);
+  trade.aggressor_side = m::AggressorSide::Sell;
+  const std::array<m::Event, 2> events = {m::Event{quote}, m::Event{trade}};
+  std::uint64_t ts = 10;
+  std::size_t i = 0;
+  for ([[maybe_unused]] auto _ : state) {
+    sim.clear_events();
+    const m::Event& e =
+        Model == jarvis::backtest::FillModel::QueuePosition ? events[i++ & 1U] : events[0];
+    Status s = sim.on_data(e, UnixNanos{++ts});
+    benchmark::DoNotOptimize(s);
+  }
+}
+
 struct Quoter {
   m::ClientOrderId* last = nullptr;
   static Status on_start(st::Context& ctx) { return ctx.subscribe_quotes(btc()); }
@@ -190,4 +239,6 @@ void quote_to_command(benchmark::State& state) {
 BENCHMARK(apply_order_event)->Name("oms/apply_order_event");
 BENCHMARK(gate_a)->Name("risk/gate_a");
 BENCHMARK(gate_b)->Name("risk/gate_b");
+BENCHMARK(match<jarvis::backtest::FillModel::TopOfBook>)->Name("sim/match_top_of_book");
+BENCHMARK(match<jarvis::backtest::FillModel::QueuePosition>)->Name("sim/match_queue_position");
 BENCHMARK(quote_to_command)->Name("step/quote_to_command");

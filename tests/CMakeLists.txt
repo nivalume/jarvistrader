@@ -56,6 +56,7 @@ jarvis_add_layer_test(risk SOURCES cpp/test_risk.cpp SUITES unit property LIBS j
 jarvis_add_layer_test(engine SOURCES cpp/test_engine.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(execution SOURCES cpp/test_execution.cpp SUITES unit property conformance LIBS jarvis::kernel)
 target_compile_definitions(test_execution PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+jarvis_add_layer_test(matching SOURCES cpp/test_matching.cpp SUITES unit property LIBS jarvis::kernel)
 jarvis_add_layer_test(backtest SOURCES cpp/test_backtest.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(node SOURCES cpp/test_node.cpp SUITES unit property LIBS jarvis::shell)
 target_compile_definitions(test_node PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

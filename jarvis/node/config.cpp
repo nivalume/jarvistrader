@@ -46,6 +46,11 @@ constexpr std::array<EnumName<Endpoint>, 2> kEndpointNames{
     {{"prod", Endpoint::Prod}, {"testnet", Endpoint::Testnet}}};
 constexpr std::array<EnumName<FillModel>, 2> kFillModelNames{
     {{"top_of_book", FillModel::TopOfBook}, {"queue_position", FillModel::QueuePosition}}};
+constexpr std::array<EnumName<SelfTradePrevention>, 4> kStpNames{
+    {{"none", SelfTradePrevention::None},
+     {"expire_taker", SelfTradePrevention::ExpireTaker},
+     {"expire_maker", SelfTradePrevention::ExpireMaker},
+     {"expire_both", SelfTradePrevention::ExpireBoth}}};
 constexpr std::array<EnumName<Codec>, 2> kCodecNames{{{"json", Codec::Json}, {"sbe", Codec::Sbe}}};
 constexpr std::array<EnumName<OnStrategyError>, 3> kOnErrorNames{
     {{"halt_strategy", OnStrategyError::HaltStrategy},
@@ -241,6 +246,22 @@ public:
     }
   }
 
+  void moneys(std::string_view key, std::vector<m::Money>& out) {
+    std::vector<std::string> texts;
+    const toml::node* node = table_->get(key);
+    strings(key, texts);
+    out.clear();
+    for (std::size_t i = 0; i < texts.size(); ++i) {
+      m::Money value;
+      if (core::ok(m::Money::parse(texts[i], value))) {
+        out.push_back(value);
+      } else {
+        errors_->add(index_path(path_of(key), i), node,
+                     "not an amount (expected \"<decimal> <CURRENCY>\"): " + texts[i]);
+      }
+    }
+  }
+
   void instrument_ids(std::string_view key, std::vector<m::InstrumentId>& out) {
     std::vector<std::string> texts;
     const toml::node* node = table_->get(key);
@@ -425,6 +446,8 @@ void read_sim(const toml::table& t, const std::string& path, Errors& errors, Sim
     fr.string("schedule", sim.fee_schedule);
     fr.finish();
   }
+  r.moneys("balances", sim.balances);
+  r.enumeration("stp", sim.stp, kStpNames);
   r.finish();
 }
 
@@ -845,6 +868,15 @@ void canon_venue(Canon& c, const VenueConfig& v, const std::string& p) {
   c.num(p + ".sim.latency.in_ns", v.sim->latency.in_ns);
   c.num(p + ".sim.latency.jitter_ns", v.sim->latency.jitter_ns);
   c.str(p + ".sim.fee.schedule", v.sim->fee_schedule);
+  std::vector<std::string> balances;
+  for (const m::Money& b : v.sim->balances) {
+    std::array<char, m::kMaxMoneyText> buffer{};
+    std::size_t n = 0;
+    static_cast<void>(b.format(buffer, n));
+    balances.emplace_back(buffer.data(), n);
+  }
+  c.strs(p + ".sim.balances", balances);
+  c.str(p + ".sim.stp", name_of(kStpNames, v.sim->stp));
 }
 
 void canon_strategy(Canon& c, const StrategyConfig& s, const std::string& p) {

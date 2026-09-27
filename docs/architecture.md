@@ -225,6 +225,8 @@ leverage = 20                     # 初始保证金 = 名义 / 杠杆；省略�
 fill_model = "queue_position"     # queue_position | top_of_book
 latency = { feed_ns = 800000, out_ns = 1500000, in_ns = 1500000, jitter_ns = 300000 }
 fee = { schedule = "binance_usdm_vip0" }
+balances = ["10000 USDT"]         # 模拟账户的初始余额
+stp = "none"                      # none | expire_taker | expire_maker | expire_both
 
 [[strategies]]
 id = "mm-001"
@@ -1036,6 +1038,21 @@ Binance 的 `priceMatch` 参数（交易所侧按对手价或队列价定价）�
 `TradeTick` 是 `QueuePosition` 的必需输入，这也是 v1.0 要求 trade tick 全链路的原因之一。
 
 撮合器还实现：`GTX` 会吃单时拒单（对应实盘的 `-5022`）、`IOC` / `FOK` 余量过期、STP 的 `EXPIRE_TAKER / EXPIRE_MAKER / EXPIRE_BOTH`、按 `FeeModel` 计算手续费、按资金费率在结算时刻产生资金费。强平模拟在 v1.x 提供。
+
+### 12.5 实现
+
+撮合器位于 `jarvis/backtest/matching/sim_exchange.hpp`，时间线位于 `jarvis/backtest/venue_loop.hpp`，由驱动器的 venue 模式运行（配置了 `[venues.sim]` 时启用）。
+
+- 市场状态：每个 instrument 一份来自 quote 的最优价，以及收到增量后的 L2 簿（此后以 L2 为准）。我们的订单不进入这本簿，只与它撮合。
+- 吃单：到达时即可成交的订单按最优档依次吃对手方：L2 下吃到限价为止，只有 quote 时吃最优档且以其数量为上限。`IOC` 与市价单的余量过期，`FOK` 不能全部成交则直接过期（不先回 `ACCEPTED`），`GTC`、`GTD` 的余量挂单。
+- 挂单成交，一律按自己的价格：`TopOfBookCross` 在对手最优价到达其价格（以该档数量为上限）或成交价穿过其价格（以成交量为上限）时成交；`QueuePosition` 另外在同价位前方排队量耗尽后以剩余成交量成交。只有 quote 时，同价位数量减少按比例扣减前方量，最优价离开该价位则前方量归零。
+- 回报按 Binance 的顺序：新单先 `ACCEPTED` 再 `FILLED`；`IOC` 余量 `EXPIRED`；改单回 `UPDATED`，价格改变或数量增加失去队列位置；撤不存在的单回 `CANCEL_REJECTED`（`-2011`），改不存在的单回 `MODIFY_REJECTED`（`-2013`）；reduce-only 不能减仓则 `REJECTED`（`-2022`）；没有行情的市价单 `REJECTED`。
+- venue 有自己的账户（一个 `Portfolio`）：reduce-only 检查与快照查询（未完成订单、仓位、余额）读它。
+- 三条通道（行情、WS API、用户数据流）各自是 FIFO：延迟取自 `JitteredLatency`，同一通道上后发的消息不会超车。行情在 venue 时间撮合，内核在 `+ L_feed` 后看到它，事件的 `ts_init` 改写为该时刻；延迟的 `OrderBookDeltas` 把增量拷贝进环形池。venue 回报在日志中的 `source_id` 为 `0xFFFE`。
+- 驱动器每次处理最早的一件事：venue 侧（行情、命令到达）、定时器、内核输入（延迟的行情、venue 回报），同时刻按这个顺序；每一步产生的命令交给时间线排入出站通道。
+- 回放只读运行日志：venue 回报与延迟后的行情都是记录的输入，回放时不运行撮合器。
+- 启动时（`Syncing` 期间）驱动器先注入前导输入：目录中 `{catalog}/{instrument}/instrument/{day}/` 的 instrument 定义（`data.range` 起点之前最近的一天），以及 `[venues.sim] balances` 生成的 `AccountState`。
+- `SimulatedExchange` 满足 `VenueClient` concept（接收命令、给出订单事件），实盘适配器（M4）满足同一契约。
 
 ### 12.4 数据来源与局限
 
