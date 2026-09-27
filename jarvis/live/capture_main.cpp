@@ -6,20 +6,26 @@
 //   jarvis-capture dump FILE [--jsonl | --timed] [--conn N] [--limit N]
 //
 //   jarvis-capture decode FILE --exchange-info JSON [--symbols A,B]
+//   jarvis-capture depth-check --exchange-info JSON --symbols SYMBOL --seconds N
 //
 // `record` reconnects with backoff until the time is up. `dump --jsonl` prints the text
 // messages one per line; `--timed` prefixes each with its arrival time ("<recv_ns> <json>"),
 // the form the codec fixtures are stored in. `decode` runs the USDⓈ-M JSON codec over a
 // capture with instruments from a saved exchangeInfo and reports what it produced; it exits 1
-// if any message fails to decode.
+// if any message fails to decode. `depth-check` syncs the production depth stream with snapshots
+// from the WebSocket API and, every 15 seconds, syncs a second book from a fresh snapshot on
+// the same stream; when both reach the same update id their top 100 levels per side must be
+// equal. It exits 1 on any mismatch or if no comparison was made.
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,8 +35,10 @@
 #include <string_view>
 #include <vector>
 
+#include "jarvis/adapter/binance/depth_sync.hpp"
 #include "jarvis/adapter/binance/exchange_info.hpp"
 #include "jarvis/adapter/binance/json_codec.hpp"
+#include "jarvis/adapter/binance/rest_codec.hpp"
 #include "jarvis/adapter/codec.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/raw_frames.hpp"
@@ -401,13 +409,224 @@ int decode(const Options& o) {
   return codec.stats().errors == 0 && codec.stats().unsupported == 0 ? 0 : 1;
 }
 
+// ---- depth-check ---------------------------------------------------------------------------
+
+namespace binance = jarvis::adapter::binance;
+
+class NullEmitter final : public jarvis::adapter::EventEmitter {
+public:
+  Status event(const jarvis::model::Event& /*e*/) override {
+    ++batches;
+    return Status::Ok;
+  }
+  Status depth(const jarvis::adapter::DepthDiff& /*d*/) override { return Status::Ok; }
+  std::uint64_t batches = 0;
+};
+
+template <typename Map> bool same_top(const Map& a, const Map& b, std::size_t levels) {
+  auto x = a.begin();
+  auto y = b.begin();
+  for (std::size_t i = 0; i < levels && x != a.end() && y != b.end(); ++i, ++x, ++y) {
+    if (x->first != y->first || x->second.size.raw() != y->second.size.raw()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+struct DepthCheck final : jarvis::adapter::EventEmitter {
+  static constexpr std::size_t kLevels = 100;
+
+  explicit DepthCheck(const jarvis::model::InstrumentId& id) : primary{id}, checker{id} {}
+
+  Status event(const jarvis::model::Event& /*e*/) override { return Status::Ok; }
+  Status depth(const jarvis::adapter::DepthDiff& d) override {
+    Status s = primary.on_diff(d, sink);
+    if (checking) {
+      const Status c = checker.on_diff(d, sink);
+      s = ok(s) ? c : s;
+      compare(d.ts_init);
+    }
+    return s;
+  }
+
+  void compare(jarvis::core::UnixNanos ts) {
+    if (!primary.visible() || !checker.visible() ||
+        primary.last_update_id() != checker.last_update_id()) {
+      return;
+    }
+    ++checks;
+    const bool equal = same_top(primary.bids(), checker.bids(), kLevels) &&
+                       same_top(primary.asks(), checker.asks(), kLevels);
+    if (!equal) {
+      ++mismatches;
+    }
+    std::printf("check %llu at update %llu: %s (%zu bids, %zu asks)\n",
+                static_cast<unsigned long long>(checks),
+                static_cast<unsigned long long>(primary.last_update_id()),
+                equal ? "equal" : "MISMATCH", primary.bids().size(), primary.asks().size());
+    static_cast<void>(checker.disconnected(ts, sink));
+    checking = false;
+  }
+
+  // Registers a snapshot request for `sync`; returns the WebSocket API request id.
+  std::string request(binance::DepthSync& sync) {
+    const std::uint64_t req = sync.snapshot_requested();
+    std::string id = "d" + std::to_string(++next_id);
+    pending[id] = {&sync, req};
+    return id;
+  }
+
+  // An answer of the WebSocket API: hands the snapshot to the book that asked for it.
+  void on_answer(std::string_view text, const jarvis::adapter::SymbolEntry& entry,
+                 jarvis::core::UnixNanos recv) {
+    std::string id;
+    std::string error;
+    binance::DepthSnapshot snap;
+    const Status s = binance::decode_ws_depth_response(text, entry, recv, id, snap, error);
+    const auto it = pending.find(id);
+    if (it == pending.end()) {
+      std::fprintf(stderr, "an answer to no request: %s\n", error.c_str());
+      return;
+    }
+    const auto [sync, req] = it->second;
+    pending.erase(it);
+    if (!ok(s)) {
+      std::fprintf(stderr, "snapshot %s: %s\n", id.c_str(), error.c_str());
+      sync->snapshot_failed(req);
+      return;
+    }
+    static_cast<void>(sync->on_snapshot(req, snap, sink));
+  }
+
+  // Requests the snapshots due now through `send(id)`, and starts a check every 15 seconds.
+  template <typename Send> void poll(std::chrono::steady_clock::time_point now, Send&& send) {
+    if (primary.wants_snapshot()) {
+      send(request(primary));
+    }
+    if (!checking && primary.visible() && now >= next_check) {
+      checker.connected();
+      checking = true;
+      next_check = now + std::chrono::seconds{15};
+    }
+    if (checking && checker.wants_snapshot()) {
+      send(request(checker));
+    }
+  }
+
+  binance::DepthSync primary;
+  binance::DepthSync checker;
+  NullEmitter sink;
+  bool checking = false;
+  std::uint64_t checks = 0;
+  std::uint64_t mismatches = 0;
+  std::map<std::string, std::pair<binance::DepthSync*, std::uint64_t>> pending;
+  std::uint64_t next_id = 0;
+  std::chrono::steady_clock::time_point next_check =
+      std::chrono::steady_clock::now() + std::chrono::seconds{15};
+};
+
+int depth_check(const Options& o) {
+  if (!o.exchange_info || !o.symbols || !o.seconds) {
+    std::fprintf(stderr, "usage: jarvis-capture depth-check --exchange-info JSON --symbols SYMBOL "
+                         "--seconds N\n");
+    return 2;
+  }
+  jarvis::adapter::SymbolTable table;
+  if (!load_symbols(*o.exchange_info, o.symbols, table) || table.size() != 1) {
+    std::fprintf(stderr, "depth-check needs exactly one symbol\n");
+    return 2;
+  }
+  const jarvis::adapter::SymbolEntry entry = table[0];
+  const std::string symbol = split_symbols(o.symbols).front();
+  std::string lower = symbol;
+  for (char& c : lower) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  net::IoContext io;
+  const live::ArrivalClock clock;
+  binance::JsonCodec codec{table};
+  DepthCheck check{entry.id};
+  bool failed = false;
+  bool stopping = false; // our own closes at the end are not failures
+
+  net::WsHandlers md_handlers;
+  md_handlers.on_open = [&] { check.primary.connected(); };
+  md_handlers.on_message = [&](net::WsOpcode, std::span<const std::byte> payload,
+                               std::int64_t recv) {
+    jarvis::adapter::ConnCtx conn{0, jarvis::core::UnixNanos{clock.utc_of(recv)}};
+    if (!ok(codec.decode(payload, conn, check))) {
+      std::fprintf(stderr, "decode: %s\n", codec.error().c_str());
+    }
+  };
+  md_handlers.on_close = [&](const std::string& reason) {
+    if (!stopping) {
+      std::fprintf(stderr, "depth stream closed: %s\n", reason.c_str());
+      failed = true;
+    }
+  };
+  net::WsConfig md_config;
+  md_config.url = "wss://fstream.binance.com/public/stream?streams=" + lower + "@depth@100ms";
+  net::WsClient md{io, md_config, md_handlers};
+
+  net::WsHandlers api_handlers;
+  api_handlers.on_message = [&](net::WsOpcode, std::span<const std::byte> payload,
+                                std::int64_t recv) {
+    check.on_answer({reinterpret_cast<const char*>(payload.data()), payload.size()}, // NOLINT
+                    entry, jarvis::core::UnixNanos{clock.utc_of(recv)});
+  };
+  api_handlers.on_close = [&](const std::string& reason) {
+    if (!stopping) {
+      std::fprintf(stderr, "WebSocket API closed: %s\n", reason.c_str());
+      failed = true;
+    }
+  };
+  net::WsConfig api_config;
+  api_config.url = "wss://ws-fapi.binance.com/ws-fapi/v1";
+  net::WsClient api{io, api_config, api_handlers};
+
+  const auto send = [&](const std::string& id) {
+    api.send_text(R"({"id":")" + id + R"(","method":"depth","params":{"symbol":")" + symbol +
+                  R"(","limit":1000}})");
+  };
+  net::Timer tick{io};
+  std::function<void()> on_tick = [&] {
+    if (api.is_open()) {
+      check.poll(std::chrono::steady_clock::now(), send);
+    }
+    tick.after(std::chrono::milliseconds{100}, on_tick);
+  };
+  std::signal(SIGINT, on_signal);
+  md.connect();
+  api.connect();
+  tick.after(std::chrono::milliseconds{100}, on_tick);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{*o.seconds};
+  while (!g_interrupted && !failed && std::chrono::steady_clock::now() < deadline) {
+    io.run_for(std::chrono::milliseconds{200});
+  }
+  stopping = true;
+  tick.cancel();
+  md.close();
+  api.close();
+  io.run_for(std::chrono::seconds{2});
+  const binance::DepthSyncStats& st = check.primary.stats();
+  const auto u = [](std::uint64_t v) { return static_cast<unsigned long long>(v); };
+  std::printf("primary: syncs %llu, gaps %llu, stale snapshots %llu, dropped %llu, applied %llu, "
+              "batches %llu\n",
+              u(st.syncs), u(st.gaps), u(st.stale_snapshots), u(st.dropped_diffs), u(st.applied),
+              u(check.sink.batches));
+  std::printf("checks %llu, mismatches %llu, codec errors %llu\n", u(check.checks),
+              u(check.mismatches), u(codec.stats().errors));
+  return !failed && check.checks > 0 && check.mismatches == 0 && codec.stats().errors == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   Options o;
   const std::span<char*> args{argv + 1, static_cast<std::size_t>(argc > 0 ? argc - 1 : 0)};
   if (!parse(args, o) || o.positional.empty()) {
-    std::fprintf(stderr, "usage: jarvis-capture record|dump|decode ...\n");
+    std::fprintf(stderr, "usage: jarvis-capture record|dump|decode|depth-check ...\n");
     return 2;
   }
   if (o.positional[0] == "record") {
@@ -418,6 +637,9 @@ int main(int argc, char** argv) {
   }
   if (o.positional[0] == "decode") {
     return decode(o);
+  }
+  if (o.positional[0] == "depth-check") {
+    return depth_check(o);
   }
   std::fprintf(stderr, "unknown command %s\n", o.positional[0].c_str());
   return 2;

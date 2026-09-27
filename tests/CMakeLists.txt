@@ -94,7 +94,7 @@ add_executable(trace_driver trace/trace_driver.cpp trace/behaviour_file.cpp)
 target_link_libraries(trace_driver PRIVATE jarvis::kernel)
 set_target_properties(trace_driver PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_dependencies(jarvis_tests trace_driver)
-foreach(spec IN ITEMS OrderLifecycle TradingState Matching)
+foreach(spec IN ITEMS OrderLifecycle TradingState Matching DepthSync)
   add_test(NAME trace.${spec}
            COMMAND trace_driver "${PROJECT_SOURCE_DIR}/tests/trace/behaviours/${spec}.txt")
   set_tests_properties(trace.${spec} PROPERTIES LABELS "conformance;trace")
@@ -120,8 +120,8 @@ if(NOT JARVIS_ENABLE_FUZZ)
 endif()
 
 if(TARGET jarvis_adapter)
-  jarvis_add_layer_test(adapter SOURCES cpp/test_binance_adapter.cpp SUITES unit golden
-                        LIBS jarvis::adapter jarvis::shell)
+  jarvis_add_layer_test(adapter SOURCES cpp/test_binance_adapter.cpp cpp/test_depth_sync.cpp
+                        SUITES unit golden property LIBS jarvis::adapter jarvis::shell jarvis::testkit)
   target_compile_definitions(test_adapter PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()
 

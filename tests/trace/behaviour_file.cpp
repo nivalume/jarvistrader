@@ -71,6 +71,38 @@ std::set<std::string> to_set(std::string_view text) {
   return out;
 }
 
+std::map<long long, long long> to_int_map(std::string_view text) {
+  const bool sequence = text.size() >= 2 && text.front() == '<' && text.back() == '>';
+  const bool function = text.size() >= 2 && text.front() == '{' && text.back() == '}';
+  if (!sequence && !function) {
+    throw std::runtime_error("not a function: " + std::string{text});
+  }
+  std::map<long long, long long> out;
+  std::string_view body = text.substr(1, text.size() - 2);
+  long long index = 1;
+  while (!body.empty()) {
+    const std::size_t comma = body.find(',');
+    const std::string_view item = body.substr(0, comma);
+    body = comma == std::string_view::npos ? std::string_view{} : body.substr(comma + 1);
+    std::optional<long long> key = index++;
+    std::string_view value = item;
+    if (!sequence) {
+      const std::size_t colon = item.find(':');
+      if (colon == std::string_view::npos) {
+        throw std::runtime_error("not a function entry: " + std::string{item});
+      }
+      key = to_integer(item.substr(0, colon));
+      value = item.substr(colon + 1);
+    }
+    const std::optional<long long> v = to_integer(value);
+    if (!key || !v) {
+      throw std::runtime_error("not an integer function: " + std::string{text});
+    }
+    out[*key] = *v;
+  }
+  return out;
+}
+
 const std::string& Step::var(std::string_view name) const {
   const auto it = vars.find(name);
   if (it == vars.end()) {

@@ -20,6 +20,7 @@ class Spec:
     backward: bool
     budget_min: int
     tlc_args: tuple[str, ...]
+    trace_vars: tuple[str, ...] = ()  # the variables behaviour files keep (all when empty)
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ def load(path: Path = MAP_PATH) -> SpecMap:
                 backward=bool(entry.get("backward", False)),
                 budget_min=int(entry.get("budget_min", 10)),
                 tlc_args=tuple(entry.get("tlc_args", [])),
+                trace_vars=tuple(entry.get("trace_vars", [])),
             )
         )
     return SpecMap(

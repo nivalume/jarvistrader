@@ -216,6 +216,7 @@ if(JARVIS_BUILD_LIVE)
     jarvis/adapter/codec.cpp
     jarvis/adapter/binance/exchange_info.cpp
     jarvis/adapter/binance/json_codec.cpp
+    jarvis/adapter/binance/rest_codec.cpp
     jarvis/adapter/binance/streams.cpp
   )
   add_library(jarvis::adapter ALIAS jarvis_adapter)

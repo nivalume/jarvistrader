@@ -3,6 +3,7 @@
 core:
   - changed-files:
       - any-glob-to-any-file:
+          - 'jarvis/adapter/binance/depth_sync.hpp'
           - 'jarvis/backtest/matching/**'
           - 'jarvis/backtest/matching/sim_exchange.hpp'
           - 'jarvis/core/**'
@@ -20,6 +21,7 @@ core:
           - 'jarvis/risk/rate_limit.hpp'
           - 'jarvis/risk/trading_state.hpp'
           - 'specs/**'
+          - 'specs/map/depth_sync_actions.hpp'
           - 'specs/map/matching_actions.hpp'
           - 'specs/map/order_lifecycle_actions.hpp'
           - 'specs/map/trading_state_actions.hpp'

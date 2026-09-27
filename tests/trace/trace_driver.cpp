@@ -24,6 +24,8 @@
 #include <vector>
 
 #include "behaviour_file.hpp"
+#include "jarvis/adapter/binance/depth_sync.hpp"
+#include "jarvis/adapter/codec.hpp"
 #include "jarvis/backtest/matching/sim_exchange.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
@@ -41,6 +43,7 @@
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/risk/gates.hpp"
 #include "jarvis/risk/trading_state.hpp"
+#include "specs/map/depth_sync_actions.hpp"
 #include "specs/map/matching_actions.hpp"
 #include "specs/map/order_lifecycle_actions.hpp"
 #include "specs/map/trading_state_actions.hpp"
@@ -556,6 +559,146 @@ private:
   std::uint64_t taker_ = 0;
 };
 
+// ---- DepthSync ---------------------------------------------------------------------------------
+
+class DepthSyncReplayer {
+public:
+  static constexpr const auto& kActions = jarvis::specmap::depth_sync::kActions;
+
+  explicit DepthSyncReplayer(const BehaviourFile& file) : sync_{instrument()} {
+    for (const std::string& p : jarvis::trace::to_set(file.constants.at("Prices"))) {
+      price_set_.push_back(std::stoll(p));
+    }
+  }
+
+  std::string start(const Step& init) { return compare(init); }
+
+  std::string step(const Step& s) {
+    const std::string& a = s.action;
+    if (a == "Connect") {
+      sync_.connected();
+    } else if (a == "Disconnect") {
+      require(sync_.disconnected(UnixNanos{++ts_}, out_), "DepthSync::disconnected");
+    } else if (a == "Request") {
+      request_ = sync_.snapshot_requested();
+    } else if (a == "Receive") {
+      jarvis::adapter::DepthDiff d;
+      d.instrument_id = instrument();
+      d.first_update_id = static_cast<std::uint64_t>(s.arg(0));
+      d.final_update_id = static_cast<std::uint64_t>(s.arg(1));
+      d.prev_final_update_id = static_cast<std::uint64_t>(s.arg(2));
+      d.ts_event = UnixNanos{++ts_};
+      d.ts_init = d.ts_event;
+      const std::vector<jarvis::adapter::BookLevel> bids = levels(s.args.at(3), true);
+      d.bids = bids;
+      require(sync_.on_diff(d, out_), "DepthSync::on_diff");
+    } else if (a == "Arrive") {
+      jarvis::adapter::binance::DepthSnapshot snap;
+      snap.last_update_id = static_cast<std::uint64_t>(s.arg(0));
+      snap.ts_event = UnixNanos{++ts_};
+      snap.ts_init = snap.ts_event;
+      snap.bids = levels(s.args.at(1), false);
+      require(sync_.on_snapshot(request_, snap, out_), "DepthSync::on_snapshot");
+    } else if (a != "Update" && a != "Publish" && a != "Lose" && a != "Serve") {
+      throw std::runtime_error("unknown DepthSync action " + a);
+    }
+    absorb();
+    return compare(s);
+  }
+
+private:
+  static constexpr std::int64_t kBase = 1000'000'000'000; // 1000.0
+  static constexpr std::int64_t kTick = 100'000'000;      // 0.1
+  static constexpr std::uint64_t kLot = 1'000'000;        // 0.001
+
+  static m::InstrumentId instrument() {
+    m::InstrumentId id;
+    require(m::InstrumentId::parse("BTCUSDT-PERP.BINANCE", id), "instrument id");
+    return id;
+  }
+
+  // Levels of a rendered spec book or change set; a snapshot leaves out empty levels.
+  static std::vector<jarvis::adapter::BookLevel> levels(std::string_view text, bool keep_zero) {
+    std::vector<jarvis::adapter::BookLevel> out;
+    for (const auto& [p, q] : jarvis::trace::to_int_map(text)) {
+      if (q == 0 && !keep_zero) {
+        continue;
+      }
+      jarvis::adapter::BookLevel l;
+      require(m::Price::from_raw(kBase + p * kTick, 1, l.price), "price");
+      require(m::Quantity::from_raw(static_cast<std::uint64_t>(q) * kLot, 3, l.size), "size");
+      out.push_back(l);
+    }
+    return out;
+  }
+
+  // The kernel's view: applies every emitted batch to a map of sizes.
+  void absorb() {
+    for (const m::Event& e : out_.events) {
+      const auto& batch = std::get<m::OrderBookDeltas>(e);
+      for (const m::OrderBookDelta& d : batch.deltas) {
+        if (d.action == m::BookAction::Clear) {
+          kernel_.clear();
+          visible_ = m::has_flag(d.flags, m::RecordFlag::F_SNAPSHOT);
+        } else if (d.action == m::BookAction::Delete) {
+          kernel_.erase(tick_of(d.order.price));
+        } else {
+          kernel_[tick_of(d.order.price)] = static_cast<long long>(d.order.size.raw() / kLot);
+        }
+      }
+    }
+    out_.clear();
+  }
+
+  static long long tick_of(m::Price p) { return (p.raw() - kBase) / kTick; }
+
+  // A spec book: every price of the model, zero when absent.
+  [[nodiscard]] std::map<long long, long long>
+  dense(const std::map<long long, long long>& sparse) const {
+    std::map<long long, long long> out;
+    for (const long long p : price_set_) {
+      const auto it = sparse.find(p);
+      out[p] = it == sparse.end() ? 0 : it->second;
+    }
+    return out;
+  }
+
+  [[nodiscard]] std::string compare(const Step& s) const {
+    Diff diff;
+    diff.expect("phase", s.var("phase"),
+                std::string{jarvis::specmap::depth_sync::phase_name(sync_.phase())});
+    std::map<long long, long long> local;
+    for (const auto& [raw, l] : sync_.bids()) {
+      local[(raw - kBase) / kTick] = static_cast<long long>(l.size.raw() / kLot);
+    }
+    const auto show = [](const std::map<long long, long long>& m) {
+      std::string t;
+      for (const auto& [k, v] : m) {
+        t += (t.empty() ? "" : ",") + std::to_string(k) + ":" + std::to_string(v);
+      }
+      return "{" + t + "}";
+    };
+    diff.expect("local", show(dense(jarvis::trace::to_int_map(s.var("local")))),
+                show(dense(local)));
+    diff.expect("lastU", s.integer("lastU"), static_cast<long long>(sync_.last_update_id()));
+    diff.expect("visible", s.boolean("visible"), visible_);
+    diff.expect("visible (implementation)", s.boolean("visible"), sync_.visible());
+    if (visible_) {
+      diff.expect("out", show(dense(jarvis::trace::to_int_map(s.var("out")))),
+                  show(dense(kernel_)));
+    }
+    return diff.text();
+  }
+
+  std::vector<long long> price_set_;
+  jarvis::adapter::binance::DepthSync sync_;
+  jarvis::adapter::CollectingEmitter out_;
+  std::map<long long, long long> kernel_;
+  bool visible_ = false;
+  std::uint64_t request_ = 0;
+  std::uint64_t ts_ = 0;
+};
+
 // ---- driver ------------------------------------------------------------------------------------
 
 std::string describe(const Step& s) {
@@ -612,6 +755,9 @@ bool run(const std::string& path) {
   }
   if (file.spec == "Matching") {
     return replay<MatchingReplayer>(file, path);
+  }
+  if (file.spec == "DepthSync") {
+    return replay<DepthSyncReplayer>(file, path);
   }
   std::cerr << path << ": no trace driver for spec " << file.spec << "\n";
   return false;

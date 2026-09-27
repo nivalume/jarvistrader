@@ -131,8 +131,8 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [ ] task: network — 连接管理：24 小时计划重连、指数退避、`Health*` 事件
 - [x] task: adapter — `Codec` concept 与 `JsonCodec`（simdjson on-demand，数值直接解析为定点，§13.3）：`jarvis/adapter/codec.hpp`、`jarvis/adapter/binance/json_codec.hpp`；只用有序字段查找（fuzz 发现无序查找回绕的未定义行为）
 - [x] task: adapter — 行情流解码：aggTrade → `TradeTick`、bookTicker → `QuoteTick`、markPrice → mark、index、funding，kline → `Bar`，forceOrder → `LiquidationOrder`（§14.2）；depth 帧解码为 `DepthDiff`，同步后产出 `OrderBookDeltas` 随 M4-C
-- [ ] task: specs — `DepthSync.tla` 与映射头
-- [ ] task: adapter — depth 同步状态机与快照请求的专用令牌桶（§14.3）
+- [x] task: specs — `DepthSync.tla` 与映射头（`specs/tla/DepthSync.tla`、`specs/map/depth_sync_actions.hpp`；交易所簿抽象建模，含丢事件、断线与滞后快照）
+- [x] task: adapter — depth 同步状态机与快照请求的专用令牌桶（§14.3）：`DepthSync`、`DepthBooks`（共享 `risk::RateLimiter` 预算、轮流取用），REST 与 WS API 快照解码，每侧档位上限。2026-09-27 生产环境实测（`jarvis-capture depth-check`，快照经 WS API）：BTCUSDT 5 分钟 19 次、ETHUSDT 3 分钟 11 次独立重同步，与主簿在同一更新号的前 100 档全部相同，0 缺口、0 解码错误；加上每侧 2000 档上限后 BTCUSDT 再跑 3 分钟 11 次，同样全部相同（不设上限时 5 分钟内每侧增长到约 3300 档）
 - [x] task: adapter — `exchangeInfo` 加载 instrument，由 filters 生成 Gate B 规则（§14.6）：filters 落到 `InstrumentCommon` 字段，Gate B 规则直接读取；与 Python 目录映射对同一 testnet 夹具逐字段一致
 - [ ] task: adapter — 启动检查：持仓模式、杠杆与保证金模式、key 权限与 IP 白名单、服务器时间偏移
 - [ ] task: adapter — 用户数据流：listenKey 获取与每 30 分钟续期、`listenKeyExpired` 处理、事件解码、`TRADE_LITE` 与 `ORDER_TRADE_UPDATE` 合并（§8.3、§14.5）
@@ -149,7 +149,7 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [ ] task: harness — `tsan` preset 覆盖环与 IO 线程
 - [ ] task: harness — testnet 契约测试（nightly）：每类流与每个 WS API 方法的往返
 - [ ] task: harness — 环境等价测试：sandbox 录制后以 backtest 回放同一策略文件，命令流逐字节相同（§4.6）
-- [ ] task: harness — `DepthSync` 的不变量与生成行为进入 CI
+- [x] task: harness — `DepthSync` 的不变量与生成行为进入 CI：TLC 不变量、正向 trace validation（ctest 与 formal job、nightly 由 MAP.toml 决定规约清单），以及以内核 `OrderBook` 为观察者的随机交易所性质测试
 - [ ] task: harness — 热基准 `codec/json_aggTrade`、`codec/json_bookTicker`、`codec/json_depth`、`ring/spsc_roundtrip`：codec 三项已进 `bench_codec` 门禁组（本机 Release 中位数约 290 ns、330 ns、3.2 µs，depth 为 46 档的 1.5 KB 消息）；`ring/spsc_roundtrip` 随 M4-E
 - [ ] task: 验收 — `python examples/py/mm_quote.py --env sandbox` 连续运行 24 小时；录制日志回放逐字节一致；环境等价测试通过
 

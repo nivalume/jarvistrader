@@ -1206,6 +1206,15 @@ USDⓈ-M 的 `aggTrade` 把同一 taker 订单在同一价位的多笔成交聚�
 
 jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `OrderBookDeltas`，末条带 `F_SNAPSHOT | F_LAST`；断链或重连时发出 `CLEAR` 并把该簿标记为不可用，策略在此期间看不到这本簿。该状态机是规约 `DepthSync` 的对象。快照请求消耗 REST 权重，重同步受专门的令牌桶约束，避免断链风暴耗尽权重。
 
+实现（`jarvis/adapter/binance/depth_sync.hpp`，无 I/O，header-only）：
+
+- 状态为 `Idle → Buffering → Requested → Validating → Synced`（F6 中的 SnapshotRequested 即 `Requested`）。快照到达时一次处理完缓冲：丢弃 `u < L`；剩余为空则进入 `Validating` 等待覆盖 `L` 的事件；首条剩余事件 `U > L` 说明快照过旧，保留缓冲回到 `Buffering`；链条中途断开则保留断点之后的缓冲回到 `Buffering`；全部接上才进入 `Synced`。
+- 进入 `Synced` 时发出的快照批次是快照加上已接上的缓冲事件之后的本地簿，因此内核从不看到中间状态；同步期间每条差量一批（数量为 0 用 `Delete`，否则用 `Update`），批次的 `sequence` 是最后应用的 `u`。
+- 每次快照请求带请求号，断线后迟到的应答被忽略；请求失败回到 `Buffering`。缓冲超过 `max_buffer`（默认 4096 条）时整体丢弃，之后的快照会被判定为过旧并重新请求。
+- `DepthBooks` 持有一个适配器的全部簿与一个共享的快照预算：沿用内核的固定窗口限速器 `risk::RateLimiter`，默认任意 10 秒窗口最多 5 次、1 分钟最多 20 次（1000 档快照权重 20，占每分钟 2400 权重的六分之一）；各符号轮流取用，避免一个符号的反复断链饿死其他符号。
+- REST 快照由 `decode_depth_snapshot` 按 instrument 精度精确解析。WS API 的 `depth` 方法返回同样的快照（`lastUpdateId` 与 fstream 差量的更新号同属一个序列），由 `decode_ws_depth_response` 解析；适配器可以经已建立的 WS API 连接取快照，REST 作为兜底。2026-09-27 在本环境实测：`fapi.binance.com` 的 REST 返回 451，而 `ws-fapi.binance.com` 可用。
+- 实盘一致性检查 `jarvis-capture depth-check`：主簿用 WS API 快照同步生产环境的 depth 流；每 15 秒用新快照在同一条流上独立同步第二本簿，两者到达同一更新号时前 100 档必须完全相同。
+
 ### 14.4 下单通道
 
 - 主通道是 WS API：连接后 `session.logon`（Ed25519），之后 `order.place / order.modify / order.cancel` 无需逐条签名。
@@ -1490,11 +1499,11 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | `Reconciliation` | 对账协议（第 15 节） | 交易所被建模为会重排、重复、延迟用户流消息，并可在任意时刻给出快照的进程；进入 `Synced` 时本地订单与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏；`Synced` 之前 TradingState 为 `Halted` | TLC 模型检查；正向与反向 trace validation |
 | `TradingState` | 风控状态与限速窗口（第 10.2、10.4 节） | 只有 admin 命令能放松 base，监控只收紧；`Halted` 下除撤单外没有命令通过；同步期间一律 `Halted`，降级期间从不 `Active`；任一窗口内通过的订单与改单数不超过上限（撤单不计） | TLC 模型检查；正向 trace validation（`RiskEngine`，含规约不允许的命令必须被拒绝） |
 | `Matching` | 模拟撮合的排队位置成交模型（第 12.3 节），单个买单 | 成交量不超过订单数量；post-only 从不吃单；在自身价位只有前方排队量耗尽后才成交；前方排队量不超过该价位总量且只减不增。多订单的价格—时间优先与成交守恒由 `test_matching` 的性质测试覆盖 | TLC 模型检查；正向 trace validation（`SimulatedExchange` 的 `QueuePosition` 模型） |
-| `DepthSync` | 订单簿同步（第 14.3 节） | 只有在事件链连续时才应用；`Synced` 状态下本地簿等于交易所簿（交易所簿抽象建模）；每次断链都导致重新同步；策略从不看到未同步的簿 | TLC 模型检查；不变量加生成行为 |
+| `DepthSync` | 订单簿同步（第 14.3 节）。交易所簿抽象为价格到数量的函数，带编号的更新累积后作为事件 `[U, u, pu, ch]` 发布；网络会丢事件、连接会断；快照可能取自任意较早的更新号（滞后的副本） | 只有在事件链连续时才应用；`Synced` 状态下本地簿等于交易所在最后应用更新号时的簿；`Validating` 时本地簿等于快照；内核看到簿当且仅当处于 `Synced`，且看到的就是本地簿 | TLC 模型检查（去掉 `pu` 检查或 `U ≤ L` 检查的变体都会违反不变量）；正向 trace validation（`adapter::binance::DepthSync`，内核视图由其发出的 `OrderBookDeltas` 重建） |
 
 ### 18.2 正向与反向验证
 
-- **正向**：`specs/tla/<Spec>Behaviours.tla` 在规约之上加变量 `action`，记录每一步的动作及其参数；`OrderLifecycle` 与 `TradingState` 还记录上一状态中规约允许的事件或命令。`tools/tla/behaviours.py` 以 TLC 模拟模式（`-simulate file=...`）生成行为，写成每行一个状态的文本文件（`step <动作> <参数> | <变量>=<值> ...`）。`tests/trace/trace_driver` 经 `specs/map/<spec>_actions.hpp` 把动作映射为实现的输入：OMS 的订单事件、`RiskEngine` 的触发与命令、`SimulatedExchange` 的行情与下单。每一步比较实现状态在规约变量上的投影，并检查规约不允许的事件或命令被实现拒绝。第一处偏差即失败，报告行为编号、步号与动作；规约的某个动作在整个文件中从未出现也算失败。`tests/trace/behaviours/` 中提交的小行为集由 ctest 回放（标签 `trace`）；CI 的 formal job 先用 `behaviours.py --check` 确认它与规约同步，再以运行编号为种子生成 2000 条新行为回放；nightly 每个规约回放 20000 条。
+- **正向**：`specs/tla/<Spec>Behaviours.tla` 在规约之上加变量 `action`，记录每一步的动作及其参数；`OrderLifecycle` 与 `TradingState` 还记录上一状态中规约允许的事件或命令。`tools/tla/behaviours.py` 以 TLC 模拟模式（`-simulate file=...`）生成行为，写成每行一个状态的文本文件（`step <动作> <参数> | <变量>=<值> ...`）。`tests/trace/trace_driver` 经 `specs/map/<spec>_actions.hpp` 把动作映射为实现的输入：OMS 的订单事件、`RiskEngine` 的触发与命令、`SimulatedExchange` 的行情与下单。每一步比较实现状态在规约变量上的投影，并检查规约不允许的事件或命令被实现拒绝。第一处偏差即失败，报告行为编号、步号与动作；规约的某个动作在整个文件中从未出现也算失败。`MAP.toml` 中规约的 `trace_vars` 限定行为文件只写 trace driver 比较的变量（`DepthSync` 的交易所与网络变量很大，只保留客户端变量）。`tests/trace/behaviours/` 中提交的小行为集由 ctest 回放（标签 `trace`）；CI 的 formal job 先用 `behaviours.py --check` 确认它与规约同步，再以运行编号为种子生成 2000 条新行为回放；nightly 每个规约回放 20000 条。
 - **反向**：`jarvis trace-export <log> --spec OrderLifecycle --out <dir>` 把日志中每个订单的事件按日志顺序投影为规约动作。venue 的订单事件来自输入；内核自己施加的事件由命令输出恢复：`SubmitOrder` 为创建与 `SUBMITTED`，`OrderDenied` 为 `DENIED`，`ModifyOrder` 为 `PENDING_UPDATE`，`CancelOrder` 为 `PENDING_CANCEL`。一个新的 OMS 用内核自己的代码施加这些事件；被拒绝的事件记为 refused 步，规约也必须不允许它。每一步还记录实现施加后的订单状态，规约到达的状态必须与之相同。数量以该订单全部数量的最大公约数为单位，保证落在 TLC 的整数范围内。生成的 `OrderLifecycleTrace.tla` 由 TLC 检查（`tools/tla/check_trace.py`）：无法继续的一步表现为死锁，脚本报告订单、日志 `seq`、动作与实现的状态。golden 用例 `replay_orders` 固定一份导出的 trace，formal job 对它运行 TLC；nightly 对最近一次 soak 日志运行（M4 起）。
 
 ### 18.3 规约与代码的同步规则

@@ -49,5 +49,7 @@ struct BehaviourFile {
 
 [[nodiscard]] std::optional<long long> to_integer(std::string_view text);
 [[nodiscard]] std::set<std::string> to_set(std::string_view text);
+// An integer function as rendered: "<a,b>" (a sequence, keys from 1) or "{k:v,...}"; "{}" is empty.
+[[nodiscard]] std::map<long long, long long> to_int_map(std::string_view text);
 
 } // namespace jarvis::trace

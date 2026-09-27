@@ -74,7 +74,8 @@ jobs:
         env:
           SEED: ${{ github.run_number }}
         run: |
-          for spec in OrderLifecycle TradingState Matching; do
+          forward="$(python3 -c 'import sys; sys.path.insert(0, "tools/tla"); import mapfile; print(" ".join(s.name for s in mapfile.load().specs if s.forward))')"
+          for spec in $forward; do
             echo "behaviours of $spec with seed $SEED"
             python3 tools/tla/behaviours.py --spec "$spec" --num 20000 --depth 32 --seed "$SEED"
             build/trace/bin/trace_driver "build/tla/behaviours/$spec.txt"

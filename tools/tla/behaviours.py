@@ -16,7 +16,8 @@ generates; this script turns them into a text file that tests/trace/trace_driver
 
 The first step of a behaviour is `Init`; each later step names the action taken and the state
 it reached. Values are single tokens: integers, TRUE/FALSE, strings and model values bare,
-sets and functions as {a,b} and {k:v}. `--check` regenerates a committed file from the
+sets and functions as {a,b} and {k:v}. A spec's `trace_vars` in MAP.toml limits the variables
+written to the ones its trace driver compares. `--check` regenerates a committed file from the
 parameters on its `spec` line and fails when the result differs.
 """
 
@@ -105,11 +106,13 @@ def render_file(spec: str, num: int, depth: int, seed: int, work: Path) -> str:
     ]
     for name, value in constants(SPEC_DIR / f"{spec}Behaviours.cfg"):
         lines.append(f"const {name} {tla_values.render(value)}")
+    keep = set(mapfile.load().spec(spec).trace_vars)
     for k, path in enumerate(run_simulation(spec, num, depth, seed, work), start=1):
         lines.append(f"behaviour {k}")
         for state in tla_values.read_behaviour_module(path):
             action = state.pop("action", None)
-            fields = " ".join(f"{n}={tla_values.render(state[n])}" for n in sorted(state))
+            names = sorted(n for n in state if not keep or n in keep)
+            fields = " ".join(f"{n}={tla_values.render(state[n])}" for n in names)
             lines.append(f"step {' '.join(action_tokens(action))} | {fields}")
         lines.append("end")
     return "\n".join(lines) + "\n"

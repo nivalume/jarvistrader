@@ -12,6 +12,8 @@
 #   backward    event logs are projected on the spec (`jarvis trace-export`) and checked by TLC
 #   budget_min  wall-clock budget for one TLC run
 #   tlc_args    extra TLC command-line arguments
+#   trace_vars  the variables behaviour files keep (all when absent): the ones the trace driver
+#               compares, so a spec with a large environment writes small files
 
 [specs.SeqOrder]
 paths = ["jarvis/core/event_key.hpp", "jarvis/core/priority_queue.hpp"]
@@ -43,6 +45,14 @@ forward = true
 backward = false
 budget_min = 5
 tlc_args = []
+
+[specs.DepthSync]
+paths = ["jarvis/adapter/binance/depth_sync.hpp", "specs/map/depth_sync_actions.hpp"]
+forward = true
+backward = false
+budget_min = 5
+tlc_args = []
+trace_vars = ["phase", "local", "lastU", "visible", "out"]
 
 [global]
 # Touching any of these runs every spec.
