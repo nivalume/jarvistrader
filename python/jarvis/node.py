@@ -26,6 +26,7 @@ from typing import Any
 from . import determinism
 from . import log as _log
 from ._core import node as _native
+from .report import RunReport
 from .strategy import Strategy
 
 NativeSpec = _native.NativeSpec
@@ -64,6 +65,12 @@ class RunResult:
     def fingerprint(self) -> str:
         """SHA-256 over every record of the run log (inputs and outputs)."""
         return _log.fingerprint(self.directory, "all")[0] if self.directory else ""
+
+    def report(self) -> RunReport:
+        """Fills, fees and PnL of the run, labelled with its data and fill model."""
+        if not self.directory:
+            raise ValueError("the run was not recorded (persistence.mode = \"none\")")
+        return RunReport.from_run(self.directory)
 
     def __str__(self) -> str:
         lines = [

@@ -1,0 +1,15 @@
+# The C++ market maker example (examples/cpp/pegged_mm.cpp) on the golden catalog, with the
+# example's own configuration: the run log must match, and replay must reproduce it.
+commands = [
+  ["{bin}/bin/golden_node", "catalog", "--seed", "7", "--out", "{out}/catalog", "--instrument"],
+  ["{bin}/bin/pegged_mm", "--config", "{root}/examples/config/mm_quote.toml",
+   "--set", "data.catalog={out}/catalog",
+   "--set", "data.range.start=2026-09-01T00:00:00Z", "--set", "data.range.end=2026-09-01T00:03:00Z",
+   "--out", "{out}/run"],
+  ["{bin}/bin/jarvis", "dump", "{out}/run", "--no-header", "--out", "{out}/run.txt"],
+  ["{bin}/bin/pegged_mm", "--replay", "{out}/run"],
+]
+
+[[compare]]
+produced = "run.txt"
+expected = "expected.run.txt"

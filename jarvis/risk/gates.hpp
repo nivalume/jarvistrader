@@ -440,6 +440,26 @@ public:
     return denied;
   }
 
+  // A parent order of an execution algorithm: Gate A only; its children pass check_child.
+  [[nodiscard]] std::string_view check_parent(const OrderCheck& c) noexcept {
+    ++stats_.checked;
+    const std::string_view denied = run_gate<GateA>(c, gate_state(c));
+    stats_.denied_a += denied.empty() ? 0U : 1U;
+    return denied;
+  }
+
+  // A child order of an execution algorithm (its parent passed Gate A): Gate B, then the rate
+  // limit.
+  [[nodiscard]] std::string_view check_child(const OrderCheck& c) noexcept {
+    ++stats_.checked;
+    std::string_view denied = run_gate<GateB>(c, gate_state(c));
+    if (denied.empty() && !limiter_.try_acquire(c.now)) {
+      denied = reason::kRateLimitExceeded;
+    }
+    stats_.denied_b += denied.empty() ? 0U : 1U;
+    return denied;
+  }
+
   [[nodiscard]] std::string_view check_modify(const OrderCheck& c) noexcept {
     ++stats_.checked;
     std::string_view denied = run_gate<ModifyGate>(c, gate_state(c));

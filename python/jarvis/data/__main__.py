@@ -3,6 +3,9 @@
     python -m jarvis.data binance-vision DATASET --symbol S --start D [--end D] --catalog DIR
         [--market um|spot] [--interval 1m] [--download-dir DIR | --file PATH]
         [--price-precision N] [--size-precision N] [--overwrite]
+    python -m jarvis.data binance-instrument --symbol S --day D --catalog DIR
+        (--exchange-info FILE | --tick T --step S [--min-qty Q] [--max-qty Q]
+         [--min-notional N] [--margin-init R] [--margin-maint R]) [--overwrite]
     python -m jarvis.data parquet-to-catalog ROOT --catalog DIR [--overwrite]
     python -m jarvis.data catalog-to-parquet CATALOG --root DIR [--overwrite]
 """
@@ -58,6 +61,31 @@ def _binance(args: argparse.Namespace) -> int:
     return 0
 
 
+def _instrument(args: argparse.Namespace) -> int:
+    from . import binance_instrument as bi
+
+    ts = int(dt.datetime.fromisoformat(f"{args.day}T00:00:00+00:00").timestamp()) * 1_000_000_000
+    if args.exchange_info:
+        instrument = bi.from_exchange_info(bi.load_exchange_info(args.exchange_info), args.symbol, ts=ts)
+    else:
+        if not args.tick or not args.step:
+            raise ValueError("binance-instrument needs --exchange-info, or --tick and --step")
+        instrument = bi.perpetual(
+            args.symbol,
+            tick=args.tick,
+            step=args.step,
+            min_qty=args.min_qty,
+            max_qty=args.max_qty,
+            min_notional=args.min_notional,
+            margin_init=args.margin_init,
+            margin_maint=args.margin_maint,
+            ts=ts,
+        )
+    directory = bi.write(instrument, args.catalog, args.day, overwrite=args.overwrite)
+    print(f"{directory}: {instrument.id}")
+    return 0
+
+
 def _parquet_in(args: argparse.Namespace) -> int:
     from . import parquet
 
@@ -92,6 +120,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     bv.add_argument("--size-precision", type=int)
     bv.add_argument("--overwrite", action="store_true")
     bv.set_defaults(run=_binance)
+
+    bi = sub.add_parser("binance-instrument", help="a USD-M perpetual's definition for the catalog")
+    bi.add_argument("--symbol", required=True)
+    bi.add_argument("--day", required=True, help="UTC day the definition is valid from")
+    bi.add_argument("--catalog", required=True)
+    bi.add_argument("--exchange-info", help="a saved /fapi/v1/exchangeInfo response")
+    bi.add_argument("--tick", help="PRICE_FILTER tickSize")
+    bi.add_argument("--step", help="LOT_SIZE stepSize")
+    bi.add_argument("--min-qty")
+    bi.add_argument("--max-qty")
+    bi.add_argument("--min-notional", help="MIN_NOTIONAL notional, in the quote currency")
+    bi.add_argument("--margin-init", default="0.05")
+    bi.add_argument("--margin-maint", default="0.025")
+    bi.add_argument("--overwrite", action="store_true")
+    bi.set_defaults(run=_instrument)
 
     pin = sub.add_parser("parquet-to-catalog", help="nautilus Parquet catalog to catalog logs")
     pin.add_argument("root")

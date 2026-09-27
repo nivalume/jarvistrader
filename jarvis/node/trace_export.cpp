@@ -15,7 +15,6 @@
 #include <variant>
 #include <vector>
 
-#include "jarvis/execution/execution_engine.hpp"
 #include "jarvis/execution/oms.hpp"
 #include "jarvis/execution/order.hpp"
 #include "jarvis/execution/order_fsm.hpp"
@@ -25,6 +24,7 @@
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/event_log.hpp"
+#include "jarvis/node/order_replay.hpp"
 
 namespace jarvis::node {
 
@@ -33,7 +33,6 @@ namespace {
 using core::Status;
 namespace ex = execution;
 
-constexpr std::uint64_t kUnit = 1'000'000'000ULL; // the quantity of a denied order (1)
 constexpr std::uint64_t kTlcIntMax = 2'147'483'647ULL;
 
 // One event applied to one order, before quantities are scaled.
@@ -57,90 +56,58 @@ struct OrderTrace {
   std::vector<RawStep> steps;
 };
 
+bool is_order_command(const model::Output& o) {
+  return std::holds_alternative<model::SubmitOrder>(o) ||
+         std::holds_alternative<model::OrderDenied>(o) ||
+         std::holds_alternative<model::ModifyOrder>(o) ||
+         std::holds_alternative<model::CancelOrder>(o);
+}
+
 class Collector {
 public:
-  explicit Collector(std::size_t orders, std::size_t trades)
-      : oms_{static_cast<std::uint32_t>(orders + 1), static_cast<std::uint32_t>(trades + 1)} {}
+  Collector(std::size_t orders, std::size_t fills) : replay_{orders, fills} {}
 
   void on_output(std::uint64_t seq, const model::Output& output) {
-    if (const auto* submit = std::get_if<model::SubmitOrder>(&output)) {
-      create(seq, submit->client_order_id, submit->quantity, ex::OrderEventKind::Submitted);
-    } else if (const auto* denied = std::get_if<model::OrderDenied>(&output)) {
-      model::Quantity one;
-      static_cast<void>(model::Quantity::from_raw(kUnit, 0, one));
-      create(seq, denied->header.client_order_id, one, ex::OrderEventKind::Denied);
-    } else if (const auto* modify = std::get_if<model::ModifyOrder>(&output)) {
-      internal(seq, modify->client_order_id, ex::OrderEventKind::PendingUpdate);
-    } else if (const auto* cancel = std::get_if<model::CancelOrder>(&output)) {
-      internal(seq, cancel->client_order_id, ex::OrderEventKind::PendingCancel);
+    const ReplayOutcome r = replay_.on_output(output);
+    if (!r.known) {
+      skipped_ += is_order_command(output) ? 1U : 0U;
+      return;
     }
+    RawStep step;
+    step.action = "Plain";
+    step.kind = std::string{ex::to_string(r.kind)};
+    record(seq, r, std::move(step));
   }
 
   void on_event(std::uint64_t seq, const model::OrderEvent& event) {
-    const auto found = index_.find(std::string{model::header_of(event).client_order_id.view()});
-    if (found == index_.end()) {
+    const ReplayOutcome r = replay_.on_event(event);
+    if (!r.known) {
       ++skipped_;
       return;
     }
-    std::uint32_t slot = ex::kNoIndex;
-    const ex::EventOutcome outcome = ex::apply_order_event(oms_, event, slot);
-    RawStep step = describe(event);
-    step.seq = seq;
-    step.refused = outcome != ex::EventOutcome::Applied;
-    observe(oms_.find(model::header_of(event).client_order_id), step);
-    orders_[found->second].steps.push_back(std::move(step));
+    record(seq, r, describe(event));
   }
 
   [[nodiscard]] std::vector<OrderTrace>& orders() { return orders_; }
   [[nodiscard]] std::size_t skipped() const { return skipped_; }
 
 private:
-  void create(std::uint64_t seq, const model::ClientOrderId& id, model::Quantity quantity,
-              ex::OrderEventKind kind) {
-    const std::string key{id.view()};
-    if (index_.contains(key)) {
-      internal(seq, id, kind); // a second command for the same id: apply it as it comes
-      return;
-    }
-    ex::OrderRecord record;
-    record.client_order_id = id;
-    record.state = ex::OrderState{quantity};
-    std::uint32_t slot = ex::kNoIndex;
-    static_cast<void>(oms_.create(record, slot));
-    index_.emplace(key, orders_.size());
-    orders_.push_back(OrderTrace{key, quantity.raw(), {}});
-    internal(seq, id, kind);
-  }
-
-  void internal(std::uint64_t seq, const model::ClientOrderId& id, ex::OrderEventKind kind) {
-    const auto found = index_.find(std::string{id.view()});
+  void record(std::uint64_t seq, const ReplayOutcome& r, RawStep step) {
+    const ex::OrderRecord& o = replay_.oms().at(r.index);
+    const std::string key{o.client_order_id.view()};
+    auto found = index_.find(key);
     if (found == index_.end()) {
-      ++skipped_;
-      return;
+      found = index_.emplace(key, orders_.size()).first;
+      orders_.push_back(OrderTrace{key, o.state.quantity().raw(), {}});
     }
-    const std::uint32_t slot = oms_.find(id);
-    const bool applied = slot != ex::kNoIndex && core::ok(oms_.apply(slot, kind));
-    RawStep step;
     step.seq = seq;
-    step.refused = !applied;
-    step.action = "Plain";
-    step.kind = std::string{ex::to_string(kind)};
-    observe(slot, step);
-    orders_[found->second].steps.push_back(std::move(step));
-  }
-
-  void observe(std::uint32_t slot, RawStep& step) const {
-    if (slot == ex::kNoIndex) {
-      step.status = "INITIALIZED";
-      step.prev = "NONE";
-      return;
-    }
-    const ex::OrderState& o = oms_.at(slot).state;
-    step.status = std::string{model::to_string(o.status())};
-    const std::optional<model::OrderStatus> previous = o.previous();
+    step.refused = !r.applied;
+    step.status = std::string{model::to_string(o.state.status())};
+    const std::optional<model::OrderStatus> previous = o.state.previous();
     step.prev = previous ? std::string{model::to_string(*previous)} : "NONE";
-    step.quantity = o.quantity().raw();
-    step.filled = o.filled().raw();
+    step.quantity = o.state.quantity().raw();
+    step.filled = o.state.filled().raw();
+    orders_[found->second].steps.push_back(std::move(step));
   }
 
   static RawStep describe(const model::OrderEvent& event) {
@@ -164,7 +131,7 @@ private:
     return step;
   }
 
-  ex::Oms oms_;
+  OrderReplay replay_;
   std::map<std::string, std::size_t, std::less<>> index_;
   std::vector<OrderTrace> orders_;
   std::size_t skipped_ = 0;
@@ -179,30 +146,6 @@ std::string tla_string(std::string_view text) {
     out += c;
   }
   return out + "\"";
-}
-
-// Whether T is one of the order event types.
-template <typename T, typename... E> constexpr bool is_order_event(std::variant<E...>* /*tag*/) {
-  return (std::is_same_v<T, E> || ...);
-}
-
-// Counts orders and fills so the OMS never evicts.
-Status count(const std::string& log_dir, std::size_t& orders, std::size_t& fills) {
-  EventLogReader reader;
-  Status s = reader.open(log_dir);
-  if (!core::ok(s)) {
-    return s;
-  }
-  model::wire::RecordView record;
-  while (core::ok(s = reader.next(record))) {
-    const auto kind = record.header.kind;
-    if (kind >= model::wire::kFirstOutputKind) {
-      ++orders; // an upper bound: every output
-    } else if (kind == static_cast<std::uint16_t>(model::wire::RecordKind::OrderFilled)) {
-      ++fills;
-    }
-  }
-  return s == Status::EndOfStream ? Status::Ok : s;
 }
 
 Status collect(const std::string& log_dir, Collector& collector) {
@@ -231,7 +174,7 @@ Status collect(const std::string& log_dir, Collector& collector) {
     std::visit(
         [&collector, seq](const auto& e) {
           using T = std::decay_t<decltype(e)>;
-          if constexpr (is_order_event<T>(static_cast<model::OrderEvent*>(nullptr))) {
+          if constexpr (kIsOrderEvent<T>) {
             collector.on_event(seq, model::OrderEvent{e});
           }
         },
@@ -365,7 +308,7 @@ Status export_trace(const std::string& log_dir, const std::string& spec, const s
   }
   std::size_t orders = 0;
   std::size_t fills = 0;
-  Status s = count(log_dir, orders, fills);
+  Status s = OrderReplay::count(log_dir, orders, fills);
   if (!core::ok(s)) {
     error = "cannot read the event log in " + log_dir;
     return s;

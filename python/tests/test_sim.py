@@ -178,3 +178,85 @@ def test_unknown_fee_schedules_are_reported(tmp_path: Path) -> None:
         assert "vip9" in str(e)
     else:
         raise AssertionError("an unknown fee schedule must stop the run")
+
+
+class ParentBuyer(Strategy):
+    """Rests a passthrough parent bid on the first quote and watches it fill."""
+
+    def __init__(self, params: Any = None, **kwargs: Any) -> None:
+        super().__init__(params, **kwargs)
+        self.parent: Any = None
+        self.views: list[Any] = []
+        self.children: list[Any] = []
+        self.events: list[str] = []
+
+    def on_start(self, ctx: jarvis.Context) -> None:
+        ctx.subscribe_quotes(IID, Cadence.EVERY)
+
+    def on_quote(self, ctx: jarvis.Context, quote: m.QuoteTick) -> None:
+        if self.parent is None:
+            intent = ctx.limit(IID, m.OrderSide.BUY, "0.010", "65000.0", post_only=True)
+            self.parent = ctx.submit_parent(intent)
+            view = ctx.parent(self.parent)
+            self.views.append((view.algo, str(view.quantity), view.children, view.active))
+            self.children = [o.parent_id for o in ctx.open_orders()]
+
+    def on_order_event(self, ctx: jarvis.Context, event: Any) -> None:
+        self.events.append(type(event).__name__)
+        if isinstance(event, m.OrderFilled):
+            self.views.append(ctx.parent(self.parent))
+
+
+def test_a_passthrough_parent_order(tmp_path: Path) -> None:
+    node = Node(_config(tmp_path, SIM), out=tmp_path / "run")
+    strategy = ParentBuyer(id="taker-001")
+    result = node.add_strategy(strategy).run()
+    assert result.strategy_errors == 0
+    assert strategy.views[0] == ("passthrough", "0.010", 1, True)
+    assert strategy.children == [strategy.parent]  # the child names its parent
+    assert strategy.events == ["OrderSubmitted", "OrderAccepted", "OrderFilled"]
+    assert strategy.views[-1] is None  # filled: the parent closed
+
+    try:
+        ctx_error = None
+        Node(_config(tmp_path / "b", SIM), out=tmp_path / "run-b").add_strategy(
+            _BadAlgo(id="taker-001")
+        ).run()
+    except Exception as e:  # noqa: BLE001
+        ctx_error = e
+    assert ctx_error is None  # the error is caught inside the callback below
+    assert _BadAlgo.message and "unknown execution algorithm" in _BadAlgo.message
+
+
+class _BadAlgo(Strategy):
+    message = ""
+
+    def on_start(self, ctx: jarvis.Context) -> None:
+        try:
+            ctx.submit_parent(ctx.limit(IID, m.OrderSide.BUY, "0.010", "65000.0"), algo="twap")
+        except ValueError as e:
+            type(self).message = str(e)
+
+
+def test_the_run_report_matches_the_kernel(tmp_path: Path) -> None:
+    node = Node(_config(tmp_path, SIM), out=tmp_path / "run")
+    strategy = Taker(id="taker-001")
+    result = node.add_strategy(strategy).run()
+    report = result.report()
+    assert report.book == "L1 (bookTicker) + trades (aggTrade)"
+    assert report.fill_model == "top_of_book"
+    assert report.fee_schedule == "binance_usdm_vip0"
+    assert "latency feed 1.000 ms, out 20.000 ms, in 5.000 ms" in report.venue
+    row = report.row("taker-001", IID)
+    assert row is not None
+    assert (row.fills, row.maker_fills, row.taker_fills) == (2, 1, 1)
+    position = strategy.position  # read by the strategy after both fills
+    assert str(row.position) == "0.020"
+    assert row.avg_px_open == position.avg_px_open
+    assert row.commission == position.commission
+    assert str(row.commission) == "0.45500050 USDT"
+    counts = report.orders["taker-001"]
+    assert (counts.submitted, counts.accepted, counts.filled) == (2, 2, 2)
+    assert [str(b) for b in report.starting_balances] == ["10000.00000000 USDT"]
+    assert [str(b) for b in report.ending_balances] == ["9999.54499950 USDT"]
+    assert "fills 2 (maker 1, taker 1)" in str(report)

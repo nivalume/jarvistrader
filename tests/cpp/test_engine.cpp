@@ -927,6 +927,225 @@ TEST_SUITE("unit") {
     CHECK(engine.failures().empty());
   }
 
+  TEST_CASE("the algo book reserves what no child works and closes settled parents") {
+    st::AlgoBook book{4, 2};
+    st::AlgoState p;
+    p.parent_id = make_id<md::ClientOrderId>("P-1");
+    p.intent = st::OrderIntent::limit(iid("BTCUSDT-PERP.BINANCE"), md::OrderSide::Buy,
+                                      quantity("1.000"), price("100.0"));
+    p.slot = 1;
+    std::uint32_t i = ex::kNoIndex;
+    REQUIRE(book.open(p, i) == Status::Ok);
+    const auto reserved = [&book] { return book.reserved(1, md::OrderSide::Buy); };
+    CHECK(reserved() == quantity("1.000").raw());
+    CHECK(book.reserved(1, md::OrderSide::Sell) == 0);
+    CHECK(book.find(0, p.parent_id) == i);
+    CHECK(book.find(1, p.parent_id) == ex::kNoIndex); // another strategy's
+
+    const md::ClientOrderId c1 = make_id<md::ClientOrderId>("C-1");
+    const md::ClientOrderId c2 = make_id<md::ClientOrderId>("C-2");
+    REQUIRE(book.add_child(i, c1, quantity("0.400").raw()) == Status::Ok);
+    CHECK(reserved() == quantity("0.600").raw());
+    book.on_child(i, c1, quantity("0.100").raw(), 0, quantity("0.300").raw(), true);
+    CHECK(book.at(i).filled_raw == quantity("0.100").raw());
+    CHECK(reserved() == quantity("0.600").raw()); // remaining 0.9, working 0.3
+    book.on_child(i, c1, quantity("0.300").raw(), 0, 0, false);
+    CHECK(book.at(i).child_count == 0);
+    CHECK(reserved() == quantity("0.600").raw());
+    book.on_child(i, c1, 0, quantity("0.100").raw(), 0, false); // a void of the closed child
+    CHECK(book.at(i).filled_raw == quantity("0.300").raw());
+    CHECK(reserved() == quantity("0.700").raw());
+    CHECK_FALSE(book.settle(i));
+
+    REQUIRE(book.add_child(i, c2, quantity("0.700").raw()) == Status::Ok);
+    CHECK(reserved() == 0);
+    book.cancel(i);
+    CHECK_FALSE(book.settle(i)); // a child still works
+    book.on_child(i, c2, 0, 0, 0, false);
+    CHECK(book.settle(i));
+    CHECK_FALSE(book.at(i).active);
+    CHECK(reserved() == 0);
+    CHECK(book.find(0, p.parent_id) == ex::kNoIndex);
+
+    for (int k = 0; k < 4; ++k) {
+      REQUIRE(book.open(p, i) == Status::Ok);
+    }
+    CHECK(book.open(p, i) == Status::CapacityExceeded);
+    CHECK(reserved() == 4 * quantity("1.000").raw());
+    for (std::size_t k = 0; k < st::kAlgoChildren; ++k) {
+      REQUIRE(book.add_child(i, c1, 1) == Status::Ok);
+    }
+    CHECK(book.add_child(i, c2, 1) == Status::CapacityExceeded);
+    book.finish(i);
+    CHECK(reserved() == 3 * quantity("1.000").raw());
+  }
+
+  TEST_CASE("a passthrough parent works through one child that passes Gate B only") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    md::ClientOrderId second;
+    md::ClientOrderId unknown;
+    st::ParentView pv;
+    st::OrderView child_view;
+    std::vector<st::OrderView> open(4);
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      switch (step) {
+      case 0:
+        REQUIRE(
+            ctx.submit_parent(st::AlgoKind::Passthrough,
+                              ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.0")),
+                              parent) == Status::Ok);
+        REQUIRE(ctx.parent(parent, pv));
+        REQUIRE(ctx.open_orders(open) == 1);
+        child_view = open[0];
+        REQUIRE(ctx.submit_parent(st::AlgoKind::Passthrough,
+                                  ctx.limit(iid("ETHUSDT-PERP.BINANCE"), md::OrderSide::Buy,
+                                            quantity("1.000"), price("100.0")),
+                                  unknown) == Status::Ok);
+        break;
+      case 1:
+        REQUIRE(ctx.parent(parent, pv));
+        REQUIRE(ctx.submit_parent(
+                    st::AlgoKind::Passthrough,
+                    ctx.limit(btc, md::OrderSide::Sell, quantity("0.500"), price("101.0")),
+                    second) == Status::Ok);
+        CHECK(ctx.cancel(second) == Status::Ok);
+        CHECK(ctx.cancel(second) == Status::InvalidState); // already canceling
+        break;
+      default:
+        break;
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "DENIED INSTRUMENT_UNKNOWN"});
+    CHECK(pv.active);
+    CHECK(pv.children == 1);
+    CHECK(pv.reserved == quantity("0.000"));
+    CHECK(pv.quantity == quantity("1.000"));
+    CHECK(child_view.parent_id == parent);
+    CHECK_FALSE(child_view.client_order_id == parent);
+    REQUIRE(count_outputs<md::SubmitOrder>(engine.outputs()) == 1);
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* sub = std::get_if<md::SubmitOrder>(&o)) {
+        CHECK(sub->client_order_id == child_view.client_order_id); // the child goes out
+        CHECK(sub->quantity == quantity("1.000"));
+        CHECK(sub->price == price("100.0"));
+      }
+      if (const auto* d = std::get_if<md::OrderDenied>(&o)) {
+        CHECK(d->header.client_order_id == unknown); // the parent is denied
+      }
+    }
+
+    const md::ClientOrderId child = child_view.client_order_id;
+    log.clear();
+    REQUIRE(drive(engine,
+                  {accepted(3, child, "v1"), filled(4, child, "t1", "0.400", "100.0"),
+                   trade_at(5, "100.0")},
+                  seq) == Status::Ok);
+    CHECK(pv.filled == quantity("0.400"));
+    CHECK(pv.active);
+    const st::Trading& trading = engine.kernel().trading;
+    REQUIRE(count_outputs<md::CancelOrder>(engine.outputs()) == 1); // the second parent's child
+    std::optional<md::ClientOrderId> second_child;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* sub = std::get_if<md::SubmitOrder>(&o)) {
+        second_child = sub->client_order_id;
+      }
+    }
+    REQUIRE(second_child.has_value());
+    const md::ClientOrderId second_id = second_child.value_or(md::ClientOrderId{});
+    CHECK(log == std::vector<std::string>{"ACCEPTED", "FILLED", "SUBMITTED", "PENDING_CANCEL"});
+
+    log.clear();
+    REQUIRE(drive(engine, {filled(6, child, "t2", "0.600", "100.0"), canceled(7, second_id)},
+                  seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"FILLED", "CANCELED"});
+    CHECK_FALSE(trading.parent(0, parent, pv)); // filled: closed
+    CHECK_FALSE(trading.parent(0, second, pv)); // canceled and its child closed: closed
+    CHECK(trading.algos.reserved(0, md::OrderSide::Buy) == 0);
+    CHECK(trading.stats.parents == 2);
+    CHECK(trading.stats.children == 2);
+    CHECK(engine.failures().empty());
+  }
+
+  TEST_CASE(
+      "a child the rate limit denies ends its passthrough parent; cancel_all reaches parents") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId a;
+    md::ClientOrderId b;
+    md::ClientOrderId c;
+    std::uint32_t canceled_count = 0;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        REQUIRE(
+            ctx.submit_parent(st::AlgoKind::Passthrough,
+                              ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.0")),
+                              a) == Status::Ok);
+        REQUIRE(
+            ctx.submit_parent(st::AlgoKind::Passthrough,
+                              ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.0")),
+                              b) == Status::Ok);
+      } else if (step == 1) {
+        REQUIRE(
+            ctx.submit_parent(st::AlgoKind::Passthrough,
+                              ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("99.0")),
+                              c) == Status::Ok);
+        REQUIRE(ctx.cancel_all(canceled_count) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::KernelConfig config = small_config();
+    config.trading.risk.orders_per_10s = 2;
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{config, set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    const st::Trading& trading = engine.kernel().trading;
+    st::ParentView pv;
+    CHECK(trading.parent(0, a, pv));
+    CHECK(pv.children == 1);
+    CHECK(trading.parent(0, b, pv)); // the second child also fits the window
+    log.clear();
+    // Ten seconds later a new window: c's child passes; then cancel_all cancels every child.
+    REQUIRE(drive(engine, {trade_at(10'000'000'002, "100.0")}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "PENDING_CANCEL", "PENDING_CANCEL",
+                                          "PENDING_CANCEL"});
+    CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 3);
+    CHECK(canceled_count == 0); // the parents' algorithms sent the cancels
+    CHECK(trading.parent(0, c, pv));
+    CHECK(pv.canceling);
+
+    // A full window: the child is denied and the parent ends at once.
+    config.trading.risk.orders_per_10s = 1;
+    std::vector<std::string> log2;
+    md::ClientOrderId d;
+    md::ClientOrderId e;
+    Script script2 = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        REQUIRE(ctx.submit(ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("99.0")),
+                           d) == Status::Ok);
+        REQUIRE(
+            ctx.submit_parent(st::AlgoKind::Passthrough,
+                              ctx.limit(btc, md::OrderSide::Buy, quantity("1.000"), price("100.0")),
+                              e) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set2{Trader{&script2, &log2}};
+    jarvis::engine::Engine engine2{config, set2};
+    seq = 0;
+    REQUIRE(drive(engine2, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    CHECK(log2 == std::vector<std::string>{"SUBMITTED", "DENIED RATE_LIMIT_EXCEEDED"});
+    CHECK_FALSE(engine2.kernel().trading.parent(0, e, pv));
+    CHECK(engine2.kernel().trading.algos.reserved(0, md::OrderSide::Buy) == 0);
+  }
+
   TEST_CASE("orders for an instrument without a definition are denied") {
     const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
     std::vector<std::string> log;

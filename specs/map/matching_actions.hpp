@@ -17,8 +17,9 @@
 //   Gone        QuoteTick with the best bid one tick below p
 //   Cross(v)    QuoteTick offering v at p while the order rests, then the ask moves back
 //
-// One spec unit is one raw quantity unit (10^-9), so the spec's integer division is the
-// simulator's (shrinking the queue ahead rounds down at raw resolution).
+// One spec unit is one lot of the order's size precision, so the spec's integer division is the
+// simulator's (shrinking the queue ahead rounds down to the lot). The trace driver uses size
+// precision 9, where a lot is one raw unit.
 
 namespace jarvis::specmap::matching {
 

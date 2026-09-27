@@ -409,12 +409,16 @@ private:
     return volume;
   }
 
-  // Volume ahead shrinks with the level: cancellations are spread over the queue in proportion.
+  // Volume ahead shrinks with the level: cancellations are spread over the queue in proportion,
+  // rounded down to the order's lot so that every fill quantity stays on the lot grid.
   static void shrink_queue(SimOrder& o, std::uint64_t before, std::uint64_t after) noexcept {
     if (after >= before || before == 0) {
       return; // growth joins behind the order
     }
-    o.ahead_raw = static_cast<std::uint64_t>(static_cast<core::u128>(o.ahead_raw) * after / before);
+    const std::uint64_t lot = core::kPow10[model::kFixedPrecision - o.quantity.precision()];
+    const auto shrunk =
+        static_cast<std::uint64_t>(static_cast<core::u128>(o.ahead_raw) * after / before);
+    o.ahead_raw = shrunk - shrunk % lot;
   }
 
   // ---- the opposite side ----------------------------------------------------------------------

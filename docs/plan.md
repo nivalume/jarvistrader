@@ -93,7 +93,7 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 - [x] task: execution — OMS：按 `ClientOrderId` 开放寻址索引、成交按 trade id 去重、已关闭订单按关闭顺序淘汰、按 instrument 与策略统计未完成数量（Netting）
 - [x] task: execution — `open_exposure()`（venue 持仓 + 未完成订单，OMS 按 instrument 维护运行总量）与按策略的归因账本；父单剩余量随执行算法加入
 - [x] task: execution — `ExecutionEngine`：命令作为输出、venue 事件推进状态机、`OrderDenied` 与内核产生的订单事件回送策略的 `on_order_event`
-- [ ] task: execution — `ExecAlgorithm` concept、`AlgoState` 竞技场、`AlgoContext`（子单经 Gate B、生成前查询令牌）与直通模式
+- [x] task: execution — `ExecAlgorithm` concept、`AlgoState` 竞技场、`AlgoContext`（子单经 Gate B、生成前查询限速额度）与直通模式
 - [x] task: strategy — `Context` 的下单方法（`submit`、`modify`、`cancel`、`cancel_all`）、订单与 instrument 查询、意图工厂，C++ 与 Python 同名（§9.4）
 - [x] task: strategy — `Context` 的 `position`、`balance`、`exposure`、`trading_state` 查询，C++ 与 Python 同名
 - [x] task: cost — `FeeModel`（档位、BNB 抵扣、资金费）、`SlippageModel`、`LatencyModel`（§11.1）
@@ -109,15 +109,17 @@ M2 验收记录（`tools/m2_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（da
 - [x] task: specs — `TradingState.tla`（含限速窗口）与映射头
 - [x] task: specs — `Matching.tla`（排队位置成交模型）与映射头
 - [x] task: tools — `tools/tla/behaviours.py`、`trace_driver`、`jarvis trace-export`、`tools/tla/check_trace.py`（§18.2）
-- [ ] task: python — 回测 `RunReport`：成交、手续费、盈亏，并标注所用数据与成交模型
-- [ ] task: examples — `examples/py/mm_quote.py` 与 `examples/cpp/pegged_mm.cpp`，只供测试与 soak
+- [x] task: python — 回测 `RunReport`：成交、手续费、盈亏，并标注所用数据与成交模型（C++ `jarvis report` 与 Python `result.report()` 共用一份实现）
+- [x] task: examples — `examples/py/mm_quote.py` 与 `examples/cpp/pegged_mm.cpp`，只供测试与 soak（二者为孪生实现，同一数据写出逐字节相同的日志）
 - [x] task: harness — `OrderLifecycle` 正向与反向 trace validation 进入 CI（反向用 golden 用例 `replay_orders` 的日志）
 - [x] task: harness — `TradingState`、`Matching` 的不变量检查与生成行为进入 CI
 - [x] task: harness — 性质测试：成交守恒、仓位等于成交流之和、`open_exposure()` 等于逐单求和
 - [x] task: harness — 热基准 `oms/apply_order_event`、`risk/gate_a`、`risk/gate_b`、`step/quote_to_command`
 - [x] task: harness — 热基准 `sim/match_top_of_book`、`sim/match_queue_position`
 - [ ] task: bench — 准备自托管基准 runner（D21），就绪后把核心路径阈值收紧到 3%
-- [ ] task: 验收 — Python 与 C++ 示例策略在 BTCUSDT-PERP 数据上完成回测，跨 preset 指纹一致；规约 a、c、d 在 CI 中通过
+- [x] task: 验收 — Python 与 C++ 示例策略在 BTCUSDT-PERP 数据上完成回测，跨 preset 指纹一致；规约 a、c、d 在 CI 中通过
+
+M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（aggTrades 57 万条、bookTicker 740 万条，instrument 定义按 BTCUSDT 公布的过滤器写入目录）由 Python 做市示例 `mm_quote.py` 与其 C++ 孪生 `pegged_mm` 分别在 Release 与 `-O0` 构建下对模拟 venue 回测（queue_position 成交模型、带抖动的延迟、VIP0 费率）。四份运行日志逐字节相同（13,762,710 条记录，1372 万条输入、4 万条输出，其中 6.9 万条 venue 回报），Python 运行回放无偏差。该运行的 20,697 个订单投影到 `OrderLifecycle` 后共 109,689 步（其中 51 步是实现拒绝的迟到事件），TLC 判定为规约的合法行为。`RunReport`：29,255 笔成交全部为 maker，成交名义 1391 万 USDT，手续费 2781.78 USDT，已实现 -1011.45 USDT；示例策略只在触价挂单、不做选择，亏损符合预期。这次运行暴露了模拟撮合的一个缺陷：`QueuePosition` 按比例扣减前方量时没有取整到数量步长，之后的成交量落在网格外，运行因 `PrecisionLoss` 停止；修正后前方量向下取整到订单的步长，并加了回归测试。真实数据中还有少量不在 tick 上的成交价（如 tick 为 0.1 时的 70344.83），转换器因此以两位小数记录成交价，内核与撮合器按原值处理。规约 a、c、d 已接入 CI 的 formal job（TLC、正向回放、golden trace 的反向检查），三项在本地均通过；本分支的推送不触发 CI，CI 上的结果尚未验证。
 
 ## M4 网络、Binance USDⓈ-M 适配器、Codec 与录制，规约 e（sandbox 可用）
 

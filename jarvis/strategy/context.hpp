@@ -28,6 +28,7 @@
 #include "jarvis/model/money.hpp"
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/strategy/exec_algo.hpp"
 #include "jarvis/strategy/trading.hpp"
 
 // State the engine and the strategies' Context share (docs/architecture.md sections 7.2-7.5 and
@@ -303,6 +304,14 @@ public:
     const std::uint32_t index =
         core::ok(instruments.find(intent.instrument_id, slot)) ? slot.value : execution::kNoIndex;
     return trading.submit(current, strategy, intent, index, outputs, out);
+  }
+  [[nodiscard]] core::Status submit_parent(StrategyIndex strategy, AlgoKind kind,
+                                           const AlgoParams& params, const OrderIntent& intent,
+                                           model::ClientOrderId& out) {
+    model::InstrumentSlot slot;
+    const std::uint32_t index =
+        core::ok(instruments.find(intent.instrument_id, slot)) ? slot.value : execution::kNoIndex;
+    return trading.submit_parent(current, strategy, kind, params, intent, index, outputs, out);
   }
   [[nodiscard]] core::Status modify(StrategyIndex strategy, const model::ClientOrderId& id,
                                     std::optional<model::Quantity> quantity,
@@ -647,6 +656,16 @@ public:
 
   [[nodiscard]] core::Status submit(const OrderIntent& intent, model::ClientOrderId& out) {
     return k_->submit(self_, intent, out);
+  }
+  // A parent order worked by execution algorithm `kind` (section 11.4); `out` is the parent's
+  // id, which ctx.cancel and ctx.parent accept. Its children are this strategy's orders.
+  [[nodiscard]] core::Status submit_parent(AlgoKind kind, const OrderIntent& intent,
+                                           model::ClientOrderId& out,
+                                           const AlgoParams& params = {}) {
+    return k_->submit_parent(self_, kind, params, intent, out);
+  }
+  [[nodiscard]] bool parent(const model::ClientOrderId& id, ParentView& out) const {
+    return k_->trading.parent(self_, id, out);
   }
   // NotFound: not an order of this strategy. InvalidState: closed, or a cancel is pending.
   [[nodiscard]] core::Status modify(const model::ClientOrderId& id,

@@ -540,8 +540,12 @@ private:
 
   core::Status on_venue_order_event(const model::OrderEvent& e) {
     StrategyIndex owner = 0;
-    if (!k_.trading.on_venue_event(k_.current, e, owner)) {
+    core::Status algo = core::Status::Ok;
+    if (!k_.trading.on_venue_event(k_.current, e, owner, k_.outputs, algo)) {
       return core::Status::Ok; // refused and unknown events are counted, not fatal
+    }
+    if (!core::ok(algo)) {
+      return algo;
     }
     if (std::holds_alternative<model::OrderFilled>(e) ||
         std::holds_alternative<model::OrderFillVoided>(e)) {

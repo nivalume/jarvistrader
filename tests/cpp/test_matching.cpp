@@ -289,6 +289,22 @@ TEST_SUITE("unit") {
     CHECK(v.data(m::Event{deltas}) == Lines{"FILLED R 0.250@100.3 M"});
   }
 
+  TEST_CASE("a proportional queue shrink stays on the lot grid, so fills do too") {
+    Venue v{bt::FillModel::QueuePosition};
+    v.data(quote(0, "100.0", "100.1", "0.003", "1.000"));
+    v.command(submit("A", m::OrderSide::Buy, "0.005", "100.0")); // 0.003 ahead
+    std::array<bt::SimOrder, 2> open{};
+    // Growth joins behind (0.003 ahead of 0.005); a fall to 0.004 leaves 0.003 x 4/5 = 0.0024
+    // ahead, rounded down to the lot: 0.002.
+    v.data(quote(0, "100.0", "100.1", "0.005", "1.000"));
+    v.data(quote(0, "100.0", "100.1", "0.004", "1.000"));
+    REQUIRE(v.sim.open_orders(open) == 1);
+    CHECK(open[0].ahead_raw == qty("0.002").raw());
+    // Before the rounding the queue ahead was 0.0024 and this fill 0.0006, off the grid.
+    CHECK(v.data(trade(0, "100.0", "0.003", m::AggressorSide::Sell)) ==
+          Lines{"FILLED A 0.001@100.0 M"});
+  }
+
   TEST_CASE("cancel, modify and their rejections") {
     Venue v{bt::FillModel::QueuePosition};
     v.data(quote(0, "100.0", "100.1"));

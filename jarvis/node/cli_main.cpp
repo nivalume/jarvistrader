@@ -9,6 +9,7 @@
 //   jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]
 //   jarvis replay RUN_DIR [--until SEQ] [--dump-state]
 //   jarvis trace-export LOG_DIR --spec NAME --out DIR
+//   jarvis report RUN_DIR [--out FILE]
 //
 // Exit status: 0 success, 1 failure or difference, 2 usage error, 3 replay divergence.
 
@@ -42,6 +43,7 @@
 #include "jarvis/node/node_cli.hpp"
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/run_report.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -66,6 +68,7 @@ constexpr std::string_view kUsageText =
     "  jarvis roundtrip INPUT --out FILE\n"
     "  jarvis replay RUN_DIR [--until SEQ] [--dump-state]\n"
     "  jarvis trace-export LOG_DIR --spec NAME --out DIR\n"
+    "  jarvis report RUN_DIR [--out FILE]\n"
     "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
@@ -448,6 +451,29 @@ int cmd_config(const Args& args) {
 
 } // namespace
 
+// The backtest report of a run directory: fills, fees and PnL, labelled with data and models.
+int cmd_report(const Args& args) {
+  if (args.positional.size() != 1) {
+    return usage("report needs one run directory");
+  }
+  node::RunReport report;
+  std::string error;
+  const Status s = node::build_run_report(std::string{args.positional[0]}, report, error);
+  if (!jarvis::core::ok(s)) {
+    std::cerr << "jarvis: report: " << error << "\n";
+    return kFailed;
+  }
+  const std::string text = node::report_text(report);
+  if (const auto out = args.option("--out")) {
+    if (!write_file(std::string{*out}, text)) {
+      return failed("write " + std::string{*out}, Status::IoError);
+    }
+  } else {
+    std::cout << text;
+  }
+  return kOk;
+}
+
 // Backward trace validation (docs/architecture.md 18.2): the log projected on a spec.
 int cmd_trace_export(const Args& args) {
   const auto spec = args.option("--spec");
@@ -467,6 +493,29 @@ int cmd_trace_export(const Args& args) {
             << " steps (" << summary.refused << " refused), " << summary.skipped
             << " events of unknown orders skipped -> " << *out << "\n";
   return kOk;
+}
+
+// The subcommands that read a log or a run directory.
+int run_log_command(std::string_view command, std::span<char*> rest, Args& args) {
+  if (command == "dump") {
+    constexpr std::array<std::string_view, 2> kValues = {"--out", "--limit"};
+    constexpr std::array<std::string_view, 1> kFlags = {"--no-header"};
+    return parse_args(rest, kValues, kFlags, args) ? cmd_dump(args) : kUsage;
+  }
+  if (command == "replay") {
+    constexpr std::array<std::string_view, 1> kValues = {"--until"};
+    constexpr std::array<std::string_view, 1> kFlags = {"--dump-state"};
+    return parse_args(rest, kValues, kFlags, args) ? cmd_replay(args) : kUsage;
+  }
+  if (command == "report") {
+    constexpr std::array<std::string_view, 1> kValues = {"--out"};
+    return parse_args(rest, kValues, {}, args) ? cmd_report(args) : kUsage;
+  }
+  if (command == "trace-export") {
+    constexpr std::array<std::string_view, 2> kValues = {"--spec", "--out"};
+    return parse_args(rest, kValues, {}, args) ? cmd_trace_export(args) : kUsage;
+  }
+  return usage("unknown command " + std::string{command});
 }
 
 int main(int argc, char** argv) {
@@ -489,11 +538,6 @@ int main(int argc, char** argv) {
     constexpr std::array<std::string_view, 3> kValues = {"--records", "--compare", "--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_fingerprint(args) : kUsage;
   }
-  if (command == "dump") {
-    constexpr std::array<std::string_view, 2> kValues = {"--out", "--limit"};
-    constexpr std::array<std::string_view, 1> kFlags = {"--no-header"};
-    return parse_args(rest, kValues, kFlags, args) ? cmd_dump(args) : kUsage;
-  }
   if (command == "roundtrip") {
     constexpr std::array<std::string_view, 1> kValues = {"--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_roundtrip(args) : kUsage;
@@ -502,18 +546,9 @@ int main(int argc, char** argv) {
     constexpr std::array<std::string_view, 3> kValues = {"--env", "--set", "--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_config(args) : kUsage;
   }
-  if (command == "replay") {
-    constexpr std::array<std::string_view, 1> kValues = {"--until"};
-    constexpr std::array<std::string_view, 1> kFlags = {"--dump-state"};
-    return parse_args(rest, kValues, kFlags, args) ? cmd_replay(args) : kUsage;
-  }
-  if (command == "trace-export") {
-    constexpr std::array<std::string_view, 2> kValues = {"--spec", "--out"};
-    return parse_args(rest, kValues, {}, args) ? cmd_trace_export(args) : kUsage;
-  }
   if (command == "--help" || command == "help") {
     std::cout << kUsageText;
     return kOk;
   }
-  return usage("unknown command " + std::string{command});
+  return run_log_command(command, rest, args);
 }

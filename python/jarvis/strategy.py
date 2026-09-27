@@ -23,7 +23,8 @@ Orders: ``ctx.submit(ctx.limit(iid, side, qty, price))`` returns the ClientOrder
 (submitted or denied, then the venue's answers) arrives in ``on_order_event``. ``ctx.modify``,
 ``ctx.cancel``, ``ctx.cancel_all``, ``ctx.order`` and ``ctx.open_orders`` complete the set;
 ``ctx.position``, ``ctx.exposure``, ``ctx.balance`` and ``ctx.trading_state`` read the portfolio
-and the risk state.
+and the risk state. ``ctx.submit_parent(intent, algo="passthrough")`` hands a parent order to an
+execution algorithm; ``ctx.parent`` reads it and ``ctx.cancel`` cancels it.
 
 An exception in a callback becomes a recorded StrategyError; ``risk.on_strategy_error`` decides
 what happens next (by default the strategy stops). Inside callbacks the wall clock and
@@ -43,6 +44,7 @@ Context = _native.Context
 DataKind = _native.DataKind
 OrderIntent = _native.OrderIntent
 OrderView = _native.OrderView
+ParentView = _native.ParentView
 PositionView = _native.PositionView
 ExposureView = _native.ExposureView
 QuoteBatch = _native.QuoteBatch
@@ -108,6 +110,7 @@ __all__ = [
     "ExposureView",
     "OrderIntent",
     "OrderView",
+    "ParentView",
     "PositionView",
     "QuoteBatch",
     "Strategy",

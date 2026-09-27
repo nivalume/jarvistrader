@@ -43,6 +43,7 @@
 #include "jarvis/node/node_cli.hpp"
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/run_report.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
@@ -1101,6 +1102,36 @@ void bind_context_trading(nb::class_<PyContext>& cls) {
           "Submits an order and returns its ClientOrderId. A denied order is not an error: "
           "OrderDenied arrives in on_order_event after this callback returns.")
       .def(
+          "submit_parent",
+          [](const PyContext& c, const st::OrderIntent& intent, std::string_view algo) {
+            st::AlgoKind kind = st::AlgoKind::Passthrough;
+            if (!st::parse_algo(algo, kind)) {
+              throw nb::value_error(
+                  ("unknown execution algorithm \"" + std::string{algo} + "\" (known: passthrough)")
+                      .c_str());
+            }
+            m::ClientOrderId id;
+            check(c.get().submit_parent(kind, intent, id), "submit_parent");
+            return id;
+          },
+          nb::arg("intent"), nb::arg("algo") = "passthrough",
+          "Submits a parent order worked by an execution algorithm and returns the parent's id, "
+          "which cancel and parent accept. The parent passes the intent checks; its child orders "
+          "are this strategy's orders (OrderView.parent_id names the parent). A denied parent "
+          "is not an error: OrderDenied names it in on_order_event.")
+      .def(
+          "parent",
+          [](const PyContext& c, nb::handle cid) -> nb::object {
+            m::ClientOrderId id;
+            from_py(cid, id, "client_order_id");
+            st::ParentView view;
+            if (!c.get().parent(id, view)) {
+              return nb::none();
+            }
+            return nb::cast(view, nb::rv_policy::copy);
+          },
+          nb::arg("parent_id"), "A copy of one of this strategy's working parents, or None.")
+      .def(
           "modify",
           [](const PyContext& c, nb::handle cid, nb::handle qty, nb::handle price) {
             m::ClientOrderId id;
@@ -1268,7 +1299,29 @@ void bind_orders(nb::module_& mod) {
   ro(&st::OrderView::filled, "filled_qty");
   ro(&st::OrderView::leaves, "leaves_qty");
   ro(&st::OrderView::avg_px, "avg_px");
+  ro(&st::OrderView::parent_id, "parent_id");
   ro(&st::OrderView::ts_init, "ts_init");
+
+  nb::class_<st::ParentView> parent(
+      mod, "ParentView",
+      "A parent order of an execution algorithm: its terms, what its children filled, and "
+      "the remaining quantity no child works yet (counted in open exposure).");
+  parent.def_prop_ro("parent_id", [](const st::ParentView& v) { return to_py(v.parent_id); });
+  parent.def_prop_ro("instrument_id",
+                     [](const st::ParentView& v) { return to_py(v.instrument_id); });
+  parent.def_prop_ro("side", [](const st::ParentView& v) { return to_py(v.side); });
+  parent.def_prop_ro("algo",
+                     [](const st::ParentView& v) { return std::string{st::to_string(v.kind)}; });
+  parent.def_prop_ro("quantity", [](const st::ParentView& v) { return to_py(v.quantity); });
+  parent.def_prop_ro("filled_qty", [](const st::ParentView& v) { return to_py(v.filled); });
+  parent.def_prop_ro("reserved_qty", [](const st::ParentView& v) { return to_py(v.reserved); });
+  parent.def_prop_ro("children", [](const st::ParentView& v) { return v.children; });
+  parent.def_prop_ro("active", [](const st::ParentView& v) { return v.active; });
+  parent.def_prop_ro("canceling", [](const st::ParentView& v) { return v.canceling; });
+  parent.def("__repr__", [](const st::ParentView& v) {
+    return "ParentView(" + std::string{v.parent_id.view()} + " " +
+           std::string{st::to_string(v.kind)} + ")";
+  });
   nb::class_<st::PositionView> position(
       mod, "PositionView",
       "A strategy's position in one instrument; PnL in the settlement currency, realized_pnl "
@@ -1310,6 +1363,90 @@ void bind_orders(nb::module_& mod) {
 }
 
 } // namespace
+
+nb::dict counts_to_py(const node::OrderCounts& c) {
+  nb::dict d;
+  d["submitted"] = c.submitted;
+  d["denied"] = c.denied;
+  d["accepted"] = c.accepted;
+  d["rejected"] = c.rejected;
+  d["canceled"] = c.canceled;
+  d["expired"] = c.expired;
+  d["filled"] = c.filled;
+  d["modifies"] = c.modifies;
+  d["cancels"] = c.cancels;
+  d["modify_rejected"] = c.modify_rejected;
+  d["cancel_rejected"] = c.cancel_rejected;
+  d["refused"] = c.refused;
+  return d;
+}
+
+nb::dict row_to_py(const node::ReportRow& r) {
+  nb::dict d;
+  d["strategy"] = r.strategy;
+  d["instrument"] = r.instrument;
+  d["fills"] = r.fills;
+  d["maker_fills"] = r.maker_fills;
+  d["taker_fills"] = r.taker_fills;
+  d["bought"] = to_py(r.bought);
+  d["sold"] = to_py(r.sold);
+  d["notional"] = to_py(r.notional);
+  d["commission"] = to_py(r.commission);
+  d["funding"] = to_py(r.funding);
+  d["realized_pnl"] = to_py(r.realized);
+  d["unrealized_pnl"] = to_py(r.unrealized);
+  d["net_pnl"] = to_py(r.net);
+  d["position"] = to_py(r.position);
+  d["avg_px_open"] = to_py(r.avg_px_open);
+  d["valuation"] = to_py(r.valuation);
+  d["valuation_source"] = r.valuation_source;
+  return d;
+}
+
+nb::dict run_report_to_py(const std::string& directory) {
+  node::RunReport r;
+  std::string error;
+  if (!core::ok(node::build_run_report(directory, r, error))) {
+    throw nb::value_error(error.c_str());
+  }
+  nb::dict d;
+  d["text"] = node::report_text(r);
+  d["directory"] = r.directory;
+  d["node_id"] = r.node_id;
+  d["env"] = r.env;
+  d["seed"] = r.seed;
+  d["catalog"] = r.catalog;
+  d["range"] = r.range;
+  d["streams"] = r.streams;
+  d["instruments"] = r.instruments;
+  d["book"] = r.book;
+  d["venue"] = r.venue;
+  d["fill_model"] = r.fill_model;
+  d["fee_schedule"] = r.fee_schedule;
+  nb::list start;
+  for (const m::Money& money : r.starting_balances) {
+    start.append(to_py(money));
+  }
+  nb::list end;
+  for (const m::Money& money : r.ending_balances) {
+    end.append(to_py(money));
+  }
+  d["starting_balances"] = start;
+  d["ending_balances"] = end;
+  nb::list rows;
+  for (const node::ReportRow& row : r.rows) {
+    rows.append(row_to_py(row));
+  }
+  d["rows"] = rows;
+  nb::dict orders;
+  for (const auto& [strategy, counts] : r.orders) {
+    orders[nb::str(strategy.c_str())] = counts_to_py(counts);
+  }
+  d["orders"] = orders;
+  d["first_ts"] = r.first_ts;
+  d["last_ts"] = r.last_ts;
+  return d;
+}
 
 void bind_node(nb::module_& mod) {
   bind_data_types(mod);
@@ -1404,6 +1541,8 @@ void bind_node(nb::module_& mod) {
   mod.def(
       "registered_strategies", []() { return node::StrategyRegistry::instance().names(); },
       "Names of the C++ strategies registered in this build.");
+  mod.def("run_report", &run_report_to_py, nb::arg("directory"),
+          "The backtest report of a run directory (see jarvis.report.RunReport).");
 }
 
 } // namespace jarvis::py

@@ -33,6 +33,7 @@
 #include "jarvis/risk/gates.hpp"
 #include "jarvis/risk/order_checks.hpp"
 #include "jarvis/risk/trading_state.hpp"
+#include "jarvis/strategy/exec_algo.hpp"
 
 // The kernel's trading state and command path (docs/architecture.md sections 8 and 9):
 // instrument definitions, the OMS, the identities orders are issued under, and the order events
@@ -42,6 +43,9 @@
 //            output and event) or marks it SUBMITTED (SubmitOrder output, OrderSubmitted event);
 //   modify   PENDING_UPDATE, ModifyOrder output, OrderPendingUpdate event;
 //   cancel   PENDING_CANCEL, CancelOrder output, OrderPendingCancel event.
+//   submit_parent  checks the parent intent against Gate A (an OrderDenied names the parent when
+//            it fails), then hands it to its execution algorithm, whose children are submitted
+//            like orders but pass Gate B only (exec_algo.hpp).
 //
 // A command either happens completely or not at all: the capacity it needs (one output, one
 // event) is checked before anything changes. The events wait in `events` until the callback that
@@ -65,6 +69,7 @@ struct TradingConfig {
   core::FixedString<8> node_tag;     // ClientOrderId prefix; default "jarvis"
   std::uint64_t epoch = 1;           // ClientOrderId epoch (always 1 in backtest)
   std::uint32_t currencies = 16;     // balances the portfolio tracks
+  std::uint32_t parents = 256;       // execution algorithm parents working at once
   portfolio::Margin margin = portfolio::StandardMargin{};
   risk::RiskConfig risk;
 };
@@ -87,6 +92,8 @@ struct TradingStats {
   std::uint64_t refused_order_events = 0; // transitions or quantities the OMS refused
   std::uint64_t duplicate_fills = 0;
   std::uint64_t dropped_events = 0; // kernel events lost to a full queue (position events)
+  std::uint64_t parents = 0;        // parents accepted by Gate A
+  std::uint64_t children = 0;       // child orders submitted by execution algorithms
 };
 
 // A copy of one order, for strategies (ctx.order, ctx.open_orders).
@@ -104,7 +111,8 @@ struct OrderView {
   model::Quantity quantity;
   model::Quantity filled;
   model::Quantity leaves;
-  std::optional<model::Price> avg_px; // truncated to the instrument's price precision
+  std::optional<model::Price> avg_px;            // truncated to the instrument's price precision
+  std::optional<model::ClientOrderId> parent_id; // the execution algorithm's parent, if any
   core::UnixNanos ts_init;
 };
 
@@ -127,12 +135,12 @@ struct PositionView {
 };
 
 // open_exposure() of one instrument (section 9.3): the venue position (all strategies) plus the
-// leaves of open orders. Execution algorithms add their parents' remaining quantity (v1.x).
+// leaves of open orders and the parents' remaining quantity that no child works yet.
 struct ExposureView {
   model::InstrumentId instrument_id;
   model::Decimal position;              // signed, raw at the instrument's size precision
-  model::Quantity open_buy;             // leaves of open buy orders
-  model::Quantity open_sell;            // leaves of open sell orders
+  model::Quantity open_buy;             // leaves of open buy orders and reserved buy parents
+  model::Quantity open_sell;            // the same for sells
   model::Decimal max_long;              // position + open buys
   model::Decimal max_short;             // position - open sells
   std::optional<model::Money> notional; // the larger of |max_long| and |max_short| at the mark
@@ -177,7 +185,8 @@ public:
         account_id{detail::id_or<model::AccountId>("SIM-001", c.account_id)},
         strategy_ids{strategies}, events{c.order_events},
         portfolio{portfolio::PortfolioConfig{instruments, strategies, c.currencies, c.margin}},
-        risk{c.risk, instruments, strategies}, event_rng_{seed ^ detail::kEventIdSalt} {
+        risk{c.risk, instruments, strategies}, algos{c.parents, instruments},
+        event_rng_{seed ^ detail::kEventIdSalt} {
     for (std::uint32_t i = 0; i < instruments; ++i) {
       static_cast<void>(definitions.push_back(std::nullopt));
     }
@@ -210,6 +219,173 @@ public:
   [[nodiscard]] core::Status submit(const core::EventKey& now, StrategyIndex s,
                                     const OrderIntent& intent, std::uint32_t slot, Outputs& outputs,
                                     model::ClientOrderId& cid) {
+    bool denied = false;
+    return place(now, s, intent, slot, execution::kNoIndex, outputs, cid, denied);
+  }
+
+  // A parent order for execution algorithm `kind`. Ok when the parent was denied (an
+  // OrderDenied names it) as for submit; InvalidArgument for an unknown instrument slot.
+  [[nodiscard]] core::Status submit_parent(const core::EventKey& now, StrategyIndex s,
+                                           AlgoKind kind, const AlgoParams& params,
+                                           const OrderIntent& intent, std::uint32_t slot,
+                                           Outputs& outputs, model::ClientOrderId& parent_id) {
+    if (!room(outputs)) {
+      return core::Status::CapacityExceeded;
+    }
+    const core::Status id = ids.next(parent_id);
+    if (!core::ok(id)) {
+      return id;
+    }
+    execution::OrderRecord record; // only for the denial's header
+    record.client_order_id = parent_id;
+    record.instrument_id = intent.instrument_id;
+    const model::Instrument* def = definition(slot);
+    std::string_view reason = def == nullptr
+                                  ? risk::reason::kInstrumentUnknown
+                                  : risk::check_intent(model::common(*def), intent, now.ts);
+    if (reason.empty()) {
+      const risk::OrderCheck check =
+          order_check(now, s, slot, model::common(*def), intent.side, intent.type, intent.quantity,
+                      intent.price, intent.reduce_only, std::nullopt);
+      reason = risk.check_parent(check);
+    }
+    AlgoState parent;
+    parent.parent_id = parent_id;
+    parent.parent_seq = ids.last_seq();
+    parent.intent = intent;
+    parent.kind = kind;
+    parent.params = params;
+    parent.strategy = s;
+    parent.slot = slot;
+    std::uint32_t index = execution::kNoIndex;
+    if (reason.empty() && !core::ok(algos.open(parent, index))) {
+      reason = kParentCapacityExceeded;
+    }
+    if (!reason.empty()) {
+      deny(now, s, record, execution::kNoIndex, reason, outputs);
+      return core::Status::Ok;
+    }
+    ++stats.parents;
+    AlgoContext ctx{*this, now, outputs, index};
+    const core::Status st =
+        dispatch(kind, [&](const auto& algo) { return algo.on_parent(algos.at(index), ctx); });
+    static_cast<void>(algos.settle(index));
+    return st;
+  }
+
+  static constexpr std::string_view kParentCapacityExceeded = "ALGO_CAPACITY_EXCEEDED";
+
+  // What an execution algorithm may do while it works one parent (the Ctx of ExecAlgorithm).
+  class AlgoContext {
+  public:
+    AlgoContext(Trading& t, const core::EventKey& now, Outputs& outputs, std::uint32_t parent)
+        : t_{t}, now_{now}, outputs_{outputs}, parent_{parent} {}
+
+    [[nodiscard]] core::UnixNanos now() const noexcept { return now_.ts; }
+    [[nodiscard]] const AlgoState& parent() const noexcept { return t_.algos.at(parent_); }
+    // Orders the rate windows still allow now.
+    [[nodiscard]] std::uint32_t rate_budget() noexcept {
+      return t_.risk.limiter().remaining(now_.ts);
+    }
+
+    // A child on the parent's instrument and side for at most the remaining quantity that no
+    // child works yet; it passes Gate B and the rate limit. `denied` tells whether it failed
+    // them (an OrderDenied names the child); InvalidArgument for a child that does not fit the
+    // parent, CapacityExceeded with kAlgoChildren children working.
+    [[nodiscard]] core::Status submit(const OrderIntent& child, model::ClientOrderId& out,
+                                      bool& denied) {
+      const AlgoState& p = parent();
+      denied = false;
+      if (!(child.instrument_id == p.intent.instrument_id) || child.side != p.intent.side ||
+          child.quantity.raw() == 0 || child.quantity.raw() > p.reserved_raw) {
+        return core::Status::InvalidArgument;
+      }
+      if (p.child_count >= kAlgoChildren) {
+        return core::Status::CapacityExceeded;
+      }
+      const core::Status s =
+          t_.place(now_, p.strategy, child, p.slot, parent_, outputs_, out, denied);
+      if (core::ok(s) && !denied) {
+        ++t_.stats.children;
+        return t_.algos.add_child(parent_, out, child.quantity.raw());
+      }
+      return s;
+    }
+    [[nodiscard]] core::Status modify(const model::ClientOrderId& child,
+                                      std::optional<model::Quantity> quantity,
+                                      std::optional<model::Price> price) {
+      return t_.modify(now_, parent().strategy, child, quantity, price, outputs_);
+    }
+    [[nodiscard]] core::Status cancel(const model::ClientOrderId& child) noexcept {
+      return t_.cancel_child(now_, parent().strategy, child, outputs_);
+    }
+    // Cancels every working child that a cancel can still reach.
+    [[nodiscard]] core::Status cancel_children() noexcept {
+      const AlgoState& p = parent();
+      for (std::size_t i = 0; i < p.child_count; ++i) {
+        const core::Status s = t_.cancel_child(now_, p.strategy, p.children[i].id, outputs_);
+        if (!core::ok(s) && s != core::Status::InvalidState) {
+          return s;
+        }
+      }
+      return core::Status::Ok;
+    }
+    // The algorithm has nothing more to do: the parent closes once no child works.
+    void finish() noexcept { t_.algos.finish(parent_); }
+
+  private:
+    Trading& t_;
+    const core::EventKey& now_;
+    Outputs& outputs_;
+    std::uint32_t parent_;
+  };
+
+  // Cancels parent `index`: its algorithm cancels what it has working.
+  [[nodiscard]] core::Status cancel_parent(const core::EventKey& now, std::uint32_t index,
+                                           Outputs& outputs) {
+    AlgoState& p = algos.at(index);
+    if (p.canceling) {
+      return core::Status::InvalidState;
+    }
+    algos.cancel(index);
+    AlgoContext ctx{*this, now, outputs, index};
+    const core::Status st =
+        dispatch(p.kind, [&](const auto& algo) { return algo.on_cancel(algos.at(index), ctx); });
+    static_cast<void>(algos.settle(index));
+    return st;
+  }
+
+  // The strategy's parent `id`; false when it has none of that id working.
+  [[nodiscard]] bool parent(StrategyIndex s, const model::ClientOrderId& id,
+                            ParentView& out) const {
+    const std::uint32_t index = algos.find(s, id);
+    if (index == execution::kNoIndex) {
+      return false;
+    }
+    const AlgoState& p = algos.at(index);
+    const std::uint8_t precision = p.intent.quantity.precision();
+    out = ParentView{};
+    out.parent_id = p.parent_id;
+    out.instrument_id = p.intent.instrument_id;
+    out.side = p.intent.side;
+    out.kind = p.kind;
+    out.quantity = p.intent.quantity;
+    static_cast<void>(model::Quantity::from_raw(p.filled_raw, precision, out.filled));
+    static_cast<void>(model::Quantity::from_raw(p.reserved_raw, precision, out.reserved));
+    out.children = p.child_count;
+    out.active = p.active;
+    out.canceling = p.canceling;
+    return true;
+  }
+
+  // An order of strategy `s`, or of its execution algorithm when `parent` is a parent slot. For
+  // a strategy order the intent passes both gates; for a child Gate B only. `denied` tells
+  // whether it was denied (an OrderDenied names it).
+  [[nodiscard]] core::Status place(const core::EventKey& now, StrategyIndex s,
+                                   const OrderIntent& intent, std::uint32_t slot,
+                                   std::uint32_t parent, Outputs& outputs,
+                                   model::ClientOrderId& cid, bool& denied) {
+    denied = false;
     if (!room(outputs)) {
       return core::Status::CapacityExceeded;
     }
@@ -230,6 +406,10 @@ public:
     record.price = intent.price;
     record.state = execution::OrderState{intent.quantity};
     record.ts_init = now.ts;
+    record.parent = parent;
+    if (parent != execution::kNoIndex) {
+      record.parent_seq = algos.at(parent).parent_seq;
+    }
 
     const model::Instrument* def = definition(slot);
     std::string_view reason = def == nullptr
@@ -246,10 +426,11 @@ public:
       const risk::OrderCheck check =
           order_check(now, s, slot, model::common(*def), intent.side, intent.type, intent.quantity,
                       intent.price, intent.reduce_only, std::nullopt);
-      reason = risk.check_order(check);
+      reason = parent == execution::kNoIndex ? risk.check_order(check) : risk.check_child(check);
     }
     if (!reason.empty()) {
       deny(now, s, record, index, reason, outputs);
+      denied = true;
       return core::Status::Ok;
     }
     static_cast<void>(oms.apply(index, execution::OrderEventKind::Submitted));
@@ -333,6 +514,21 @@ public:
   [[nodiscard]] core::Status cancel(const core::EventKey& now, StrategyIndex s,
                                     const model::ClientOrderId& cid, Outputs& outputs) noexcept {
     const std::uint32_t index = owned(s, cid);
+    if (index != execution::kNoIndex) {
+      return cancel_index(now, s, index, outputs);
+    }
+    const std::uint32_t parent = algos.find(s, cid);
+    if (parent == execution::kNoIndex) {
+      return core::Status::NotFound;
+    }
+    return cancel_parent(now, parent, outputs);
+  }
+
+  // A child order, canceled by its algorithm.
+  [[nodiscard]] core::Status cancel_child(const core::EventKey& now, StrategyIndex s,
+                                          const model::ClientOrderId& cid,
+                                          Outputs& outputs) noexcept {
+    const std::uint32_t index = owned(s, cid);
     if (index == execution::kNoIndex) {
       return core::Status::NotFound;
     }
@@ -343,8 +539,20 @@ public:
   // `canceled` counts the cancels sent.
   [[nodiscard]] core::Status cancel_all(const core::EventKey& now, StrategyIndex s,
                                         const model::InstrumentId* id, Outputs& outputs,
-                                        std::uint32_t& canceled) noexcept {
+                                        std::uint32_t& canceled) {
     canceled = 0;
+    // Parents first, so that no algorithm replaces a child canceled below.
+    for (std::uint32_t i = 0; i < algos.size(); ++i) {
+      const AlgoState& p = algos.at(i);
+      if (!p.active || p.canceling || p.strategy != s ||
+          (id != nullptr && !(p.intent.instrument_id == *id))) {
+        continue;
+      }
+      const core::Status st = cancel_parent(now, i, outputs);
+      if (!core::ok(st)) {
+        return st;
+      }
+    }
     for (std::uint32_t i = 0; i < oms.used_bound(); ++i) {
       const execution::OrderRecord& r = oms.at(i);
       if (!r.used || r.strategy != s || (id != nullptr && !(r.instrument_id == *id)) ||
@@ -366,14 +574,19 @@ public:
   // and the strategy should receive it. An applied fill (or fill void) is booked in the
   // portfolio first, so the strategy sees its new position during on_order_event; the position
   // events it causes are queued behind it.
+  // A child order's event then reaches its execution algorithm (which may send commands).
   [[nodiscard]] bool on_venue_event(const core::EventKey& now, const model::OrderEvent& event,
-                                    StrategyIndex& owner) {
+                                    StrategyIndex& owner, Outputs& outputs, core::Status& status) {
+    status = core::Status::Ok;
     std::uint32_t index = execution::kNoIndex;
     switch (execution::apply_order_event(oms, event, index)) {
     case execution::EventOutcome::Applied:
       ++stats.venue_events;
       owner = oms.at(index).strategy;
       book(now, oms.at(index), event);
+      if (oms.at(index).parent != execution::kNoIndex) {
+        status = on_child_event(now, index, event, outputs);
+      }
       return true;
     case execution::EventOutcome::UnknownOrder:
       ++stats.unknown_order_events;
@@ -386,6 +599,32 @@ public:
       return false;
     }
     return false;
+  }
+
+  // A child's applied event: the parent's fills and working quantity, then the algorithm.
+  [[nodiscard]] core::Status on_child_event(const core::EventKey& now, std::uint32_t index,
+                                            const model::OrderEvent& event, Outputs& outputs) {
+    const execution::OrderRecord& r = oms.at(index);
+    const std::uint32_t parent = r.parent;
+    if (parent >= algos.size() || !algos.at(parent).active ||
+        algos.at(parent).parent_seq != r.parent_seq) {
+      return core::Status::Ok; // the parent closed before this late event
+    }
+    std::uint64_t filled = 0;
+    std::uint64_t voided = 0;
+    if (const auto* f = std::get_if<model::OrderFilled>(&event)) {
+      filled = f->last_qty.raw();
+    } else if (const auto* v = std::get_if<model::OrderFillVoided>(&event)) {
+      voided = v->voided_qty.raw();
+    }
+    const bool open = execution::is_open(r.state.status());
+    algos.on_child(parent, r.client_order_id, filled, voided, r.state.leaves().raw(), open);
+    AlgoState& p = algos.at(parent);
+    AlgoContext ctx{*this, now, outputs, parent};
+    const core::Status st =
+        dispatch(p.kind, [&](const auto& algo) { return algo.on_event(p, ctx, event); });
+    static_cast<void>(algos.settle(parent));
+    return st;
   }
 
   // ---- market inputs the portfolio values positions with ----------------------------------
@@ -552,7 +791,9 @@ public:
       return false;
     }
     const model::InstrumentCommon& c = model::common(*def);
-    const execution::OpenQuantity open = oms.open_quantity(slot);
+    execution::OpenQuantity open = oms.open_quantity(slot);
+    open.buy_raw += algos.reserved(slot, model::OrderSide::Buy);
+    open.sell_raw += algos.reserved(slot, model::OrderSide::Sell);
     const std::int64_t position = portfolio.venue(slot).signed_raw();
     out = ExposureView{};
     out.instrument_id = c.id;
@@ -622,9 +863,19 @@ public:
   core::FixedVector<PendingEvent> events; // kernel-produced, delivered after the callback
   portfolio::Portfolio portfolio;
   risk::RiskEngine risk;
+  AlgoBook algos;
   TradingStats stats;
 
 private:
+  // Calls f with the built-in algorithm of `kind`.
+  template <typename F> static core::Status dispatch(AlgoKind kind, F&& f) {
+    switch (kind) {
+    case AlgoKind::Passthrough:
+      return std::forward<F>(f)(Passthrough{});
+    }
+    return core::Status::InvalidArgument;
+  }
+
   [[nodiscard]] bool room(const Outputs& outputs) const noexcept {
     return outputs.size() < outputs.capacity() && events.size() < events.capacity();
   }
@@ -717,6 +968,8 @@ private:
     check.now = now.ts;
     check.position_raw = portfolio.venue(slot).signed_raw();
     check.open = oms.open_quantity(slot);
+    check.open.buy_raw += algos.reserved(slot, model::OrderSide::Buy);
+    check.open.sell_raw += algos.reserved(slot, model::OrderSide::Sell);
     check.reference = portfolio.valuation(slot);
     if (replaced) {
       check.kind = quantity.raw() > replaced->raw() ? risk::CommandKind::ModifyUp
@@ -1011,6 +1264,10 @@ private:
     v.filled = r.state.filled();
     v.leaves = r.state.leaves();
     v.ts_init = r.ts_init;
+    model::ClientOrderId parent_id;
+    if (r.parent != execution::kNoIndex && core::ok(ids.id_of(r.parent_seq, parent_id))) {
+      v.parent_id = parent_id;
+    }
     const model::Instrument* def = definition(r.slot);
     model::Price avg;
     if (def != nullptr &&
@@ -1023,5 +1280,7 @@ private:
   core::CounterRng event_rng_;
   std::uint32_t event_serial_ = 0;
 };
+
+static_assert(ExecAlgorithm<Passthrough, Trading::AlgoContext>);
 
 } // namespace jarvis::strategy

@@ -1,0 +1,43 @@
+# Backtest of the market maker examples (examples/py/mm_quote.py, examples/cpp/pegged_mm.cpp)
+# against the simulated venue, over a data catalog written by
+#   python -m jarvis.data binance-vision aggTrades --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+#   python -m jarvis.data binance-vision bookTicker --symbol BTCUSDT --start 2024-03-30 --catalog catalog
+#   python -m jarvis.data binance-instrument --symbol BTCUSDT --day 2024-03-30 --catalog catalog \
+#       --tick 0.10 --step 0.001 --min-qty 0.001 --max-qty 1000 --min-notional 100
+# Point data.catalog and data.range elsewhere with --set. The fills come from L1 quotes and the
+# trade stream (no L2 history exists for USD-M): read the RunReport with that in mind.
+
+[node]
+id = "mm01"
+env = "backtest"
+seed = 1
+
+[data]
+catalog = "catalog"
+range = { start = "2024-03-30T00:00:00Z", end = "2024-03-31T00:00:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[venues.sim]
+fill_model = "queue_position"
+latency = { feed_ns = 2000000, out_ns = 15000000, in_ns = 5000000, jitter_ns = 1000000 }
+fee = { schedule = "binance_usdm_vip0" }
+balances = ["10000 USDT"]
+
+# node_main<PeggedMM> builds the C++ twin from the same entry, so both examples share one
+# configuration (and one config hash).
+[[strategies]]
+id = "mm-001"
+impl = "py:MmQuote"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+params = { instrument = "BTCUSDT-PERP.BINANCE", size = "0.010", max_position = "0.050", skew_ticks = 1, sample_ms = 1000 }
+
+[persistence]
+dir = "runs/{node_id}/{run_id}"

@@ -827,7 +827,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 | --- | --- |
 | 时间与随机数 | `now()`、`rng(key)`、`set_timer(key, ts)`、`cancel_timer(key)` |
 | 订阅 | `subscribe_trades / quotes / book / bars / mark_price / funding(iid, cadence)`、`unsubscribe(...)`、`feature(spec, cadence)` |
-| 下单 | `submit(intent)`、`submit_parent(algo, params, intent)`、`modify(cid, price?, qty?)`、`cancel(cid)`、`cancel_all(iid?)` |
+| 下单 | `submit(intent)`、`submit_parent(algo, intent, params?)`、`parent(id)`、`modify(cid, qty?, price?)`、`cancel(cid)`、`cancel_all(iid?)` |
 | 查询（返回拷贝） | `instrument(iid)`、`book(iid)`、`position(iid)`、`orders(filter)`、`account()`、`exposure(iid)`、`trading_state()` |
 | 参数 | `params()`；`ParamUpdate` 控制面事件更新后触发 `on_params_changed` |
 
@@ -981,17 +981,21 @@ concept PortfolioConstruction = requires(P p, const PortfolioView& view, const S
 ### 11.4 执行算法
 
 ```cpp
-template <typename A>
-concept ExecAlgorithm = requires(A a, AlgoState& st, AlgoContext& ctx, const Event& e) {
+template <typename A, typename Ctx>
+concept ExecAlgorithm = requires(const A a, AlgoState& st, Ctx& ctx, const AlgoEvent& e) {
     { a.on_parent(st, ctx) }      -> std::same_as<Status>;   // 收到父单
-    { a.on_event(st, ctx, e) }    -> std::same_as<Status>;   // 行情、成交、定时器
+    { a.on_event(st, ctx, e) }    -> std::same_as<Status>;   // 子单的订单事件（M5 起加行情与定时器）
     { a.on_cancel(st, ctx) }      -> std::same_as<Status>;   // 父单撤销
 };
 ```
 
-- 执行算法运行在 `step` 内，状态保存在 `AlgoState` 竞技场中，是确定性的，并被规约 `Matching` 与 `TradingState` 的不变量覆盖。
-- 子单通过 `AlgoContext` 产生，自动经过 Gate B，并在生成前查询令牌预算。
-- 子单的 `ClientOrderId` 与普通订单一样由内核分配，父子关系记录在 `parent_order_id` 与 `exec_spawn_id` 中。
+- 策略用 `ctx.submit_parent(algo, intent)` 提交父单。父单作为意图过 Gate A（含预留敞口），失败时 `OrderDenied` 以父单的 id 回到策略。父单不发往交易所，没有自己的订单事件；`ctx.parent(id)` 读取它，`ctx.cancel(id)` 撤销它。
+- 执行算法运行在 `step` 内，每个父单的状态保存在 `AlgoState` 中（`AlgoBook` 固定容量竞技场，`[capacity]` 之外由 `TradingConfig.parents` 决定，默认 256），是确定性的。算法是内核内置的封闭集合，按 `AlgoKind` 静态分发，不经函数指针。
+- `Ctx` 是内核的 `Trading::AlgoContext`：提交、改、撤子单，查询限速窗口的剩余额度，声明算法已结束。子单只能在父单的 instrument 与方向上，数量不超过父单尚未由子单承担的部分；子单经 Gate B 与限速，不再过 Gate A。
+- 子单是策略自己的订单，`ClientOrderId` 由内核按同一规则分配，`OrderView.parent_id` 记录所属父单；子单的事件照常投递给策略，同时交给算法的 `on_event`。
+- 父单在以下情况关闭：全部成交；或已撤销、算法已结束，且没有仍在工作的子单。`cancel_all` 与 KillSwitch 先撤父单，再撤剩余订单，使算法不会补发刚被撤掉的子单。
+- 预留敞口：父单剩余量中尚无子单承担的部分按 instrument 与方向计入 `open_exposure()` 与 Gate A 的名义检查（第 9.3 节）。
+- M3 只提供直通算法 `passthrough`：父单以相同条件作为一个子单发出，子单被拒或未全部成交即结束。下表的算法在 M5、M6 加入。
 
 内置算法：
 
@@ -1045,7 +1049,7 @@ Binance 的 `priceMatch` 参数（交易所侧按对手价或队列价定价）�
 
 - 市场状态：每个 instrument 一份来自 quote 的最优价，以及收到增量后的 L2 簿（此后以 L2 为准）。我们的订单不进入这本簿，只与它撮合。
 - 吃单：到达时即可成交的订单按最优档依次吃对手方：L2 下吃到限价为止，只有 quote 时吃最优档且以其数量为上限。`IOC` 与市价单的余量过期，`FOK` 不能全部成交则直接过期（不先回 `ACCEPTED`），`GTC`、`GTD` 的余量挂单。
-- 挂单成交，一律按自己的价格：`TopOfBookCross` 在对手最优价到达其价格（以该档数量为上限）或成交价穿过其价格（以成交量为上限）时成交；`QueuePosition` 另外在同价位前方排队量耗尽后以剩余成交量成交。只有 quote 时，同价位数量减少按比例扣减前方量，最优价离开该价位则前方量归零。
+- 挂单成交，一律按自己的价格：`TopOfBookCross` 在对手最优价到达其价格（以该档数量为上限）或成交价穿过其价格（以成交量为上限）时成交；`QueuePosition` 另外在同价位前方排队量耗尽后以剩余成交量成交。只有 quote 时，同价位数量减少按比例扣减前方量（向下取整到订单的数量步长，使成交量始终落在步长网格上），最优价离开该价位则前方量归零。
 - 回报按 Binance 的顺序：新单先 `ACCEPTED` 再 `FILLED`；`IOC` 余量 `EXPIRED`；改单回 `UPDATED`，价格改变或数量增加失去队列位置；撤不存在的单回 `CANCEL_REJECTED`（`-2011`），改不存在的单回 `MODIFY_REJECTED`（`-2013`）；reduce-only 不能减仓则 `REJECTED`（`-2022`）；没有行情的市价单 `REJECTED`。
 - venue 有自己的账户（一个 `Portfolio`）：reduce-only 检查与快照查询（未完成订单、仓位、余额）读它。
 - 三条通道（行情、WS API、用户数据流）各自是 FIFO：延迟取自 `JitteredLatency`，同一通道上后发的消息不会超车。行情在 venue 时间撮合，内核在 `+ L_feed` 后看到它，事件的 `ts_init` 改写为该时刻；延迟的 `OrderBookDeltas` 把增量拷贝进环形池。venue 回报在日志中的 `source_id` 为 `0xFFFE`。
@@ -1059,6 +1063,7 @@ Binance 的 `priceMatch` 参数（交易所侧按对手价或队列价定价）�
 - 历史数据由 Python 转换器从 data.binance.vision（aggTrades、bookTicker、klines、markPrice 等）与 nautilus Parquet 目录转换为解码事件日志（第 16 节）。
 - Binance 不提供 USDⓈ-M 的历史 L2 增量。jarvis 在 M4 提供录制器，自行录制 depth 流。在积累足够的录制数据之前，做市类回测只能基于 `bookTicker + aggTrade` 与 `TopOfBookCross` 或保守参数的 `QueuePosition`，回测报告必须标注所用的数据与模型。
 - sandbox 的意义就在这里：它用真实行情检验成交模型的假设，并同时积累录制数据。
+- 回测报告 `RunReport`（`jarvis/node/run_report.hpp`；Python 的 `result.report()`、`jarvis.RunReport.from_run(dir)`；命令行 `jarvis report <run-dir>`）只从运行目录（`config.toml` 与运行日志）计算：订单经一个新的 OMS 重放、被接受的成交经一个 `Portfolio` 记账，用的都是内核自己的代码，所以数字与策略在运行中看到的一致。它按策略与 instrument 给出成交笔数（maker、taker）、买卖数量、成交名义、手续费、资金费、已实现与未实现盈亏（未实现按 mark、否则最后成交、否则最后报价中间价估值，并注明来源）、期末仓位，按策略给出订单的去向（提交、拒绝、接受、成交、撤销、过期、改单与撤单被拒、被 OMS 拒绝的迟到事件），以及账户的期初与期末余额。报告首先列出所依据的数据（流、instrument、区间、成交模拟所用的行情是 L1 还是 L2）与模拟 venue 的模型（成交模型、延迟、费率档、STP）。
 
 ---
 
@@ -1303,6 +1308,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
 | `jarvis trace-export <log> --spec <X> --out <dir>` | 按规约变量投影日志，生成 `<X>Trace.tla` 与 `.cfg`（第 18.2 节） |
+| `jarvis report <run-dir> [--out file]` | 回测报告：成交、手续费、盈亏与订单去向，标注数据与成交模型（第 12.4 节） |
 
 ### 16.5 Parquet 互转
 
@@ -1310,7 +1316,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - 布局：`{root}/data/{type_dir}/{identifier}/{start}_{end}.parquet`，`type_dir` 为 `trades`、`quotes`、`bars`、`order_book_deltas`、`mark_prices`、`index_prices`（读取时也接受旧名 `trade_tick`、`quote_tick`、`bar`、`order_book_delta`、`mark_price_update`、`index_price_update`）；价格、数量为 `Decimal128(38, 16)`；时间戳为 `Timestamp(ns, UTC)`；枚举为 `Dictionary(Int8, Utf8)`，取值为 nautilus 的枚举名；另有可空的 `identifier` 列；schema 元数据含 `instrument_id`（bar 为 `bar_type`）、`price_precision`、`size_precision`。文件名为首末 `ts_init` 的纳秒整数。读取时价格与数量也接受旧编码（10^9 刻度的 `Int64` 或 `FixedSizeBinary(8)`、10^16 刻度的 `FixedSizeBinary(16)`），时间戳也接受 `UInt64`。
 - 这些字段、类型与元数据键按 nautilus `cd417b80` 的 `crates/serialization/src/arrow` 源码编写。测试覆盖本仓库内的往返，没有用运行中的 nautilus 读写验证。nautilus 在该版本开始把目录迁移到共享表格式，旧的按 identifier 分目录的布局由它的迁移工具导入。
 - nautilus 的订单簿文件逐行存放单个 delta：读取时按 `F_LAST`（128）把连续的 delta 合成一个 `OrderBookDeltas`，写出时拆回单行。
-- 转换器与命令行在 `jarvis.data`（`python -m jarvis.data binance-vision|parquet-to-catalog|catalog-to-parquet`）。data.binance.vision 的日归档（aggTrades、bookTicker、klines、markPriceKlines、indexPriceKlines）逐文件转换为一个数据目录日志，下载时按发布的 SHA-256 校验。成交的 `ts_event` 为成交时间；报价的 `ts_event` 为撮合时间、`ts_init` 为推送时间；由 kline 得到的事件打在收盘时刻（开盘时间加周期）。同一文件内 `ts_init` 保持不减。未指定精度时取文件中实际用到的最多小数位（bookTicker 总是打印八位小数，末尾的零不计）。期货 bookTicker 归档只发布到 2024 年春季。
+- 转换器与命令行在 `jarvis.data`（`python -m jarvis.data binance-vision|binance-instrument|parquet-to-catalog|catalog-to-parquet`）。`binance-instrument` 把一个 USDⓈ-M 永续的定义写成目录中的 `instrument` 流，数据来自保存下来的 `/fapi/v1/exchangeInfo` 响应，或命令行给出的过滤器（`tickSize`、`stepSize`、最小与最大数量、最小名义）与保证金率；模拟 venue 与风控规则都读它。data.binance.vision 的日归档（aggTrades、bookTicker、klines、markPriceKlines、indexPriceKlines）逐文件转换为一个数据目录日志，下载时按发布的 SHA-256 校验。成交的 `ts_event` 为成交时间；报价的 `ts_event` 为撮合时间、`ts_init` 为推送时间；由 kline 得到的事件打在收盘时刻（开盘时间加周期）。同一文件内 `ts_init` 保持不减。未指定精度时取文件中实际用到的最多小数位（bookTicker 总是打印八位小数，末尾的零不计）。期货 bookTicker 归档只发布到 2024 年春季。
 
 ---
 

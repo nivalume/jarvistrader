@@ -77,6 +77,9 @@ add_dependencies(jarvis_tests golden_node)
 if(TARGET trade_logger)
   add_dependencies(jarvis_tests trade_logger)
 endif()
+if(TARGET pegged_mm)
+  add_dependencies(jarvis_tests pegged_mm)
+endif()
 add_test(
   NAME golden.all
   COMMAND "${Python_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/golden.py"

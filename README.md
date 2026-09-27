@@ -40,7 +40,19 @@ python examples/py/trade_logger.py --replay runs/tlog
 
 The C++ twin, `examples/cpp/trade_logger.cpp`, is the same strategy behind
 `jarvis::node_main<TradeLogger>` and writes a byte-identical run log (`build/rel/bin/trade_logger`
-takes the same arguments). Event logs remain readable from Python:
+takes the same arguments).
+
+Orders run against the simulated venue once the catalog holds the instrument's definition:
+
+```sh
+python -m jarvis.data binance-instrument --symbol BTCUSDT --day 2024-03-30 --catalog catalog \
+    --tick 0.10 --step 0.001 --min-qty 0.001 --max-qty 1000 --min-notional 100
+python examples/py/mm_quote.py --config examples/config/mm_quote.toml --out runs/mm
+build/rel/bin/jarvis report runs/mm    # fills, fees and PnL, labelled with data and fill model
+```
+
+`examples/cpp/pegged_mm.cpp` is the C++ twin of the market maker. Event logs remain readable
+from Python:
 
 ```python
 from jarvis import log
