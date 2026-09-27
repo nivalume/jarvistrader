@@ -155,7 +155,7 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 
 ## M5 实盘、对账、运维、内置执行算法与纯 C++ 节点，规约 b（发布 v1.0）
 
-- [ ] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）
+- [ ] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）：规约与 TLC 检查已完成（`specs/tla/Reconciliation.tla`，三个协议变体都被不变量抓到）；映射头与正向 trace validation 随对账实现
 - [ ] task: execution — 对账协议：先订阅后快照、逐单比对、`userTrades` 合成漏成交、遗留与外部订单处理、置位与 `ReconciliationDiff`（§15.2）
 - [ ] task: execution — 断线重连对账与每 60 秒轻量对账（§15.3）
 - [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）

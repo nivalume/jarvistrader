@@ -16,6 +16,7 @@ core:
           - 'jarvis/execution/oms.hpp'
           - 'jarvis/execution/order.hpp'
           - 'jarvis/execution/order_fsm.hpp'
+          - 'jarvis/execution/reconciliation.hpp'
           - 'jarvis/risk/**'
           - 'jarvis/risk/gates.hpp'
           - 'jarvis/risk/rate_limit.hpp'
@@ -24,4 +25,5 @@ core:
           - 'specs/map/depth_sync_actions.hpp'
           - 'specs/map/matching_actions.hpp'
           - 'specs/map/order_lifecycle_actions.hpp'
+          - 'specs/map/reconciliation_actions.hpp'
           - 'specs/map/trading_state_actions.hpp'

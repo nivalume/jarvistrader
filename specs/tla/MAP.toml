@@ -46,6 +46,15 @@ backward = false
 budget_min = 5
 tlc_args = []
 
+[specs.Reconciliation]
+# The session state machine lands in jarvis/execution/reconciliation.hpp (M5); forward trace
+# validation follows it.
+paths = ["jarvis/execution/reconciliation.hpp", "specs/map/reconciliation_actions.hpp"]
+forward = false
+backward = false
+budget_min = 5
+tlc_args = []
+
 [specs.DepthSync]
 paths = ["jarvis/adapter/binance/depth_sync.hpp", "specs/map/depth_sync_actions.hpp"]
 forward = true
