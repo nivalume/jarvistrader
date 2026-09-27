@@ -15,3 +15,9 @@ jarvis_add_bench_group(
   hot SOURCES hot/bench_noop.cpp hot/bench_model.cpp hot/bench_engine.cpp hot/bench_execution.cpp
   LIBS jarvis::kernel
 )
+
+# The venue codecs need the live shell (JARVIS_BUILD_LIVE); a separate gating group so the kernel
+# group builds without it.
+if(TARGET jarvis_adapter)
+  jarvis_add_bench_group(codec SOURCES hot/bench_codec.cpp LIBS jarvis::adapter)
+endif()

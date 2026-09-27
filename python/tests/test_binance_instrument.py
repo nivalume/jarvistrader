@@ -56,3 +56,27 @@ def test_the_cli_writes_the_catalog_stream(tmp_path: Path) -> None:
     assert isinstance(records[0].event, m.CryptoPerpetual)
     assert cli.main(["binance-instrument", "--symbol", "BTCUSDT", "--day", "2024-03-30",
                      "--catalog", str(catalog)]) != 0  # neither --exchange-info nor filters
+
+
+DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "binance"
+FIELDS = [
+    "id", "price_precision", "size_precision", "price_increment", "size_increment", "min_price",
+    "max_price", "min_quantity", "max_quantity", "min_notional", "margin_init", "margin_maint",
+    "base_currency", "quote_currency", "settlement_currency",
+]
+
+
+def test_the_catalog_mapping_matches_the_live_loader_fixture() -> None:
+    """The C++ exchangeInfo loader is checked against the same file (tests/cpp/test_binance_adapter.cpp),
+    so live nodes and backtest catalogs define an instrument identically."""
+    info = bi.load_exchange_info(DATA / "exchange_info_testnet.json")
+    expected = [
+        line for line in (DATA / "exchange_info_expected.txt").read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    got = []
+    for line in expected:
+        symbol = line.split(" ", 1)[0]
+        inst = bi.from_exchange_info(info, symbol)
+        got.append(symbol + " " + " ".join(f"{f}={getattr(inst, f)}" for f in FIELDS))
+    assert got == expected

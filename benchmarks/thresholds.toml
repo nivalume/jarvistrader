@@ -19,4 +19,7 @@ gating = true
 [groups.report]
 gating = false
 
+[groups.codec]
+gating = true
+
 # Core-path thresholds tighten to 3% once the self-hosted benchmark runner exists (decision D21).

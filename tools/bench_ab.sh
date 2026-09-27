@@ -36,7 +36,8 @@ git -C "${root}" worktree add --detach --quiet "${base_src}" "${base_commit}"
 configure_and_build() {
   local src="$1" build="$2"
   cmake -S "${src}" -B "${build}" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DJARVIS_BUILD_PYTHON=OFF -DJARVIS_BUILD_TESTS=OFF -DJARVIS_BUILD_BENCHMARKS=ON >/dev/null
+    -DJARVIS_BUILD_PYTHON=OFF -DJARVIS_BUILD_TESTS=OFF -DJARVIS_BUILD_BENCHMARKS=ON \
+    -DJARVIS_BUILD_LIVE=ON >/dev/null
   cmake --build "${build}" --target jarvis_bench >/dev/null
 }
 

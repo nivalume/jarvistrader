@@ -197,6 +197,7 @@ if(JARVIS_BUILD_LIVE)
     jarvis/network/https_client.cpp
     jarvis/network/io.cpp
     jarvis/network/signer.cpp
+    jarvis/network/timer.cpp
     jarvis/network/url.cpp
     jarvis/network/ws_client.cpp
     jarvis/network/ws_frame.cpp
@@ -207,6 +208,32 @@ if(JARVIS_BUILD_LIVE)
     PUBLIC jarvis::kernel
     PRIVATE jarvis_asio jarvis_picohttpparser OpenSSL::SSL OpenSSL::Crypto
   )
+
+  # Venue adapters (docs/architecture.md section 14): codecs, instrument loading.
+  jarvis_add_simdjson()
+  add_library(
+    jarvis_adapter STATIC
+    jarvis/adapter/codec.cpp
+    jarvis/adapter/binance/exchange_info.cpp
+    jarvis/adapter/binance/json_codec.cpp
+    jarvis/adapter/binance/streams.cpp
+  )
+  add_library(jarvis::adapter ALIAS jarvis_adapter)
+  target_link_libraries(
+    jarvis_adapter
+    PUBLIC jarvis::kernel jarvis::network
+    PRIVATE simdjson::simdjson
+  )
+
+  # Live runtime pieces (docs/architecture.md sections 7 and 13.4).
+  add_library(jarvis_live STATIC jarvis/live/raw_frames.cpp)
+  add_library(jarvis::live ALIAS jarvis_live)
+  target_link_libraries(jarvis_live PUBLIC jarvis::kernel jarvis::network jarvis::adapter)
+
+  add_executable(jarvis_capture jarvis/live/capture_main.cpp)
+  target_link_libraries(jarvis_capture PRIVATE jarvis::live)
+  set_target_properties(jarvis_capture PROPERTIES OUTPUT_NAME jarvis-capture
+                                                  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 endif()
 
 if(JARVIS_BUILD_CLI)

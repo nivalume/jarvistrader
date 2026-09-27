@@ -1,0 +1,46 @@
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.646 ask_size=5.302 ts_event=2026-09-27T16:28:58.939+00:00 ts_init=2026-09-27T16:28:58.965462079+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.645 ask_size=5.302 ts_event=2026-09-27T16:28:58.941+00:00 ts_init=2026-09-27T16:28:58.965941596+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.645 ask_size=5.310 ts_event=2026-09-27T16:28:58.941+00:00 ts_init=2026-09-27T16:28:58.965941596+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.625 ask_size=5.310 ts_event=2026-09-27T16:28:58.941+00:00 ts_init=2026-09-27T16:28:58.966954514+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.026 ask_size=5.310 ts_event=2026-09-27T16:28:58.941+00:00 ts_init=2026-09-27T16:28:58.966954514+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.026 ask_size=5.302 ts_event=2026-09-27T16:28:58.941+00:00 ts_init=2026-09-27T16:28:58.966954514+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.025 ask_size=5.302 ts_event=2026-09-27T16:28:58.942+00:00 ts_init=2026-09-27T16:28:58.967749714+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.026 ask_size=5.302 ts_event=2026-09-27T16:28:58.942+00:00 ts_init=2026-09-27T16:28:58.967749714+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.027 ask_size=5.302 ts_event=2026-09-27T16:28:58.942+00:00 ts_init=2026-09-27T16:28:58.967749714+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.027 ask_size=5.310 ts_event=2026-09-27T16:28:58.942+00:00 ts_init=2026-09-27T16:28:58.967749714+00:00
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.027 ask_size=5.302 ts_event=2026-09-27T16:28:58.943+00:00 ts_init=2026-09-27T16:28:58.968604698+00:00
+QuoteTick instrument_id=ETHUSDT-PERP.BINANCE bid_price=2690.17 ask_price=2690.18 bid_size=40.823 ask_size=76.370 ts_event=2026-09-27T16:28:58.947+00:00 ts_init=2026-09-27T16:28:58.972236316+00:00
+QuoteTick instrument_id=ETHUSDT-PERP.BINANCE bid_price=2690.17 ask_price=2690.18 bid_size=40.796 ask_size=76.370 ts_event=2026-09-27T16:28:58.947+00:00 ts_init=2026-09-27T16:28:58.972236316+00:00
+DepthDiff BTCUSDT-PERP.BINANCE U=11671659683245 u=11671659687966 pu=11671659683147 bids=33 asks=13 best_bid_level=84551.0@2.027
+QuoteTick instrument_id=BTCUSDT-PERP.BINANCE bid_price=84551.0 ask_price=84551.1 bid_size=2.581 ask_size=5.302 ts_event=2026-09-27T16:28:58.992+00:00 ts_init=2026-09-27T16:28:59.017540491+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.1 size=0.030 aggressor_side=BUY trade_id=3466782974 ts_event=2026-09-27T16:28:58.883+00:00 ts_init=2026-09-27T16:28:59.058352268+00:00
+MarkPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84551.10762319 ts_event=2026-09-27T16:28:59+00:00 ts_init=2026-09-27T16:28:59.087221517+00:00
+IndexPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84590.87304348 ts_event=2026-09-27T16:28:59+00:00 ts_init=2026-09-27T16:28:59.087221517+00:00
+FundingRateUpdate instrument_id=BTCUSDT-PERP.BINANCE rate=0.00000801 interval=None next_funding_ns=2026-09-28T00:00:00+00:00 ts_event=2026-09-27T16:28:59+00:00 ts_init=2026-09-27T16:28:59.087221517+00:00
+DepthDiff BTCUSDT-PERP.BINANCE U=11671659688131 u=11671659693014 pu=11671659687966 bids=37 asks=27 best_bid_level=84551.0@2.027
+QuoteTick instrument_id=ETHUSDT-PERP.BINANCE bid_price=2690.17 ask_price=2690.18 bid_size=40.837 ask_size=76.370 ts_event=2026-09-27T16:28:59.121+00:00 ts_init=2026-09-27T16:28:59.146263672+00:00
+QuoteTick instrument_id=ETHUSDT-PERP.BINANCE bid_price=2690.17 ask_price=2690.18 bid_size=40.696 ask_size=76.370 ts_event=2026-09-27T16:28:59.131+00:00 ts_init=2026-09-27T16:28:59.163834280+00:00
+DepthDiff BTCUSDT-PERP.BINANCE U=11671659693069 u=11671659697583 pu=11671659693014 bids=39 asks=30 best_bid_level=84551.0@2.027
+DepthDiff BTCUSDT-PERP.BINANCE U=11671659697775 u=11671659703403 pu=11671659697583 bids=42 asks=30 best_bid_level=84551.0@2.047
+TradeTick instrument_id=ETHUSDT-PERP.BINANCE price=2690.18 size=0.909 aggressor_side=BUY trade_id=3101523913 ts_event=2026-09-27T16:28:59.300+00:00 ts_init=2026-09-27T16:28:59.475821456+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.1 size=0.017 aggressor_side=BUY trade_id=3466782975 ts_event=2026-09-27T16:28:59.304+00:00 ts_init=2026-09-27T16:28:59.479075308+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.100 aggressor_side=SELL trade_id=3466782976 ts_event=2026-09-27T16:28:59.522+00:00 ts_init=2026-09-27T16:28:59.696877763+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.203 aggressor_side=SELL trade_id=3466782977 ts_event=2026-09-27T16:28:59.777+00:00 ts_init=2026-09-27T16:28:59.953084906+00:00
+MarkPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84551.11197101 ts_event=2026-09-27T16:29:00.003+00:00 ts_init=2026-09-27T16:29:00.102090697+00:00
+IndexPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84590.87739130 ts_event=2026-09-27T16:29:00.003+00:00 ts_init=2026-09-27T16:29:00.102090697+00:00
+FundingRateUpdate instrument_id=BTCUSDT-PERP.BINANCE rate=0.00000801 interval=None next_funding_ns=2026-09-28T00:00:00+00:00 ts_event=2026-09-27T16:29:00.003+00:00 ts_init=2026-09-27T16:29:00.102090697+00:00
+TradeTick instrument_id=ETHUSDT-PERP.BINANCE price=2690.17 size=0.072 aggressor_side=SELL trade_id=3101523914 ts_event=2026-09-27T16:28:59.960+00:00 ts_init=2026-09-27T16:29:00.135127493+00:00
+Bar bar_type=BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL open=84550.2 high=84558.9 low=84536.7 close=84551.0 volume=104.497 ts_event=2026-09-27T16:29:00+00:00 ts_init=2026-09-27T16:29:00.288731287+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.005 aggressor_side=SELL trade_id=3466782978 ts_event=2026-09-27T16:29:00.255+00:00 ts_init=2026-09-27T16:29:00.430010341+00:00
+TradeTick instrument_id=ETHUSDT-PERP.BINANCE price=2690.18 size=1.849 aggressor_side=BUY trade_id=3101523915 ts_event=2026-09-27T16:29:00.461+00:00 ts_init=2026-09-27T16:29:00.616737645+00:00
+TradeTick instrument_id=ETHUSDT-PERP.BINANCE price=2690.18 size=1.389 aggressor_side=BUY trade_id=3101523916 ts_event=2026-09-27T16:29:00.591+00:00 ts_init=2026-09-27T16:29:00.766126074+00:00
+MarkPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84551.11197101 ts_event=2026-09-27T16:29:01+00:00 ts_init=2026-09-27T16:29:01.078458559+00:00
+IndexPriceUpdate instrument_id=BTCUSDT-PERP.BINANCE value=84590.87739130 ts_event=2026-09-27T16:29:01+00:00 ts_init=2026-09-27T16:29:01.078458559+00:00
+FundingRateUpdate instrument_id=BTCUSDT-PERP.BINANCE rate=0.00000801 interval=None next_funding_ns=2026-09-28T00:00:00+00:00 ts_event=2026-09-27T16:29:01+00:00 ts_init=2026-09-27T16:29:01.078458559+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.001 aggressor_side=SELL trade_id=3466782979 ts_event=2026-09-27T16:29:02.072+00:00 ts_init=2026-09-27T16:29:02.247556719+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.023 aggressor_side=SELL trade_id=3466782980 ts_event=2026-09-27T16:29:02.239+00:00 ts_init=2026-09-27T16:29:02.385470898+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.028 aggressor_side=SELL trade_id=3466782981 ts_event=2026-09-27T16:29:02.360+00:00 ts_init=2026-09-27T16:29:02.494282168+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84551.0 size=0.388 aggressor_side=SELL trade_id=3466782982 ts_event=2026-09-27T16:29:02.469+00:00 ts_init=2026-09-27T16:29:02.494814559+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84550.9 size=0.002 aggressor_side=SELL trade_id=3466782983 ts_event=2026-09-27T16:29:02.469+00:00 ts_init=2026-09-27T16:29:02.494814559+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84550.8 size=0.001 aggressor_side=SELL trade_id=3466782984 ts_event=2026-09-27T16:29:02.469+00:00 ts_init=2026-09-27T16:29:02.494814559+00:00
+TradeTick instrument_id=BTCUSDT-PERP.BINANCE price=84550.2 size=0.064 aggressor_side=SELL trade_id=3466782985 ts_event=2026-09-27T16:29:02.469+00:00 ts_init=2026-09-27T16:29:02.494814559+00:00

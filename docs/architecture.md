@@ -1128,7 +1128,11 @@ concept Codec = requires(C c, std::span<const std::byte> frame, ConnCtx& conn, E
 };
 ```
 
-- `JsonCodec`：simdjson on-demand 解析，数值字符串直接解析为定点 raw，不经过浮点。
+- `JsonCodec`：simdjson on-demand 解析，数值字符串直接解析为定点 raw，不经过浮点。实现要点（`jarvis/adapter/binance/json_codec.hpp`）：
+  - 成交、报价、K 线与 depth 档位按 instrument 精度精确解析，值不在网格上即 `PrecisionLoss`；mark、index 价格与强平单价格保留自身精度，因为它们本来就可以不在 tick 上。
+  - 字段按 Binance 发送的顺序、只用有序查找读取。simdjson 的无序查找在回绕时假定对象已经校验过，畸形输入会破坏这个假定；这是 fuzz 发现的。新增字段会被跳过；字段顺序改变或缺失时返回指明字段的 `ParseError`。
+  - 不在符号表里的符号计数后跳过：全市场强平流会推送所有符号。
+  - depth 帧解码为 `DepthDiff`（`U`、`u`、`pu` 与档位），交给同步状态机，同步后才产出 `OrderBookDeltas`。
 - `SbeCodec`：由 Real Logic `sbe-tool` 从 `specs/sbe/binance/*.xml` 生成 C++ 解码器，生成物入库；`just sbe-check` 在 CI 中重新生成并比对。每条消息校验头部的 schema `id:version`；未知模板返回 `Status::UnsupportedMessage` 并计数，原始帧保留在原始帧文件中。SBE 的十进制以 mantissa 与 exponent 分开编码，由 `Price::from_mantissa_exp` 转换。交易所的弃用信号（REST 的 `X-MBX-SBE-DEPRECATED` 响应头、WS API 的 `sbeSchemaIdVersionDeprecated` 字段）转为遥测告警与 readiness 警告，可配置为立即失败。
 - 两种 Codec 都在 IO 线程运行，产出同样的归一化定点事件。环中传递的是归一化事件，内核不知道线上格式。
 
@@ -1151,6 +1155,8 @@ Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
 
 只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis redecode raw.bin --codec sbe@<id>:<ver>` 可以从原始帧重建解码日志用于研究。
 
+原始帧文件的格式（`jarvis/live/raw_frames.hpp`，小端）：文件头为 `"JVRAWFR1"`、`u32 version`、`u32 reserved`；每条记录为 `u64 recv_ns`、`u32 conn_id`、`u8 kind`、`u8 opcode`、`u16 reserved`、`u32 length` 加字节。`kind` 区分 Open（字节为 URL）、Message、Close（字节为原因），因此重解码知道每个连接订阅了什么，也能看到断线。`recv_ns` 是 UTC 纳秒，取自启动时锚定一次的单调时钟。`jarvis-capture record|dump|decode` 采集、打印并离线解码这种文件，codec 的测试夹具与 fuzz 语料都由它采集。
+
 ---
 
 ## 14. Binance USDⓈ-M 适配器
@@ -1165,7 +1171,7 @@ Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
 | WS API | `wss://ws-fapi.binance.com/ws-fapi/v1` | `session.logon`、`order.place`、`order.modify`、`order.cancel`、`order.status` | order-sender |
 | REST | `https://fapi.binance.com` | `exchangeInfo`、`listenKey`、`positionSide/dual`、快照、`countdownCancelAll`、下单兜底 | order-sender 与启动阶段 |
 
-- 流在 `/public` 与 `/market` 之间的归属按交易所当前文档划分，实施时逐条核对。
+- 流在 `/public` 与 `/market` 之间的归属已于 2026-09-27 对 `fstream.binance.com` 实测核对：`/public` 只推 `bookTicker` 与 depth 流，`/market` 推 `aggTrade`、`markPrice`、`kline` 与 `forceOrder`；旧路径 `/stream` 现在只推 `/public` 的流。订阅在错误路由上的流不会报错，只是没有数据，因此适配器总是按路由拆分订阅（`jarvis/adapter/binance/streams.hpp`）。
 - 单个行情连接最多 1024 个流、24 小时有效；客户端发往服务端的消息每秒不超过 10 条，ping、pong 帧与订阅类控制消息都计入；服务端每 3 分钟发 ping，10 分钟无 pong 即断开。
 - WS API 连接同样 24 小时有效；`session.logon` 只接受 Ed25519 key，登录后请求无需逐条签名。`ORDERS` 限额与 REST 共享，`REQUEST_WEIGHT` 按 IP 单独计算。
 - 用户数据流不能通过 WS API 连接接收，需要单独连接。
@@ -1223,6 +1229,8 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 5. 服务器时间偏移在阈值内。
 
 运行中 `exchangeInfo` 的变化（tick size、状态）以 `InstrumentStatus` 或 instrument 更新事件进入内核。
+
+`exchangeInfo` 到 `CryptoPerpetual` 的映射（`jarvis/adapter/binance/exchange_info.hpp`）与回测目录用的 Python 映射（`python/jarvis/data/binance_instrument.py`）相同：精度取 `tickSize` 与 `stepSize` 去掉末尾零后的小数位，价格与数量上下限按该精度取值，`MIN_NOTIONAL` 以保证金资产计价，保证金率为百分比除以 100。C++ 测试与 pytest 对同一份 testnet 夹具核对同一份期望文件，保证实盘节点与回测看到的 instrument 一致。Gate B 的 PRICE_FILTER、LOT_SIZE、MIN_NOTIONAL 规则直接读取这些字段。
 
 ### 14.7 限速
 
