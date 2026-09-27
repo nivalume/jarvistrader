@@ -459,6 +459,7 @@ void read_venue(const toml::table& t, const std::string& path, Errors& errors, V
   r.string("kind", v.kind);
   r.enumeration("endpoint", v.endpoint, kEndpointNames);
   r.string("credentials", v.credentials);
+  r.string("exchange_info", v.exchange_info);
   r.enumeration("account_mode", v.account_mode, kAccountModeNames);
   r.enumeration("oms", v.oms, kOmsNames);
   r.unsigned_int("leverage", v.leverage);
@@ -1024,6 +1025,7 @@ std::string canonical_operational_text(const NodeConfig& config) {
     const std::string p = index_path("venues", i);
     c.str(p + ".endpoint", name_of(kEndpointNames, config.venues[i].endpoint));
     c.str(p + ".credentials", config.venues[i].credentials);
+    c.str(p + ".exchange_info", config.venues[i].exchange_info);
   }
   c.str("persistence.mode", name_of(kPersistenceNames, config.persistence.mode));
   c.str("persistence.dir", config.persistence.dir);

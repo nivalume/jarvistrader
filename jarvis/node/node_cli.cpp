@@ -24,21 +24,22 @@ std::string node_usage(std::string_view program) {
   return "usage:\n"
          "  " +
          p +
-         " --config FILE [--env ENV] [--set path=value]... [--out DIR]\n"
+         " --config FILE [--env ENV] [--set path=value]... [--out DIR] [--run-for SECONDS]\n"
          "  " +
          p +
          " --replay RUN_DIR [--until SEQ] [--dump-state]\n"
          "\n"
-         "--config runs the node (backtest in this build) and writes the run log to --out or\n"
-         "persistence.dir. --replay recomputes a run's outputs from its inputs and reports the\n"
-         "first divergence (exit code 3).\n";
+         "--config runs the node and writes the run log to --out or persistence.dir; a sandbox\n"
+         "or live node runs until SIGINT or SIGTERM, or for --run-for seconds. --replay\n"
+         "recomputes a run's outputs from its inputs and reports the first divergence (exit\n"
+         "code 3).\n";
 }
 
 namespace {
 
 bool takes_value(std::string_view arg) {
   return arg == "--config" || arg == "--env" || arg == "--set" || arg == "--out" ||
-         arg == "--replay" || arg == "--until";
+         arg == "--replay" || arg == "--until" || arg == "--run-for";
 }
 
 bool assign(std::string_view arg, const std::string& value, NodeArgs& out, std::string& error) {
@@ -52,6 +53,13 @@ bool assign(std::string_view arg, const std::string& value, NodeArgs& out, std::
     out.out = value;
   } else if (arg == "--replay") {
     out.replay = value;
+  } else if (arg == "--run-for") {
+    std::uint64_t seconds = 0;
+    if (!parse_u64(value, seconds) || seconds == 0) {
+      error = "--run-for needs a positive number of seconds";
+      return false;
+    }
+    out.run_for_s = seconds;
   } else {
     std::uint64_t seq = 0;
     if (!parse_u64(value, seq)) {
@@ -70,9 +78,11 @@ bool consistent(const NodeArgs& out, std::string& error) {
     error = "give either --config FILE or --replay RUN_DIR";
     return false;
   }
-  const bool run_options = out.overrides.env || !out.overrides.sets.empty() || !out.out.empty();
+  const bool run_options = out.overrides.env || !out.overrides.sets.empty() || !out.out.empty() ||
+                           out.run_for_s.has_value();
   if (!out.replay.empty() && run_options) {
-    error = "--replay takes the configuration from the run directory (no --env, --set or --out)";
+    error = "--replay takes the configuration from the run directory (no --env, --set, --out or "
+            "--run-for)";
     return false;
   }
   if (out.replay.empty() && (out.until || out.dump_state)) {

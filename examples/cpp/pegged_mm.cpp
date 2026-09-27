@@ -16,6 +16,10 @@
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/node/node_main.hpp"
+
+#if defined(JARVIS_EXAMPLE_LIVE)
+#include "jarvis/live/live_main.hpp"
+#endif
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 
@@ -126,4 +130,8 @@ struct PeggedMM {
 
 JARVIS_REGISTER_STRATEGY(PeggedMM, "PeggedMM");
 
+#if defined(JARVIS_EXAMPLE_LIVE)
+int main(int argc, char** argv) { return jarvis::live_node_main<PeggedMM>(argc, argv); }
+#else
 int main(int argc, char** argv) { return jarvis::node_main<PeggedMM>(argc, argv); }
+#endif

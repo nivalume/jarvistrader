@@ -16,7 +16,7 @@
 // The command line every node entry shares: node_main<S...> in C++ and jarvis.main() in Python
 // (docs/architecture.md section 4.5).
 //
-//   PROGRAM --config FILE [--env ENV] [--set path=value]... [--out DIR]
+//   PROGRAM --config FILE [--env ENV] [--set path=value]... [--out DIR] [--run-for SECONDS]
 //   PROGRAM --replay RUN_DIR [--until SEQ] [--dump-state]
 
 namespace jarvis::node {
@@ -32,6 +32,7 @@ struct NodeArgs {
   std::string out;
   std::string replay;
   std::optional<std::uint64_t> until;
+  std::optional<std::uint64_t> run_for_s; // sandbox and live: stop after this long
   bool dump_state = false;
   bool help = false;
 };

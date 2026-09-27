@@ -52,6 +52,7 @@ data.streams[0].streams = ["aggTrade", "bookTicker", "depth@100ms", "markPrice@1
 data.streams[0].codec = "json"
 venues[0].endpoint = "testnet"
 venues[0].credentials = "env:BINANCE_USDM_KEY"
+venues[0].exchange_info = ""
 persistence.mode = "async"
 persistence.dir = "runs/{node_id}/{run_id}"
 persistence.snapshot_every = 1000000

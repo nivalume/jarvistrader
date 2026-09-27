@@ -86,6 +86,9 @@ struct VenueConfig {
   std::string kind;
   Endpoint endpoint = Endpoint::Prod;
   std::string credentials; // a reference such as "env:NAME", never the secret itself
+  // Sandbox and live: instruments from this saved exchangeInfo response instead of the
+  // endpoint's REST API (empty: fetch).
+  std::string exchange_info;
   AccountMode account_mode = AccountMode::OneWay;
   OmsKind oms = OmsKind::Netting;
   std::uint32_t leverage =

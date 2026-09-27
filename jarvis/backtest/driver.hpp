@@ -195,47 +195,58 @@ public:
 private:
   // Steps everything due at `now` or before, earliest first.
   core::Status advance_until(core::UnixNanos now, bool& moved) {
+    if constexpr (VenueSource<Source>) {
+      return advance_venue_until(now, moved);
+    } else {
+      return advance_plain_until(now, moved);
+    }
+  }
+
+  core::Status advance_venue_until(core::UnixNanos now, bool& moved) {
+    const auto due_at = [now](const std::optional<core::UnixNanos>& t) {
+      return t && !(now < *t) ? t : std::nullopt;
+    };
     while (!engine_->halt_requested()) {
-      if constexpr (VenueSource<Source>) {
-        std::optional<core::UnixNanos> venue;
-        const core::Status s = source_->next_venue_time(venue);
-        if (!core::ok(s)) {
-          return s;
-        }
-        const std::optional<core::UnixNanos> input = source_->next_input_time();
-        core::FiredTimer due;
-        const bool timer = engine_->next_timer(due);
-        const bool ready = (venue && !(now < *venue)) || (input && !(now < *input)) ||
-                           (timer && !(now < due.deadline));
-        if (!ready) {
-          return core::Status::Ok;
-        }
-        // advance() takes the earliest of the three; all of them are due.
-        const core::Status a = advance(venue && !(now < *venue) ? venue : std::nullopt,
-                                       input && !(now < *input) ? input : std::nullopt);
-        if (!core::ok(a)) {
-          return a;
-        }
+      std::optional<core::UnixNanos> venue;
+      const core::Status s = source_->next_venue_time(venue);
+      if (!core::ok(s)) {
+        return s;
+      }
+      const std::optional<core::UnixNanos> input = source_->next_input_time();
+      core::FiredTimer due;
+      const bool timer = engine_->next_timer(due) && !(now < due.deadline);
+      if (!due_at(venue) && !due_at(input) && !timer) {
+        return core::Status::Ok;
+      }
+      // advance() takes the earliest of what is due.
+      const core::Status a = advance(due_at(venue), due_at(input));
+      if (!core::ok(a)) {
+        return a;
+      }
+      moved = true;
+    }
+    return core::Status::Ok;
+  }
+
+  core::Status advance_plain_until(core::UnixNanos now, bool& moved) {
+    while (!engine_->halt_requested()) {
+      core::EventKey key;
+      model::Event event;
+      const core::Status s = source_->next(key, event);
+      if (s == core::Status::WouldBlock || s == core::Status::EndOfStream) {
+        return fire_timers(now, true, &moved);
+      }
+      if (!core::ok(s)) {
+        return s;
+      }
+      core::Status f = fire_timers(key.ts, true, &moved);
+      if (core::ok(f)) {
+        f = feed(key, event);
+        ++summary_.data_events;
         moved = true;
-      } else {
-        core::EventKey key;
-        model::Event event;
-        const core::Status s = source_->next(key, event);
-        if (s == core::Status::WouldBlock || s == core::Status::EndOfStream) {
-          return fire_timers(now, true, &moved);
-        }
-        if (!core::ok(s)) {
-          return s;
-        }
-        core::Status f = fire_timers(key.ts, true, &moved);
-        if (core::ok(f)) {
-          f = feed(key, event);
-          ++summary_.data_events;
-          moved = true;
-        }
-        if (!core::ok(f)) {
-          return f;
-        }
+      }
+      if (!core::ok(f)) {
+        return f;
       }
     }
     return core::Status::Ok;

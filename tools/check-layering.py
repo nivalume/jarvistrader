@@ -46,7 +46,7 @@ SHELL_ALLOWED = {
     "adapter": set(KERNEL_RANK) | {"network"},
     "live": set(KERNEL_RANK) | {"network", "adapter", "node", "live"},
 }
-EXAMPLES_ALLOWED = {"core", "model", "data", "strategy", "node"}
+EXAMPLES_ALLOWED = {"core", "model", "data", "strategy", "node", "live"}
 
 KERNEL_FORBIDDEN_STD = {
     "iostream", "istream", "ostream", "fstream", "sstream", "iomanip", "random", "thread",

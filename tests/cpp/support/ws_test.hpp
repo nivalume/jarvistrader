@@ -144,6 +144,12 @@ public:
     const std::lock_guard lock{mutex_};
     return error_;
   }
+  // The request target of connection `conn` (empty before its upgrade); a script may call it.
+  [[nodiscard]] std::string target(std::size_t conn) const {
+    const std::lock_guard lock{mutex_};
+    const auto it = by_conn_.find(conn);
+    return it == by_conn_.end() ? std::string{} : it->second;
+  }
   [[nodiscard]] std::size_t served() const { return served_.load(); } // connections ended
   [[nodiscard]] std::size_t accepted() const {                        // connections upgraded
     const std::lock_guard lock{mutex_};
@@ -190,6 +196,7 @@ private:
       {
         const std::lock_guard lock{mutex_};
         targets_.push_back(head.substr(4, head.find(' ', 4) - 4));
+        by_conn_[conn] = targets_.back();
       }
       const std::string response =
           "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -306,6 +313,7 @@ private:
   mutable std::mutex mutex_;
   std::map<std::size_t, std::vector<WsReply>> pushed_;
   std::vector<std::string> targets_;
+  std::map<std::size_t, std::string> by_conn_;
   std::vector<std::pair<std::size_t, std::string>> messages_;
   std::string error_;
   std::atomic<bool> stopping_{false};

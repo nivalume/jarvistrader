@@ -85,6 +85,10 @@ struct Preamble {
 };
 [[nodiscard]] core::Status load_preamble(const NodeConfig& config, Preamble& out,
                                          std::string& error);
+// The simulated venue's starting account ([venues.sim] balances) as an AccountState at `ts`,
+// appended to `out`.
+[[nodiscard]] core::Status account_preamble(const NodeConfig& config, const SimSection& sim,
+                                            core::UnixNanos ts, Preamble& out, std::string& error);
 
 // The simulated venue of [venues.sim]: fills, fees, latency, self-trade prevention.
 [[nodiscard]] core::Status venue_loop_config(const NodeConfig& config,

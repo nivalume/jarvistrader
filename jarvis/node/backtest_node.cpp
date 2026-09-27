@@ -206,8 +206,10 @@ Status load_definitions(const NodeConfig& config, Preamble& out, std::string& er
   return Status::Ok;
 }
 
-Status load_account(const NodeConfig& config, const SimSection& sim, Preamble& out,
-                    std::string& error) {
+} // namespace
+
+Status account_preamble(const NodeConfig& config, const SimSection& sim, core::UnixNanos ts,
+                        Preamble& out, std::string& error) {
   for (const model::Money& total : sim.balances) {
     model::Money zero;
     static_cast<void>(model::Money::from_raw(0, total.currency(), zero));
@@ -227,14 +229,11 @@ Status load_account(const NodeConfig& config, const SimSection& sim, Preamble& o
   // A valid, reproducible UUID4 (a zero id does not decode).
   constexpr std::uint64_t kAccountSalt = 0xA54FF53A5F1D36F1ULL;
   account.event_id = model::Uuid4::derive(core::CounterRng{config.node.seed ^ kAccountSalt}, 0, 0);
-  const core::UnixNanos ts = config.data.range ? config.data.range->start : core::UnixNanos{};
   account.ts_event = ts;
   account.ts_init = ts;
   out.events.push_back(model::Event{account});
   return Status::Ok;
 }
-
-} // namespace
 
 Status load_preamble(const NodeConfig& config, Preamble& out, std::string& error) {
   out.events.clear();
@@ -247,7 +246,8 @@ Status load_preamble(const NodeConfig& config, Preamble& out, std::string& error
   if (!sim || sim->balances.empty()) {
     return Status::Ok;
   }
-  return load_account(config, *sim, out, error);
+  return account_preamble(
+      config, *sim, config.data.range ? config.data.range->start : core::UnixNanos{}, out, error);
 }
 
 Status venue_loop_config(const NodeConfig& config, const strategy::KernelConfig& kernel,
