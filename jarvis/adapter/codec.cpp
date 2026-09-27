@@ -22,6 +22,15 @@ std::optional<std::uint32_t> SymbolTable::find(std::string_view venue_symbol) co
   return it->second;
 }
 
+std::optional<std::uint32_t> SymbolTable::find(const model::InstrumentId& id) const {
+  for (std::uint32_t i = 0; i < entries_.size(); ++i) {
+    if (entries_[i].id == id) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 core::Status exact_price(std::string_view text, std::uint8_t precision, model::Price& out) {
   model::Price parsed;
   const core::Status s = model::Price::parse(text, parsed);

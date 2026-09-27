@@ -50,6 +50,7 @@ struct PortfolioConfig {
 struct PortfolioStats {
   std::uint64_t fills = 0;
   std::uint64_t unsupported_fills = 0;
+  std::uint64_t late_commissions = 0; // commissions booked after a Lite fill
   std::uint64_t funding_settlements = 0;
 };
 
@@ -159,6 +160,26 @@ public:
     }
     out.booked = true;
     ++stats_.fills;
+    return core::Status::Ok;
+  }
+
+  // A commission reported after its fill: Binance sends TRADE_LITE, without the commission,
+  // before ORDER_TRADE_UPDATE for the same trade (docs/architecture.md section 8.3). Books it
+  // like the commission of on_fill: the balance, the venue position and the strategy's share.
+  [[nodiscard]] core::Status on_commission(const model::Instrument& instrument, std::uint32_t slot,
+                                           StrategyIndex s, const model::Money& commission) {
+    if (!linear(instrument) || slot >= instruments_ || s >= strategies_ || commission.is_zero()) {
+      return core::Status::Ok;
+    }
+    const core::Status st = credit(commission.currency(), -commission.raw());
+    if (!core::ok(st)) {
+      return st;
+    }
+    if (commission.currency() == model::common(instrument).settlement_currency) {
+      venue_[slot].add_commission(commission.raw());
+      ledger_[index(s, slot)].add_commission(commission.raw());
+    }
+    ++stats_.late_commissions;
     return core::Status::Ok;
   }
 

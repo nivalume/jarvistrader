@@ -154,6 +154,11 @@ private:
       return core::Status::Ok;
     } else if constexpr (std::is_same_v<T, model::StrategyError>) {
       return on_strategy_error(e);
+    } else if constexpr (std::is_same_v<T, model::RateLimitFeedback>) {
+      if (e.kind == model::RateLimitKind::Orders) {
+        k_.trading.risk.limiter().feedback(e.ts_init, e.interval_ns, e.used);
+      }
+      return core::Status::Ok; // request weight is the adapter's (per IP, not per account)
     } else if constexpr (detail::is_alternative_v<T, model::Instrument>) {
       return k_.define_instrument(model::Instrument{e});
     } else if constexpr (detail::is_alternative_v<T, model::OrderEvent>) {

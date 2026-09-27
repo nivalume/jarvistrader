@@ -135,10 +135,10 @@ M3 验收记录（`tools/m3_acceptance.sh`）：2024-03-30 的 BTCUSDT-PERP（ag
 - [x] task: adapter — depth 同步状态机与快照请求的专用令牌桶（§14.3）：`DepthSync`、`DepthBooks`（共享 `risk::RateLimiter` 预算、轮流取用），REST 与 WS API 快照解码，每侧档位上限。2026-09-27 生产环境实测（`jarvis-capture depth-check`，快照经 WS API）：BTCUSDT 5 分钟 19 次、ETHUSDT 3 分钟 11 次独立重同步，与主簿在同一更新号的前 100 档全部相同，0 缺口、0 解码错误；加上每侧 2000 档上限后 BTCUSDT 再跑 3 分钟 11 次，同样全部相同（不设上限时 5 分钟内每侧增长到约 3300 档）
 - [x] task: adapter — `exchangeInfo` 加载 instrument，由 filters 生成 Gate B 规则（§14.6）：filters 落到 `InstrumentCommon` 字段，Gate B 规则直接读取；与 Python 目录映射对同一 testnet 夹具逐字段一致
 - [ ] task: adapter — 启动检查：持仓模式、杠杆与保证金模式、key 权限与 IP 白名单、服务器时间偏移
-- [ ] task: adapter — 用户数据流：listenKey 获取与每 30 分钟续期、`listenKeyExpired` 处理、事件解码、`TRADE_LITE` 与 `ORDER_TRADE_UPDATE` 合并（§8.3、§14.5）
+- [ ] task: adapter — 用户数据流：listenKey 获取与每 30 分钟续期、`listenKeyExpired` 处理、事件解码、`TRADE_LITE` 与 `ORDER_TRADE_UPDATE` 合并（§8.3、§14.5）：事件解码、`OrderTracker`、Lite 成交与手续费补记（内核 `Oms::take_pending_commission`、`Portfolio::on_commission`）、余额表合并已完成；listenKey 生命周期随 WS/REST 客户端
 - [ ] task: adapter — WS API：`session.logon`（Ed25519）、`order.place`、`order.modify`、`order.cancel`、`order.status`，错误码映射（§8.2、§14.4）
 - [ ] task: adapter — REST 兜底下单与快照接口
-- [ ] task: adapter — 权重与订单数令牌桶的 `RateLimitFeedback` 回灌，HTTP 429 退避与 418 处理（§14.7）
+- [ ] task: adapter — 权重与订单数令牌桶的 `RateLimitFeedback` 回灌，HTTP 429 退避与 418 处理（§14.7）：内核事件 `RateLimitFeedback` 与 `RateLimiter::feedback` 已完成；响应头与 `rateLimits` 解析随 WS/REST 客户端
 - [ ] task: adapter — 核对行情流在 `/public` 与 `/market` 路由间的归属及用户数据流连接地址，写入适配器配置（开放问题）：路由已于 2026-09-27 实测并写入 `jarvis/adapter/binance/streams.hpp`（`/stream` 只剩 `/public` 的流）；用户数据流地址随 M4-D
 - [ ] task: live — md-io、ud-io、timer、admin、order-sender 线程，入站、出站与回执 SPSC 环（§7.1）
 - [ ] task: live — 原始帧录制与解码日志录制，`jarvis redecode`（§13.4）

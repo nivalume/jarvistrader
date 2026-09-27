@@ -1384,6 +1384,63 @@ struct Holder {
 } // namespace
 
 TEST_SUITE("unit") {
+  TEST_CASE("a Lite fill's commission is booked once, from the report that brings it") {
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids;
+    st::StaticStrategySet<Holder> set{Holder{&log, &ids}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::array<md::AccountBalance, 1> balances{};
+    md::Money thousand;
+    md::Money zero;
+    REQUIRE(md::Money::parse("1000 USDT", thousand) == Status::Ok);
+    REQUIRE(md::Money::parse("0 USDT", zero) == Status::Ok);
+    REQUIRE(md::AccountBalance::create(thousand, zero, thousand, balances[0]) == Status::Ok);
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), account_state(1, balances), running(2)}, seq) ==
+            Status::Ok);
+    REQUIRE(ids.size() == 1);
+    md::Event lite = filled(4, ids[0], "t1", "0.010", "65000.0"); // TRADE_LITE: no commission
+    std::get<md::OrderFilled>(lite).info_flags = static_cast<std::uint8_t>(md::FillInfo::Lite);
+    REQUIRE(drive(engine,
+                  {accepted(3, ids[0], "v1"), lite,
+                   filled_with_fee(5, ids[0], "t1", "0.010", "65000.0", "0.13 USDT"),
+                   filled_with_fee(6, ids[0], "t1", "0.010", "65000.0", "0.13 USDT")},
+                  seq) == Status::Ok);
+    // The strategy sees one fill; the later reports only bring the commission, once.
+    CHECK(log == std::vector<std::string>{"SUBMITTED", "ACCEPTED", "FILLED", "sees 10000000",
+                                          "OPENED 10000000"});
+    const st::Trading& trading = engine.kernel().trading;
+    md::Currency usdt;
+    REQUIRE(md::Currency::builtin("USDT", usdt) == Status::Ok);
+    md::AccountBalance balance;
+    REQUIRE(trading.balance(usdt, balance));
+    CHECK(balance.total.raw() == 1000 * 1'000'000'000LL - 130'000'000);
+    st::PositionView view;
+    REQUIRE(trading.position(0, 0, view));
+    CHECK(view.realized_pnl.raw() == -130'000'000);
+    CHECK(trading.stats.duplicate_fills == 2);
+    CHECK(trading.portfolio.stats().late_commissions == 1);
+  }
+
+  TEST_CASE("the venue's order count raises the kernel's rate window") {
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids;
+    st::StaticStrategySet<Holder> set{Holder{&log, &ids}};
+    st::KernelConfig config = small_config();
+    config.trading.risk.orders_per_10s = 250;
+    config.trading.risk.orders_per_minute = 1000;
+    jarvis::engine::Engine engine{config, set};
+    std::uint64_t seq = 0;
+    // Before the strategy starts, the venue reports 250 orders in this 10-second window.
+    md::RateLimitFeedback spent{md::RateLimitKind::Orders, 10'000'000'000ULL, 250, 300,
+                                UnixNanos{1}};
+    REQUIRE(drive(engine, {perpetual_definition(1), md::Event{spent}, running(2)}, seq) ==
+            Status::Ok);
+    REQUIRE(ids.size() == 1);
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 0);
+    CHECK(count_outputs<md::OrderDenied>(engine.outputs()) == 1);
+  }
+
   TEST_CASE("fills move positions and balances; strategies see both in order") {
     std::vector<std::string> log;
     std::vector<md::ClientOrderId> ids;

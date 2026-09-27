@@ -55,6 +55,18 @@ public:
     return true;
   }
 
+  // The venue's count for the window of length `interval_ns` (RateLimitFeedback): ours rises to
+  // at least `used`, never falls, so orders the venue counted that we did not (another
+  // session, a retry) are not sent past its limit.
+  void feedback(core::UnixNanos now, std::uint64_t interval_ns, std::uint32_t used) noexcept {
+    for (std::size_t i = 0; i < count_; ++i) {
+      if (windows_[i].window.interval_ns == interval_ns) {
+        State& s = roll(i, now);
+        s.used = used > s.used ? used : s.used;
+      }
+    }
+  }
+
   [[nodiscard]] std::size_t windows() const noexcept { return count_; }
 
 private:

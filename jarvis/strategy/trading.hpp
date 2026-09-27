@@ -593,6 +593,7 @@ public:
       return false;
     case execution::EventOutcome::DuplicateFill:
       ++stats.duplicate_fills;
+      status = book_late_commission(index, event);
       return false;
     case execution::EventOutcome::Refused:
       ++stats.refused_order_events;
@@ -1111,6 +1112,23 @@ private:
   }
 
   // Books an applied fill or fill void and queues the strategy's position events.
+  // The second report of a Lite fill brings its commission (docs/architecture.md section 8.3):
+  // booked once, whatever further duplicates arrive.
+  [[nodiscard]] core::Status book_late_commission(std::uint32_t index,
+                                                  const model::OrderEvent& event) {
+    const auto* f = std::get_if<model::OrderFilled>(&event);
+    const bool lite =
+        f != nullptr && (f->info_flags & static_cast<std::uint8_t>(model::FillInfo::Lite)) != 0;
+    if (f == nullptr || lite || !f->commission ||
+        !oms.take_pending_commission(index, f->trade_id)) {
+      return core::Status::Ok;
+    }
+    const execution::OrderRecord& r = oms.at(index);
+    const model::Instrument* def = definition(r.slot);
+    return def == nullptr ? core::Status::Ok
+                          : portfolio.on_commission(*def, r.slot, r.strategy, *f->commission);
+  }
+
   void book(const core::EventKey& now, const execution::OrderRecord& r,
             const model::OrderEvent& event) {
     const model::Instrument* def = definition(r.slot);

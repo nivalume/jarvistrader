@@ -50,7 +50,7 @@ adapter::SymbolTable table() {
   adapter::SymbolTable t;
   jarvis::model::InstrumentId id;
   static_cast<void>(binance::perpetual_id("BTCUSDT", id));
-  static_cast<void>(t.add("BTCUSDT", adapter::SymbolEntry{id, 1, 3}));
+  static_cast<void>(t.add("BTCUSDT", adapter::SymbolEntry{id, 1, 3, {}}));
   return t;
 }
 

@@ -57,8 +57,10 @@ adapter::SymbolTable table() {
   for (const auto& [symbol, pp, sp] : {std::tuple{"BTCUSDT", 1, 3}, std::tuple{"ETHUSDT", 2, 3}}) {
     model::InstrumentId id;
     REQUIRE(binance::perpetual_id(symbol, id) == Status::Ok);
-    REQUIRE(t.add(symbol, adapter::SymbolEntry{id, static_cast<std::uint8_t>(pp),
-                                               static_cast<std::uint8_t>(sp)}) == Status::Ok);
+    REQUIRE(t.add(symbol,
+                  adapter::SymbolEntry{
+                      id, static_cast<std::uint8_t>(pp), static_cast<std::uint8_t>(sp), {}}) ==
+            Status::Ok);
   }
   return t;
 }

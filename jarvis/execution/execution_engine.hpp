@@ -17,7 +17,8 @@
 //   Refused        the state machine has no such transition, or the quantities do not fit
 //                  (an overfill, a void of more than was filled);
 //   DuplicateFill  a second report of a trade already applied (TRADE_LITE and
-//                  ORDER_TRADE_UPDATE, section 8.3).
+//                  ORDER_TRADE_UPDATE, section 8.3); the caller books its commission when
+//                  the first report was Lite (Oms::take_pending_commission).
 //
 // OrderInitialized is not accepted from outside: orders enter the OMS through submit, and
 // adopting a venue order is reconciliation's (section 15).
@@ -48,7 +49,8 @@ template <typename E> void note_venue_order_id(OrderRecord& r, const E& e) noexc
 template <typename E>
 core::Status apply_to(Oms& oms, std::uint32_t index, OrderEventKind kind, const E& e) noexcept {
   if constexpr (std::is_same_v<E, model::OrderFilled>) {
-    return oms.fill(index, e.trade_id, e.last_qty, e.last_px);
+    const bool lite = (e.info_flags & static_cast<std::uint8_t>(model::FillInfo::Lite)) != 0;
+    return oms.fill(index, e.trade_id, e.last_qty, e.last_px, lite);
   } else if constexpr (std::is_same_v<E, model::OrderFillVoided>) {
     return oms.void_fill(index, e.trade_id, e.voided_qty, e.last_px);
   } else if constexpr (std::is_same_v<E, model::OrderUpdated>) {

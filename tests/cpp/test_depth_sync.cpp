@@ -257,7 +257,7 @@ TEST_SUITE("unit") {
     for (const char* s : {"AUSDT", "BUSDT", "CUSDT"}) {
       model::InstrumentId id;
       REQUIRE(binance::perpetual_id(s, id) == Status::Ok);
-      REQUIRE(table.add(s, adapter::SymbolEntry{id, 1, 3}) == Status::Ok);
+      REQUIRE(table.add(s, adapter::SymbolEntry{id, 1, 3, {}}) == Status::Ok);
     }
     const std::array<jarvis::risk::RateWindow, 1> windows{{{10'000'000'000ULL, 2}}};
     binance::DepthBooks books{table, {}, windows};
@@ -282,7 +282,7 @@ TEST_SUITE("unit") {
                      "/tests/data/binance/depth_snapshot_testnet.json"};
     std::ostringstream json;
     json << in.rdbuf();
-    const adapter::SymbolEntry btc{instrument(), 1, 4};
+    const adapter::SymbolEntry btc{instrument(), 1, 4, {}};
     binance::DepthSnapshot s;
     std::string error;
     REQUIRE(binance::decode_depth_snapshot(json.str(), btc, UnixNanos{3}, s, error) == Status::Ok);
@@ -292,7 +292,7 @@ TEST_SUITE("unit") {
     REQUIRE(s.asks.size() == 5);
     CHECK(s.bids[0].price.raw() == 84432'700'000'000LL);
     CHECK(s.bids[0].size.raw() == 513'400'000ULL);
-    const adapter::SymbolEntry coarse{instrument(), 0, 4}; // 84432.7 is off a whole-dollar grid
+    const adapter::SymbolEntry coarse{instrument(), 0, 4, {}}; // 84432.7 is off a whole-dollar grid
     CHECK(binance::decode_depth_snapshot(json.str(), coarse, UnixNanos{3}, s, error) ==
           Status::PrecisionLoss);
     CHECK(binance::decode_depth_snapshot("{\"bids\":[]}", btc, UnixNanos{3}, s, error) ==

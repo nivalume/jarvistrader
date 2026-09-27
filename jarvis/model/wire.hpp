@@ -85,6 +85,7 @@ enum class RecordKind : std::uint16_t {
   NodeLifecycle = 52,
   StrategyError = 53,
   Shutdown = 54,
+  RateLimitFeedback = 55,
   CurrencyPair = 60,
   CryptoPerpetual = 61,
   CryptoFuture = 62,
@@ -99,7 +100,7 @@ enum class RecordKind : std::uint16_t {
 };
 
 // Same order as the alternatives of model::Event.
-inline constexpr std::array<RecordKind, 36> kKindByAlternative = {
+inline constexpr std::array<RecordKind, 37> kKindByAlternative = {
     RecordKind::TradeTick,
     RecordKind::QuoteTick,
     RecordKind::OrderBookDeltas,
@@ -136,6 +137,7 @@ inline constexpr std::array<RecordKind, 36> kKindByAlternative = {
     RecordKind::CurrencyPair,
     RecordKind::CryptoPerpetual,
     RecordKind::CryptoFuture,
+    RecordKind::RateLimitFeedback,
 };
 static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 
@@ -222,6 +224,8 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "StrategyError";
   case RecordKind::Shutdown:
     return "Shutdown";
+  case RecordKind::RateLimitFeedback:
+    return "RateLimitFeedback";
   case RecordKind::CurrencyPair:
     return "CurrencyPair";
   case RecordKind::CryptoPerpetual:
@@ -845,6 +849,9 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
     break;
   case RecordKind::Shutdown:
     decode_as<Shutdown>(r, scratch, out);
+    break;
+  case RecordKind::RateLimitFeedback:
+    decode_as<RateLimitFeedback>(r, scratch, out);
     break;
   case RecordKind::CurrencyPair:
     decode_as<CurrencyPair>(r, scratch, out);

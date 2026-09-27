@@ -55,6 +55,12 @@ enum class ShutdownMode : std::uint8_t {
   ExitKeepOrders = 1,
 };
 
+// Which venue limit a RateLimitFeedback reports (docs/architecture.md section 10.4).
+enum class RateLimitKind : std::uint8_t {
+  Orders = 0,        // the account's order count (X-MBX-ORDER-COUNT-*, rateLimits ORDERS)
+  RequestWeight = 1, // the IP's request weight (X-MBX-USED-WEIGHT-*, rateLimits REQUEST_WEIGHT)
+};
+
 [[nodiscard]] constexpr std::string_view to_string(NodeState v) noexcept {
   switch (v) {
   case NodeState::Init:
@@ -122,6 +128,16 @@ enum class ShutdownMode : std::uint8_t {
   return "";
 }
 
+[[nodiscard]] constexpr std::string_view to_string(RateLimitKind v) noexcept {
+  switch (v) {
+  case RateLimitKind::Orders:
+    return "ORDERS";
+  case RateLimitKind::RequestWeight:
+    return "REQUEST_WEIGHT";
+  }
+  return "?";
+}
+
 // Wire decoding helpers for the kernel enums above (the nautilus enums get theirs generated).
 [[nodiscard]] constexpr core::Status from_value(std::uint8_t v, NodeState& out) noexcept {
   if (v > static_cast<std::uint8_t>(NodeState::Faulted)) {
@@ -149,6 +165,14 @@ enum class ShutdownMode : std::uint8_t {
     return core::Status::OutOfRange;
   }
   out = static_cast<ShutdownMode>(v);
+  return core::Status::Ok;
+}
+
+[[nodiscard]] constexpr core::Status from_value(std::uint8_t v, RateLimitKind& out) noexcept {
+  if (v > static_cast<std::uint8_t>(RateLimitKind::RequestWeight)) {
+    return core::Status::OutOfRange;
+  }
+  out = static_cast<RateLimitKind>(v);
   return core::Status::Ok;
 }
 
@@ -183,6 +207,17 @@ struct Shutdown {
   core::UnixNanos ts_init;
 };
 
+// The venue's count of one rate limit window (docs/architecture.md section 10.4), from response
+// headers and the WebSocket API's rateLimits: the kernel raises its own count of the matching
+// order window to at least `used`. An HTTP 429 arrives as used = limit (the window is spent).
+struct RateLimitFeedback {
+  RateLimitKind kind = RateLimitKind::Orders;
+  std::uint64_t interval_ns = 0; // the window's length (10 s, 1 min)
+  std::uint32_t used = 0;
+  std::uint32_t limit = 0; // the venue's limit; 0 when not reported
+  core::UnixNanos ts_init;
+};
+
 // The closed set of kernel input events. Adding an alternative forces every visitor to handle
 // it at compile time. Instrument definitions (exchangeInfo, catalog files) are inputs too, so a
 // replay sees the same tick sizes, filters and margins the run saw.
@@ -194,7 +229,7 @@ using Event =
                  OrderPendingUpdate, OrderPendingCancel, OrderModifyRejected, OrderCancelRejected,
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
-                 CryptoFuture>;
+                 CryptoFuture, RateLimitFeedback>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.

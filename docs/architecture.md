@@ -724,6 +724,7 @@ M2 的实测值（本仓库的云端开发容器，单核，Release 构建；`be
 - 成交按 `(symbol, orderId, tradeId)` 去重。
 - `TRADE_LITE` 比 `ORDER_TRADE_UPDATE` 更早到达，但不含手续费与已实现盈亏。第一条到达的回报产生 `OrderFilled` 并更新仓位与敞口；同一 `tradeId` 的第二条回报只补充手续费、`rp` 与累计数量，不重复记成交。
 - 订单状态回报按 `(orderId, updateTime)` 单调推进，旧于当前状态的回报丢弃并计数。
+- 实现（M4-D）：适配器的 `OrderTracker`（`jarvis/adapter/binance/order_tracker.hpp`）按 `(orderId, tradeId)` 记住每笔成交是 Lite 还是完整回报。`TRADE_LITE` 先到时发出带 `FillInfo::Lite`、没有手续费的 `OrderFilled`；同一笔成交的 `ORDER_TRADE_UPDATE` 再作为带手续费的 `OrderFilled` 转发一次；之后的回报丢弃。内核的 OMS 在成交记录上标记"手续费待到"，重复成交（`DuplicateFill`）若是这笔 Lite 成交的完整回报，由 `Portfolio::on_commission` 只记一次手续费，不重复记成交。
 
 ### 8.4 ClientOrderId
 
@@ -910,7 +911,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 - 限速状态在内核内（`jarvis/risk/rate_limit.hpp`），所以回测与实盘按同样的规则限速。Binance 按与时钟对齐的固定窗口计数，内核同样用固定窗口：一个窗口在两个间隔整数倍之间最多放行 `limit` 笔。窗口由输入的 ts 推进，状态是输入的函数，不需要定时器。
 - USDⓈ-M 的窗口：账户下单数每 10 秒与每分钟（`[risk] orders_per_10s = 250`、`orders_per_minute = 1000`，交易所上限为 300 与 1200），新单与改单各计一笔，撤单不计。IP 请求权重由适配器按连接统计（M4）。默认值低于交易所上限，给重连与对账请求留出余量。
 - 限速是 Gate B 的最后一条规则，只有其他规则都通过时才消耗额度。
-- 适配器把响应头 `X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*` 与 WS API 响应中的 `rateLimits` 回灌为 `RateLimitFeedback` 事件，内核据此校正估计值。
+- 适配器把响应头 `X-MBX-USED-WEIGHT-1M`、`X-MBX-ORDER-COUNT-*` 与 WS API 响应中的 `rateLimits` 回灌为 `RateLimitFeedback` 事件，内核据此校正估计值。事件带 `kind`（`ORDERS` 或 `REQUEST_WEIGHT`）、窗口长度、已用数与上限；内核只用 `ORDERS`，把间隔相同的窗口计数抬到至少 `used`，从不下调；请求权重按 IP 计，由适配器自己约束。
 - 收到 HTTP 429 立即把相关窗口的余量清零并退避；收到 418（IP 封禁）进入 `Degraded` 并告警。
 - `PeggedQuote` 等执行算法在生成子单前查询剩余额度，额度不足时只更新移动了的一侧。
 
@@ -1226,6 +1227,7 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 
 - `POST /fapi/v1/listenKey` 获取，每 30 分钟 `PUT` 续期（listenKey 有效期 60 分钟），收到 `listenKeyExpired` 或续期失败时重新获取并重连，然后走对账流程。
 - 事件处理：`ORDER_TRADE_UPDATE` 与 `TRADE_LITE` 见第 8 节；`ACCOUNT_UPDATE` 置位余额与仓位，原因为 `FUNDING_FEE` 时产生 `PositionAdjusted(Funding)`；`MARGIN_CALL` 推动 TradingState；`ACCOUNT_CONFIG_UPDATE` 更新杠杆与多资产模式，与配置不符时告警。
+- 实现（M4-D）：`decode_user_report` 把各类事件解析为未解释的报告结构（数值保持字符串，由 `OrderTracker` 按 instrument 精度精确解析）。`ACCOUNT_UPDATE` 只列出变化的资产，`OrderTracker` 把它合并进完整的余额表，再以 `AccountState`（total 为钱包余额）交给内核，因为内核的 `set_account` 整体替换余额。不是本节点发出的订单的回报计数后丢弃，由对账（第 15 节）处理。
 
 ### 14.6 启动检查与 instrument 加载
 

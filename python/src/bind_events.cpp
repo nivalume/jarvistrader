@@ -199,6 +199,10 @@ void bind_kernel(nb::module_& mod) {
   bind_struct<m::NodeLifecycle>(mod, "NodeLifecycle", "A node lifecycle transition.");
   bind_struct<m::StrategyError>(mod, "StrategyError", "A strategy callback failed or overran.");
   bind_struct<m::Shutdown>(mod, "Shutdown", "A shutdown request.");
+  bind_kernel_enum(mod, "RateLimitKind",
+                   std::array{m::RateLimitKind::Orders, m::RateLimitKind::RequestWeight});
+  bind_struct<m::RateLimitFeedback>(mod, "RateLimitFeedback",
+                                    "The venue's count of one rate limit window.");
 }
 
 template <typename T> void bind_instrument(nb::module_& mod, const char* name, const char* doc) {

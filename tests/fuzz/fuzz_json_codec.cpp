@@ -37,7 +37,7 @@ const adapter::SymbolTable& table() {
     adapter::SymbolTable s;
     model::InstrumentId id;
     require(binance::perpetual_id("BTCUSDT", id) == Status::Ok);
-    require(s.add("BTCUSDT", adapter::SymbolEntry{id, kPricePrecision, kSizePrecision}) ==
+    require(s.add("BTCUSDT", adapter::SymbolEntry{id, kPricePrecision, kSizePrecision, {}}) ==
             Status::Ok);
     return s;
   }();

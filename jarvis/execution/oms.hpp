@@ -150,9 +150,11 @@ public:
     return s;
   }
 
-  // A fill of `trade_id`; DuplicateFill when this order already has that trade.
+  // A fill of `trade_id`; DuplicateFill when this order already has that trade. A Lite fill
+  // (Binance TRADE_LITE) comes without its commission, which a later report brings.
   [[nodiscard]] core::Status fill(std::uint32_t index, const model::TradeId& trade_id,
-                                  model::Quantity qty, model::Price px) noexcept {
+                                  model::Quantity qty, model::Price px,
+                                  bool commission_pending = false) noexcept {
     OrderRecord& r = orders_[index];
     if (find_trade(r, trade_id) != kNoIndex) {
       return core::Status::DuplicateFill;
@@ -169,11 +171,23 @@ public:
     track(r, before);
     const std::uint32_t t = free_trade_;
     free_trade_ = trades_[t].next;
-    trades_[t] = TradeRecord{trade_id, qty.raw(), r.trades};
+    trades_[t] = TradeRecord{trade_id, qty.raw(), r.trades, commission_pending};
     r.trades = t;
     r.fill_notional += static_cast<core::i128>(px.raw()) * static_cast<core::i128>(qty.raw());
     note_closed(index, was_closed);
     return core::Status::Ok;
+  }
+
+  // True once for a Lite fill of `trade_id` when a later report of it brings the commission
+  // (docs/architecture.md section 8.3); false for any other trade or a second report.
+  [[nodiscard]] bool take_pending_commission(std::uint32_t index,
+                                             const model::TradeId& trade_id) noexcept {
+    const std::uint32_t t = find_trade(orders_[index], trade_id);
+    if (t == kNoIndex || !trades_[t].commission_pending) {
+      return false;
+    }
+    trades_[t].commission_pending = false;
+    return true;
   }
 
   // Voids `voided` of an earlier fill of `trade_id` at `px`.
@@ -270,6 +284,7 @@ private:
     model::TradeId trade_id;
     std::uint64_t qty_raw = 0;
     std::uint32_t next = kNoIndex;
+    bool commission_pending = false; // a Lite fill whose commission has not been reported
   };
 
   static std::size_t table_size(std::uint32_t orders) noexcept {

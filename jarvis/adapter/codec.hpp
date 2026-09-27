@@ -102,6 +102,7 @@ struct SymbolEntry {
   model::InstrumentId id;
   std::uint8_t price_precision = 0;
   std::uint8_t size_precision = 0;
+  model::Currency settlement; // the currency fills settle in (empty when not known)
 };
 
 class SymbolTable {
@@ -109,9 +110,11 @@ public:
   [[nodiscard]] core::Status add(std::string_view venue_symbol, const SymbolEntry& entry);
   [[nodiscard]] core::Status add(const model::InstrumentCommon& instrument) {
     return add(instrument.raw_symbol.view(),
-               SymbolEntry{instrument.id, instrument.price_precision, instrument.size_precision});
+               SymbolEntry{instrument.id, instrument.price_precision, instrument.size_precision,
+                           instrument.settlement_currency});
   }
   [[nodiscard]] std::optional<std::uint32_t> find(std::string_view venue_symbol) const;
+  [[nodiscard]] std::optional<std::uint32_t> find(const model::InstrumentId& id) const;
   [[nodiscard]] const SymbolEntry& operator[](std::uint32_t index) const { return entries_[index]; }
   [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
 

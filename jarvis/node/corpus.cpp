@@ -548,6 +548,15 @@ struct CorpusMakers {
     return Status::Ok;
   }
 
+  static Status rate_limit(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
+    const bool orders = g.draw(76) % 2 == 0;
+    event = m::RateLimitFeedback{
+        orders ? m::RateLimitKind::Orders : m::RateLimitKind::RequestWeight,
+        orders ? 10'000'000'000ULL : 60'000'000'000ULL,
+        static_cast<std::uint32_t>(g.draw(77) % 300U), orders ? 300U : 2400U, g.ts_};
+    return Status::Ok;
+  }
+
   // Instrument definitions: the drawn perpetual re-stamped, a spot pair and a dated future.
   static Status perpetual_def(CorpusGenerator& g, const Perp& inst, m::Event& event) {
     m::CryptoPerpetual p = inst;
@@ -592,8 +601,8 @@ struct CorpusMakers {
 
   // A market-data-heavy mix in which every kind has at least 0.9%, so a few hundred events cover
   // all of them. Same order as model::Event.
-  static constexpr std::array<Weighted, 36> kMix = {{
-      {198, &trade},         {202, &quote},         {70, &deltas},          {35, &bar},
+  static constexpr std::array<Weighted, 37> kMix = {{
+      {198, &trade},         {193, &quote},         {70, &deltas},          {35, &bar},
       {43, &mark},           {26, &index},          {17, &funding},         {9, &status},
       {10, &close},          {9, &liquidation},     {34, &initialized},     {10, &denied},
       {10, &emulated},       {10, &released},       {10, &submitted},       {17, &accepted},
@@ -602,6 +611,7 @@ struct CorpusMakers {
       {10, &updated},        {52, &filled},         {10, &fill_voided},     {26, &account_state},
       {26, &timer},          {17, &batch_end},      {9, &lifecycle},        {9, &strategy_error},
       {10, &shutdown},       {9, &pair_def},        {9, &perpetual_def},    {9, &future_def},
+      {9, &rate_limit},
   }};
 };
 

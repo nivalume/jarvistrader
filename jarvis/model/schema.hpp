@@ -262,6 +262,10 @@ template <typename F> constexpr void fields(StrategyError& e, F&& f) {
 template <typename F> constexpr void fields(Shutdown& e, F&& f) {
   f("mode", e.mode), f("ts_init", e.ts_init);
 }
+template <typename F> constexpr void fields(RateLimitFeedback& e, F&& f) {
+  f("kind", e.kind), f("interval_ns", e.interval_ns), f("used", e.used), f("limit", e.limit),
+      f("ts_init", e.ts_init);
+}
 
 // ---- kernel outputs ------------------------------------------------------------------------
 
