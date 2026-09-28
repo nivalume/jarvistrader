@@ -117,6 +117,7 @@ public:
     peak_raw_ = now_held > peak_raw_ ? now_held : peak_raw_;
     last_px_ = price;
     last_qty_ = quantity;
+    ts_last_ = ts;
     return core::Status::Ok;
   }
 
@@ -132,6 +133,7 @@ public:
     avg_open_raw_ = held == 0 ? 0 : core::magnitude(avg_px.raw());
     open_notional_ = static_cast<core::u128>(avg_open_raw_) * held;
     peak_raw_ = held;
+    ts_last_ = ts;
   }
 
   // Commission paid (positive) or a rebate (negative), in the settlement currency.
@@ -192,6 +194,8 @@ public:
     return opening_order_id_;
   }
   [[nodiscard]] constexpr core::UnixNanos ts_opened() const noexcept { return ts_opened_; }
+  // The time of the last fill, or of the reconciliation that set the position.
+  [[nodiscard]] constexpr core::UnixNanos ts_last() const noexcept { return ts_last_; }
   [[nodiscard]] constexpr model::Price last_px() const noexcept { return last_px_; }
   [[nodiscard]] constexpr model::Quantity last_qty() const noexcept { return last_qty_; }
 
@@ -251,6 +255,7 @@ private:
   std::int64_t total_funding_raw_ = 0;
   model::ClientOrderId opening_order_id_;
   core::UnixNanos ts_opened_;
+  core::UnixNanos ts_last_;
   model::Price last_px_;
   model::Quantity last_qty_;
 };

@@ -31,6 +31,10 @@
 //
 // Fills of an order the node placed name its ClientOrderId when the adapter or the order reports
 // know its venue order id. Symbols and assets the node does not know are counted, not reported.
+//
+// The light check a synced node takes every minute (section 15.3) is openOrders and the
+// positions only, with T_c the venue's clock before the first call; the kernel compares it with
+// its state and leaves out what changed close to T_c, so it needs no consistent read.
 
 namespace jarvis::adapter::binance {
 
@@ -60,6 +64,7 @@ struct AccountSnapshot {
   std::size_t skipped = 0;                         // entries of unknown symbols or assets
   std::uint32_t rounds = 0;                        // balance and position reads
   std::uint32_t requests = 0;
+  bool check = false; // a light check (VenueSnapshot::check)
 
   // The kernel input; it borrows this object's storage.
   [[nodiscard]] model::VenueSnapshot event(core::UnixNanos ts_init) const;
@@ -68,5 +73,10 @@ struct AccountSnapshot {
 [[nodiscard]] core::Status assemble_snapshot(RestClient& rest, const SymbolTable& symbols,
                                              const AccountSnapshotRequest& request,
                                              AccountSnapshot& out, std::string& error);
+
+// The light check: openOrders and positionRisk (`request.orders` and the trade fields unused).
+[[nodiscard]] core::Status assemble_check(RestClient& rest, const SymbolTable& symbols,
+                                          const AccountSnapshotRequest& request,
+                                          AccountSnapshot& out, std::string& error);
 
 } // namespace jarvis::adapter::binance

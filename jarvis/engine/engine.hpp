@@ -724,6 +724,9 @@ private:
       e_->deliver_reconciled(outcome);
       e_->deliver_order_events();
     }
+    void check_failed() noexcept {
+      static_cast<void>(e_->k_.trading.risk.apply(risk::TradingTrigger::SoftLimit));
+    }
 
   private:
     Engine* e_;

@@ -202,7 +202,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
 - 停止（`SIGINT`、`SIGTERM`、`--run-for` 到期或 `HaltNode`）按 `[node] shutdown` 进行（第 19.4 节）：默认撤单、在 `Stopping` 中等待交易所确认，再解除 `countdownCancelAll`。
-- 尚未实现：REST 下单兜底、行情新鲜度（按时间判断行情陈旧）、每 60 秒轻量对账。
+- 尚未实现：REST 下单兜底、行情新鲜度（按时间判断行情陈旧）。
 
 ### 4.2 NodeConfig
 
@@ -636,7 +636,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
-- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll`。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll`。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
 
 ### 7.2 路由
@@ -1376,6 +1376,12 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 - 断线重连走同一流程（Node 从 `Degraded` 回到 `Syncing`）。
 - 24 小时强制断线与 listenKey 过期是计划内事件，同样走该流程，不作为故障告警。
 - 运行中每 60 秒做一次轻量对账：本地在途订单集合对比 `openOrders`，仓位对比 `positionRisk`。发现差异时产生 `ReconciliationDiff`，差异超过阈值则把 TradingState 降为 `Reducing` 并告警。
+- 实现（M5-E）：
+  - venue-io 在当前用户流连接已完成对账后，每 `check_every`（60 秒）由 REST 线程读取 `openOrders` 与 `positionRisk`，T_c 取第一次调用前的交易所时钟，记录为 `check = true` 的 `VenueSnapshot`（没有余额与成交）。读取失败或期间用户流断开就丢弃，下一次照常进行。
+  - 内核只在 `Synced` 时比较，其他阶段忽略（`ignored_checks`）；轻量对账从不改变内核状态，因为它缺少结算差异所需的信息，结算留给下一次完整对账。
+  - 比较内容：交易所的未完成订单本地不认识（`EXTERNAL_ORDER`）、本地已关闭（`UNTRACKED_ORDER`）或成交数量不同（`FILLED_QUANTITY`）；本地已确认的未完成订单交易所没有列出（`LOST_ORDER`）；仓位不同（`POSITION`）。任一方在 T_c 之前 `check_quiet`（5 秒）以内有变化的订单或仓位不比较，因为相关回报可能还在路上。
+  - 同一差异（种类、instrument、订单）在连续 `check_confirmations`（2）次轻量对账中都出现才算确认：输出一次 `ReconciliationDiff`，并以 `SoftLimit` 把 TradingState 的基础状态降为 `Reducing`（需要人工恢复或重启）。断线与完整对账会清空待确认的差异。
+  - 这个阈值用连续次数而不是差异数量：单次出现的差异多半是回报在途，连续两次（间隔 60 秒）仍在就不是时序造成的。
 
 ### 15.4 记录形式
 

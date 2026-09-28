@@ -30,7 +30,10 @@
 // A second thread does what blocks: the listenKey (created at start, kept alive, renewed when the
 // venue says it expired), the reconciliation snapshot over REST (adapter/binance/snapshot.hpp)
 // and the countdownCancelAll calls of the dead man's switch (a failure is counted and reported in
-// last_error; the countdown still armed at the venue keeps running).
+// last_error; the countdown still armed at the venue keeps running). Every `check_every` while
+// the stream's current connection has been reconciled it also reads the light check (open orders
+// and positions, section 15.3), recorded as a VenueSnapshot with `check` set; one that fails or
+// outlives its connection is dropped, and the next tick tries again.
 // When the user stream is live the IO thread records ConnectionStatus(up) and asks the REST thread
 // for a snapshot; the answer is recorded only while the stream is still live on that connection
 // (a drop in between makes it stale), and a failed snapshot is asked for again. A dropped stream
@@ -75,7 +78,8 @@ struct VenueIoConfig {
   std::chrono::milliseconds snapshot_retry{2'000};
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
-  std::chrono::milliseconds rest_tick{1'000}; // the REST thread's listenKey check
+  std::chrono::milliseconds rest_tick{1'000};    // the REST thread's listenKey check
+  std::chrono::milliseconds check_every{60'000}; // the light check while synced; 0: off
   adapter::binance::ListenKeyKeeperConfig keeper;
   std::function<std::int64_t()> now_ms; // local UTC milliseconds for signing; system clock if empty
 };
@@ -94,6 +98,8 @@ struct VenueIoStats {
   std::uint64_t key_failures = 0;      // listenKey calls that failed
   std::uint64_t countdowns = 0;        // countdownCancelAll calls the venue took
   std::uint64_t countdown_failures = 0;
+  std::uint64_t checks = 0; // light checks recorded
+  std::uint64_t check_failures = 0;
 };
 
 class VenueIo {

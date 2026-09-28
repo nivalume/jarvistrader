@@ -781,6 +781,7 @@ constexpr void put_payload(Writer& w, const VenueSnapshot& e) {
   put_list(w, e.orders);
   put_list(w, e.fills);
   put_list(w, e.positions);
+  w.boolean(e.check);
   put(w, e.event_id);
   put(w, e.ts_init);
 }
@@ -798,6 +799,7 @@ inline void get_payload(Reader& r, DecodeScratch& scratch, VenueSnapshot& e) {
   get_list(r, scratch.orders, e.orders);
   get_list(r, scratch.fills, e.fills);
   get_list(r, scratch.positions, e.positions);
+  e.check = r.boolean();
   get(r, e.event_id);
   get(r, e.ts_init);
 }

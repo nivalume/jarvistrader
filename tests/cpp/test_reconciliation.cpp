@@ -269,6 +269,7 @@ private:
 // Storage a VenueSnapshot event borrows.
 struct Snapshot {
   std::uint64_t ts = 0;
+  bool check = false; // a light check
   std::vector<md::AccountBalance> balances;
   std::vector<md::OrderStatusReport> orders;
   std::vector<md::FillReport> fills;
@@ -282,6 +283,7 @@ struct Snapshot {
     s.orders = orders;
     s.fills = fills;
     s.positions = positions;
+    s.check = check;
     s.ts_init = UnixNanos{ts_init};
     return md::Event{s};
   }
@@ -317,11 +319,13 @@ struct Snapshot {
     f.ts_event = UnixNanos{ts_event};
     fills.push_back(f);
   }
-  void position(md::PositionSide side, std::string_view qty, std::optional<std::string_view> avg) {
+  void position(md::PositionSide side, std::string_view qty, std::optional<std::string_view> avg,
+                std::uint64_t ts_last = 0) {
     md::PositionStatusReport p;
     p.instrument_id = iid(kBtc);
     p.position_side = side;
     p.quantity = quantity(qty);
+    p.ts_last = UnixNanos{ts_last};
     if (avg) {
       p.avg_px_open = price(*avg);
     }
@@ -1041,6 +1045,139 @@ TEST_SUITE("property") {
       CHECK(h.engine().open_orders() == 1);
       CHECK(disarms(h) == 1);
     }
+  }
+
+  TEST_CASE("a light check reports differences seen twice in a row and never applies them") {
+    constexpr std::uint64_t kSecond = 1'000'000'000;
+    Harness h{2};
+    start(h, 2);
+    // Synced through the stream and a full snapshot that agrees with the node.
+    Snapshot full;
+    full.ts = 15;
+    full.order(h.ids[0], "v0", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+    full.order(h.ids[1], "v1", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+    full.balance("10000");
+    h.run({stream(true, 10), full.event(16)});
+    REQUIRE(h.reconciler().phase() == ex::SyncPhase::Synced);
+    h.outputs.clear();
+    h.log.clear();
+
+    // The venue lists v0 only (v1 is lost here), an order the node never placed, and a long
+    // position the node does not hold. What changed within 5 s of T_c is left out.
+    const auto check_at = [&h](std::uint64_t t) {
+      Snapshot c;
+      c.check = true;
+      c.ts = t;
+      c.order(h.ids[0], "v0", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+      c.order(make_id<md::ClientOrderId>("web_1"), "v9", md::OrderStatus::Accepted, "2.000",
+              "0.000", 50 * kSecond);
+      c.order(make_id<md::ClientOrderId>("web_2"), "v8", md::OrderStatus::Accepted, "2.000",
+              "0.000", t - kSecond); // too recent
+      c.position(md::PositionSide::Long, "1.000", "100.0", 50 * kSecond);
+      return c;
+    };
+    const Snapshot first = check_at(100 * kSecond);
+    h.run({first.event(100 * kSecond)});
+    CHECK(h.outputs_of<md::ReconciliationDiff>().empty()); // seen once: not yet
+    CHECK(h.trading().risk.trading_state() == md::TradingState::Active);
+
+    const Snapshot second = check_at(160 * kSecond);
+    h.run({second.event(160 * kSecond)});
+    auto diffs = h.outputs_of<md::ReconciliationDiff>();
+    REQUIRE(diffs.size() == 3);
+    CHECK(diffs[0].kind == md::ReconcileDiffKind::ExternalOrder);
+    CHECK(diffs[0].venue_raw == 2'000'000'000);
+    CHECK(diffs[1].kind == md::ReconcileDiffKind::LostOrder);
+    CHECK(diffs[1].client_order_id == h.ids[1]);
+    CHECK(diffs[2].kind == md::ReconcileDiffKind::Position);
+    CHECK(diffs[2].local_raw == 0);
+    CHECK(diffs[2].venue_raw == 1'000'000'000);
+    CHECK(h.trading().risk.trading_state() == md::TradingState::Reducing);
+    // Nothing applied: v1 is still open, the position still flat, no outcome, no events.
+    CHECK(h.order(1).state.status() == md::OrderStatus::Accepted);
+    CHECK(h.venue_position() == 0);
+    CHECK(h.outputs_of<md::ReconcileOutcome>().empty());
+    CHECK(h.log.empty());
+
+    // Reported once: a third sighting adds nothing.
+    h.outputs.clear();
+    const Snapshot third = check_at(220 * kSecond);
+    h.run({third.event(220 * kSecond)});
+    CHECK(h.outputs_of<md::ReconciliationDiff>().empty());
+    CHECK(h.reconciler().stats().checks == 3);
+    CHECK(h.reconciler().stats().check_diffs == 3);
+  }
+
+  TEST_CASE("a light check finds orders closed on one side only and missed fills") {
+    constexpr std::uint64_t kSecond = 1'000'000'000;
+    Harness h{4};
+    start(h, 4);
+    Snapshot full;
+    full.ts = 15;
+    for (std::size_t i = 0; i < 4; ++i) {
+      full.order(h.ids[i], "v" + std::to_string(i), md::OrderStatus::Accepted, "1.000", "0.000", 3);
+    }
+    full.balance("10000");
+    h.run({stream(true, 10), full.event(16)});
+    REQUIRE(h.reconciler().phase() == ex::SyncPhase::Synced);
+    // v0 closed here long ago, but the venue still works it; v1 was filled 0.400 at the venue
+    // without the node hearing of it. Left out, since the node heard of them within 5 s of T_c
+    // of each check: v2 (and so the position), filled here while the venue's list still shows
+    // it unfilled, and v3, modified here and missing from the list.
+    h.run({md::Event{venue_event<md::OrderCanceled>(20 * kSecond, 20 * kSecond, h.ids[0])}});
+    h.outputs.clear();
+    std::uint64_t trade = 0;
+    for (const std::uint64_t t : {100 * kSecond, 160 * kSecond}) {
+      h.run({filled(t - 2 * kSecond, h.ids[2], "t" + std::to_string(++trade), "0.100", "100.0"),
+             updated(t - 3 * kSecond, h.ids[3], "1.000", "99.0")});
+      Snapshot c;
+      c.check = true;
+      c.ts = t;
+      c.order(h.ids[0], "v0", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+      c.order(h.ids[1], "v1", md::OrderStatus::PartiallyFilled, "1.000", "0.400", 30 * kSecond);
+      c.order(h.ids[2], "v2", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+      h.run({c.event(t)});
+    }
+    const auto diffs = h.outputs_of<md::ReconciliationDiff>();
+    REQUIRE(diffs.size() == 2);
+    CHECK(diffs[0].kind == md::ReconcileDiffKind::UntrackedOrder);
+    CHECK(diffs[0].client_order_id == h.ids[0]);
+    CHECK(diffs[1].kind == md::ReconcileDiffKind::FilledQuantity);
+    CHECK(diffs[1].client_order_id == h.ids[1]);
+    CHECK(diffs[1].local_raw == 0);
+    CHECK(diffs[1].venue_raw == 400'000'000);
+  }
+
+  TEST_CASE("a light check counts only differences seen in a row, and only while synced") {
+    constexpr std::uint64_t kSecond = 1'000'000'000;
+    Harness h{1};
+    start(h, 1);
+    Snapshot lost; // the venue does not list the node's order
+    lost.check = true;
+    lost.ts = 100 * kSecond;
+    h.run({lost.event(100 * kSecond)}); // local session, not synced: ignored
+    CHECK(h.reconciler().stats().ignored_checks == 1);
+
+    Snapshot full;
+    full.ts = 15;
+    full.order(h.ids[0], "v0", md::OrderStatus::Accepted, "1.000", "0.000", 3);
+    full.balance("10000");
+    h.run({stream(true, 10), full.event(16)});
+    Snapshot agrees = full;
+    agrees.check = true;
+    for (const std::uint64_t t : {100U, 160U, 220U}) {
+      // lost, agrees, lost: never twice in a row
+      Snapshot& c = t == 160U ? agrees : lost;
+      c.ts = t * kSecond;
+      h.run({c.event(t * kSecond)});
+    }
+    CHECK(h.outputs_of<md::ReconciliationDiff>().empty());
+    CHECK(h.trading().risk.trading_state() == md::TradingState::Active);
+    // A drop and a new reconciliation forget what was suspected.
+    lost.ts = 280 * kSecond;
+    h.run({stream(false, 250 * kSecond), stream(true, 260 * kSecond), full.event(270 * kSecond),
+           lost.event(280 * kSecond)});
+    CHECK(h.outputs_of<md::ReconciliationDiff>().empty());
   }
 
   TEST_CASE("without a countdown the kernel sends none and arms no timer") {

@@ -625,6 +625,7 @@ struct CorpusMakers {
     snapshot.orders = g.order_reports_;
     snapshot.fills = std::span<const m::FillReport>{g.fill_reports_.data(), 1};
     snapshot.positions = g.position_reports_;
+    snapshot.check = g.draw(92) % 4 == 0;
     snapshot.event_id = m::Uuid4::derive(g.rng_, g.seq_, 91);
     snapshot.ts_init = g.ts_;
     event = snapshot;

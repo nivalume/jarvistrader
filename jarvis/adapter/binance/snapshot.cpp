@@ -39,6 +39,29 @@ public:
     return s;
   }
 
+  Status run_check() {
+    *out_ = AccountSnapshot{};
+    out_->account_id = request_->account_id;
+    out_->check = true;
+    out_->ts_snapshot = venue_now();
+    std::string body;
+    out_->requests += 2;
+    Status s = rest_->open_orders(body, *error_);
+    if (core::ok(s)) {
+      s = decode_order_reports(body, context(), out_->orders, out_->skipped, *error_);
+    }
+    if (core::ok(s)) {
+      s = rest_->positions(body, *error_);
+    }
+    if (core::ok(s)) {
+      s = decode_positions(body, context(), out_->positions, out_->skipped, *error_);
+    }
+    if (core::ok(s)) {
+      assign_ids();
+    }
+    return s;
+  }
+
 private:
   core::UnixNanos venue_now() const {
     const std::int64_t ms = rest_->now_ms() + rest_->time_offset_ms();
@@ -198,6 +221,7 @@ model::VenueSnapshot AccountSnapshot::event(core::UnixNanos ts_init) const {
   v.orders = orders;
   v.fills = fills;
   v.positions = positions;
+  v.check = check;
   core::CounterRng rng{ts_snapshot.value()};
   v.event_id = model::Uuid4::derive(rng, ts_init.value(), 4);
   v.ts_init = ts_init;
@@ -209,6 +233,13 @@ Status assemble_snapshot(RestClient& rest, const SymbolTable& symbols,
                          std::string& error) {
   Assembler a{rest, symbols, request, out, error};
   return a.run();
+}
+
+Status assemble_check(RestClient& rest, const SymbolTable& symbols,
+                      const AccountSnapshotRequest& request, AccountSnapshot& out,
+                      std::string& error) {
+  Assembler a{rest, symbols, request, out, error};
+  return a.run_check();
 }
 
 } // namespace jarvis::adapter::binance

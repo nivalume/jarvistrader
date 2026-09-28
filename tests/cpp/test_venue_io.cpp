@@ -123,7 +123,8 @@ public:
       if (const auto* c = std::get_if<m::ConnectionStatus>(&e)) {
         kind += std::string{" "} + std::string{m::to_string(c->kind)} + (c->up ? " up" : " down");
       } else if (const auto* v = std::get_if<m::VenueSnapshot>(&e)) {
-        kind += " orders=" + std::to_string(v->orders.size()) +
+        kind += std::string{v->check ? " check" : ""} +
+                " orders=" + std::to_string(v->orders.size()) +
                 " balances=" + std::to_string(v->balances.size());
       }
       records.push_back(Record{kind, e});
@@ -295,6 +296,46 @@ TEST_SUITE("unit") {
     CHECK(requests[2].find("startTime=1700000000000") != std::string::npos);
     CHECK(requests[6].starts_with("GET /fapi/v1/openOrders"));
     CHECK(requests[7].find("fromId=8") != std::string::npos);
+    CHECK(wss.error().empty());
+  }
+
+  TEST_CASE("venue-io: once reconciled, a light check at every interval") {
+    std::atomic<ScriptedWssServer*> server{nullptr};
+    ScriptedWssServer wss{4, [&server](std::size_t conn, const std::string& message) {
+                            return venue(*server.load(), conn, message);
+                          }};
+    server.store(&wss);
+    ScriptedHttpsServer https{std::vector<std::string>{
+                                  http(R"({"listenKey":"LK1"})"), http("[]"), http("[]"),
+                                  http(kBalances), http("[]"), http("[]"), // the snapshot
+                                  http(kOpenC1), http("[]"),               // check 1
+                                  http("[]"), http("[]"),                  // check 2
+                              },
+                              wss.ca_file(), wss.key_file()};
+    const live::ArrivalClock clock;
+    live::VenueIoConfig config = config_for(wss, https);
+    config.check_every = std::chrono::milliseconds{150};
+    live::VenueIo io{clock, config};
+    std::string error;
+    REQUIRE(io.start(error) == Status::Ok);
+    Reader reader{io.ring()};
+    REQUIRE(reader.wait_for("VenueSnapshot orders=0"));
+    const std::size_t synced = reader.records.size();
+    REQUIRE(reader.wait_for("VenueSnapshot check orders=1", synced));
+    REQUIRE(reader.wait_for("VenueSnapshot check orders=0", synced));
+    io.stop();
+    const auto& check = std::get<m::VenueSnapshot>(reader.records[synced].event);
+    CHECK(check.check);
+    CHECK(check.balances.empty());
+    CHECK(check.fills.empty());
+    CHECK(check.ts_snapshot.value() == 1'700'000'002'000'000'000ULL);
+    CHECK(io.stats().snapshots == 1);
+    CHECK(io.stats().checks >= 2);
+    const std::vector<std::string> requests = https.requests();
+    REQUIRE(requests.size() >= 10);
+    CHECK(requests[6].starts_with("GET /fapi/v1/openOrders"));
+    CHECK(requests[7].starts_with("GET /fapi/v3/positionRisk"));
+    CHECK(requests[8].starts_with("GET /fapi/v1/openOrders"));
     CHECK(wss.error().empty());
   }
 }

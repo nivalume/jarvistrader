@@ -221,6 +221,31 @@ TEST_SUITE("unit") {
     CHECK(event.ts_init == UnixNanos{9});
   }
 
+  TEST_CASE("a light check reads the open orders and the positions only") {
+    ScriptedHttpsServer host{{
+        http("[" + order_json("jarvis-000001-00000001", 11, "NEW", "0.000") + "]"),
+        http(positions_json("0.010")),
+    }};
+    binance::RestClient rest{config_for(host)};
+    rest.set_time_offset(250);
+    const jarvis::adapter::SymbolTable table = symbols();
+    binance::AccountSnapshot snap;
+    std::string error;
+    REQUIRE(binance::assemble_check(rest, table, request(), snap, error) == Status::Ok);
+    CHECK(snap.check);
+    CHECK(snap.ts_snapshot == UnixNanos{1'700'000'001'250'000'000});
+    CHECK(snap.orders.size() == 1);
+    CHECK(snap.positions.size() == 1);
+    CHECK(snap.fills.empty());
+    CHECK(snap.balances.empty());
+    CHECK(snap.requests == 2);
+    const std::vector<std::string> requests = host.requests();
+    REQUIRE(requests.size() == 2);
+    CHECK(target_of(requests[0]) == "/fapi/v1/openOrders");
+    CHECK(target_of(requests[1]) == "/fapi/v3/positionRisk");
+    CHECK(snap.event(UnixNanos{9}).check);
+  }
+
   TEST_CASE("trades arriving during the read make balances and positions be read again") {
     ScriptedHttpsServer host{{
         http("[]"),                                                        // open orders

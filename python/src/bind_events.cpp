@@ -192,8 +192,9 @@ void bind_venue_snapshot(nb::module_& mod) {
           "__init__",
           [](PyVenueSnapshot* self, nb::handle account_id, nb::handle ts_snapshot,
              const nb::list& balances, const nb::list& orders, const nb::list& fills,
-             const nb::list& positions, nb::handle event_id, nb::handle ts_init) {
+             const nb::list& positions, nb::handle event_id, nb::handle ts_init, bool check) {
             PyVenueSnapshot out;
+            out.base.check = check;
             from_py(account_id, out.base.account_id, "account_id");
             from_py(ts_snapshot, out.base.ts_snapshot, "ts_snapshot");
             append_items(balances, out.balances, "balances");
@@ -205,7 +206,8 @@ void bind_venue_snapshot(nb::module_& mod) {
             new (self) PyVenueSnapshot{std::move(out)};
           },
           nb::arg("account_id"), nb::arg("ts_snapshot"), nb::arg("balances"), nb::arg("orders"),
-          nb::arg("fills"), nb::arg("positions"), nb::arg("event_id"), nb::arg("ts_init"))
+          nb::arg("fills"), nb::arg("positions"), nb::arg("event_id"), nb::arg("ts_init"),
+          nb::arg("check") = false)
       .def_prop_ro("account_id", [](const PyVenueSnapshot& s) { return s.base.account_id; })
       .def_prop_ro("ts_snapshot",
                    [](const PyVenueSnapshot& s) { return s.base.ts_snapshot.value(); })
@@ -213,6 +215,7 @@ void bind_venue_snapshot(nb::module_& mod) {
       .def_prop_ro("orders", [](const PyVenueSnapshot& s) { return s.orders; })
       .def_prop_ro("fills", [](const PyVenueSnapshot& s) { return s.fills; })
       .def_prop_ro("positions", [](const PyVenueSnapshot& s) { return s.positions; })
+      .def_prop_ro("check", [](const PyVenueSnapshot& s) { return s.base.check; })
       .def_prop_ro("event_id", [](const PyVenueSnapshot& s) { return s.base.event_id; })
       .def_prop_ro("ts_init", [](const PyVenueSnapshot& s) { return s.base.ts_init.value(); })
       .def("__eq__",
@@ -267,7 +270,8 @@ void bind_kernel(nb::module_& mod) {
   bind_kernel_enum(mod, "ReconcileDiffKind",
                    std::array{m::ReconcileDiffKind::Position, m::ReconcileDiffKind::Balance,
                               m::ReconcileDiffKind::FilledQuantity, m::ReconcileDiffKind::LostOrder,
-                              m::ReconcileDiffKind::ExternalOrder});
+                              m::ReconcileDiffKind::ExternalOrder,
+                              m::ReconcileDiffKind::UntrackedOrder});
 }
 
 template <typename T> void bind_instrument(nb::module_& mod, const char* name, const char* doc) {

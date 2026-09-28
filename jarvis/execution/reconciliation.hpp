@@ -122,6 +122,12 @@ struct ReconcileConfig {
   core::DurationNanos lost_grace{5'000'000'000};
   ExternalPolicy own = ExternalPolicy::Cancel;     // this node's tag, not managed here
   ExternalPolicy foreign = ExternalPolicy::Report; // placed elsewhere
+  // The light check (VenueSnapshot::check, section 15.3): what changed at the venue or here
+  // within `check_quiet` of its time is not compared; a difference is reported once it has been
+  // seen in `check_confirmations` checks in a row.
+  core::DurationNanos check_quiet{5'000'000'000};
+  std::uint32_t check_confirmations = 2;
+  std::uint32_t suspects = 256; // differences tracked between checks
 };
 
 struct ReconcileStats {
@@ -131,6 +137,10 @@ struct ReconcileStats {
   std::uint64_t ignored_snapshots = 0; // snapshots that arrived while synced or disconnected
   std::uint64_t unmatched_fills = 0;   // fill reports of orders the node does not know
   std::uint64_t dropped_diffs = 0;     // diffs and outcomes lost to a full output buffer
+  std::uint64_t checks = 0;            // light checks compared
+  std::uint64_t ignored_checks = 0;    // light checks that arrived while not synced
+  std::uint64_t check_diffs = 0;       // differences light checks confirmed
+  std::uint64_t dropped_suspects = 0;  // differences beyond `suspects`, not tracked
 };
 
 // What the reconciler reads and changes: the kernel's state and its venue event path.
@@ -152,6 +162,7 @@ concept ReconcileHost =
       { h.emit(o) } -> std::same_as<bool>;
       { h.note_venue_time(index, ts) } -> std::same_as<void>; // the order is as of venue time ts
       { h.reconciled(outcome) } -> std::same_as<void>;        // tells the strategies
+      { h.check_failed() } -> std::same_as<void>; // a light check confirmed a difference
     };
 
 class Reconciler {
@@ -159,7 +170,7 @@ public:
   // `orders` and `currencies`: the OMS and portfolio capacities.
   Reconciler(const ReconcileConfig& c, std::uint32_t orders, std::uint32_t currencies)
       : config_{c}, held_{c.held}, replay_{c.held}, candidates_{orders}, balances_{currencies},
-        currencies_{currencies} {}
+        currencies_{currencies}, suspects_{c.suspects}, next_{c.suspects} {}
 
   [[nodiscard]] SyncPhase phase() const noexcept { return phase_; }
   // True while venue events are held instead of applied.
@@ -176,6 +187,7 @@ public:
       phase_ = SyncPhase::Disconnected;
       held_.clear();
       account_held_ = false;
+      suspects_.clear(); // the next reconciliation settles them
       return true;
     }
     if (phase_ == SyncPhase::Local || phase_ == SyncPhase::Disconnected) {
@@ -212,6 +224,9 @@ public:
 
   template <ReconcileHost H>
   [[nodiscard]] core::Status reconcile(H& host, const model::VenueSnapshot& snap) {
+    if (snap.check) {
+      return check(host, snap);
+    }
     if (phase_ == SyncPhase::Synced || phase_ == SyncPhase::Disconnected) {
       ++stats_.ignored_snapshots; // the stream dropped since it was asked for: another follows
       return core::Status::Ok;
@@ -256,6 +271,7 @@ public:
       ++stats_.dropped_diffs;
     }
     phase_ = SyncPhase::Synced;
+    suspects_.clear();
     held_.clear();
     account_held_ = false;
     ++stats_.reconciliations;
@@ -263,7 +279,163 @@ public:
     return core::Status::Ok;
   }
 
+  // The light check (section 15.3), while synced: the venue's open orders and positions against
+  // the node's, leaving out whatever changed within `check_quiet` of T_c on either side (its
+  // news may still be on the way). A difference seen in `check_confirmations` checks in a row
+  // is reported (ReconciliationDiff) and drops trading to Reducing (check_failed): the node's
+  // state is not changed, since the check lacks what a reconciliation needs to settle it.
+  template <ReconcileHost H>
+  [[nodiscard]] core::Status check(H& host, const model::VenueSnapshot& snap) {
+    if (phase_ != SyncPhase::Synced) {
+      ++stats_.ignored_checks;
+      return core::Status::Ok;
+    }
+    ++stats_.checks;
+    const std::uint64_t quiet = config_.check_quiet.value();
+    const core::UnixNanos settled{
+        snap.ts_snapshot.value() > quiet ? snap.ts_snapshot.value() - quiet : 0};
+    next_.clear();
+    check_venue_orders(host, snap, settled);
+    check_local_orders(host, snap, settled);
+    check_positions(host, snap, settled);
+    bool confirmed = false;
+    for (Suspect& s : next_.span()) {
+      const Suspect* before = find_suspect(suspects_, s);
+      s.seen = before != nullptr ? before->seen + 1 : 1;
+      if (s.seen == config_.check_confirmations) {
+        confirmed = true;
+        ++stats_.check_diffs;
+        s.diff.ts_init = host.now();
+        if (host.outputs_left() <= 1 || !host.emit(model::Output{s.diff})) {
+          ++stats_.dropped_diffs;
+        }
+      }
+    }
+    suspects_.clear();
+    for (const Suspect& s : next_.span()) {
+      static_cast<void>(suspects_.push_back(s));
+    }
+    if (confirmed) {
+      host.check_failed();
+    }
+    return core::Status::Ok;
+  }
+
 private:
+  // A difference one light check saw; identified by kind, instrument and order.
+  struct Suspect {
+    model::ReconciliationDiff diff;
+    std::optional<model::VenueOrderId> venue_order_id;
+    std::uint32_t seen = 0; // checks in a row
+  };
+
+  [[nodiscard]] static const Suspect* find_suspect(const core::FixedVector<Suspect>& list,
+                                                   const Suspect& s) noexcept {
+    for (const Suspect& t : list.span()) {
+      if (t.diff.kind == s.diff.kind && t.diff.instrument_id == s.diff.instrument_id &&
+          t.diff.client_order_id == s.diff.client_order_id &&
+          t.venue_order_id == s.venue_order_id) {
+        return &t;
+      }
+    }
+    return nullptr;
+  }
+
+  template <typename H>
+  void suspect(const H& host, model::ReconcileDiffKind kind, const model::InstrumentId& instrument,
+               const model::ClientOrderId* id, std::optional<model::VenueOrderId> venue_id,
+               std::int64_t local, std::int64_t venue) {
+    const Suspect s{order_diff(host, kind, instrument, id, local, venue), venue_id, 0};
+    if (!core::ok(next_.push_back(s))) {
+      ++stats_.dropped_suspects;
+    }
+  }
+
+  [[nodiscard]] static std::int64_t leaves_of(const model::OrderStatusReport& r) noexcept {
+    return r.quantity.raw() > r.filled_qty.raw()
+               ? static_cast<std::int64_t>(r.quantity.raw() - r.filled_qty.raw())
+               : 0;
+  }
+
+  // Venue open orders: unknown here, closed here, or with another filled quantity.
+  template <typename H>
+  void check_venue_orders(const H& host, const model::VenueSnapshot& snap,
+                          core::UnixNanos settled) {
+    for (const model::OrderStatusReport& r : snap.orders) {
+      if (!is_open(r.order_status) || !(r.ts_last < settled)) {
+        continue;
+      }
+      const model::ClientOrderId* id = r.client_order_id ? &*r.client_order_id : nullptr;
+      const std::uint32_t index = find_order(host, r.client_order_id, r.venue_order_id);
+      if (index == kNoIndex) {
+        suspect(host, model::ReconcileDiffKind::ExternalOrder, r.instrument_id, id,
+                r.venue_order_id, 0, leaves_of(r));
+        continue;
+      }
+      const OrderRecord& o = host.oms().at(index);
+      if (!(o.ts_venue < settled)) {
+        continue;
+      }
+      if (!is_open(o.state.status())) {
+        suspect(host, model::ReconcileDiffKind::UntrackedOrder, r.instrument_id, &o.client_order_id,
+                std::nullopt, 0, leaves_of(r));
+      } else if (o.state.filled().raw() != r.filled_qty.raw()) {
+        suspect(host, model::ReconcileDiffKind::FilledQuantity, r.instrument_id, &o.client_order_id,
+                std::nullopt, static_cast<std::int64_t>(o.state.filled().raw()),
+                static_cast<std::int64_t>(r.filled_qty.raw()));
+      }
+    }
+  }
+
+  // Acknowledged local open orders the venue does not list.
+  template <typename H>
+  void check_local_orders(const H& host, const model::VenueSnapshot& snap,
+                          core::UnixNanos settled) {
+    const Oms& oms = host.oms();
+    for (std::uint32_t i = 0; i < oms.used_bound(); ++i) {
+      const OrderRecord& r = oms.at(i);
+      if (!r.used || !is_open(r.state.status()) || !r.venue_order_id || !(r.ts_venue < settled) ||
+          report_of(snap, r) != nullptr) {
+        continue;
+      }
+      suspect(host, model::ReconcileDiffKind::LostOrder, r.instrument_id, &r.client_order_id,
+              std::nullopt, static_cast<std::int64_t>(r.state.leaves().raw()), 0);
+    }
+  }
+
+  // Positions, where neither side changed lately.
+  template <typename H>
+  void check_positions(H& host, const model::VenueSnapshot& snap, core::UnixNanos settled) {
+    for (std::uint32_t slot = 0; slot < host.portfolio().instruments(); ++slot) {
+      const model::Instrument* def = host.definition(slot);
+      const portfolio::NettingPosition& local = host.portfolio().venue(slot);
+      if (def == nullptr || !(local.ts_last() < settled)) {
+        continue;
+      }
+      const model::InstrumentId& id = model::common(*def).id;
+      std::int64_t venue = 0;
+      bool recent = false;
+      for (const model::PositionStatusReport& p : snap.positions) {
+        if (p.instrument_id == id) {
+          venue = signed_quantity(p);
+          recent = !(p.ts_last < settled);
+        }
+      }
+      if (!recent && venue != local.signed_raw()) {
+        suspect(host, model::ReconcileDiffKind::Position, id, nullptr, std::nullopt,
+                local.signed_raw(), venue);
+      }
+    }
+    for (const model::PositionStatusReport& p : snap.positions) { // instruments not traded here
+      const std::uint32_t slot = host.slot_of(p.instrument_id);
+      if ((slot == kNoIndex || host.definition(slot) == nullptr) && signed_quantity(p) != 0 &&
+          p.ts_last < settled) {
+        suspect(host, model::ReconcileDiffKind::Position, p.instrument_id, nullptr, std::nullopt, 0,
+                signed_quantity(p));
+      }
+    }
+  }
+
   struct Tally {
     std::uint32_t orders = 0;
     std::uint32_t fills = 0;
@@ -769,6 +941,8 @@ private:
   core::FixedVector<model::Currency> currencies_;     // scratch
   model::AccountState account_;
   bool account_held_ = false;
+  core::FixedVector<Suspect> suspects_; // seen by the last check
+  core::FixedVector<Suspect> next_;     // scratch for the current one
   ReconcileStats stats_;
 };
 

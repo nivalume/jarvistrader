@@ -33,6 +33,7 @@ enum class ReconcileDiffKind : std::uint8_t {
   FilledQuantity = 2, // an order's filled quantity the fill reports do not account for
   LostOrder = 3,      // a local open order the venue does not know (closed as lost)
   ExternalOrder = 4,  // a venue order the node did not place
+  UntrackedOrder = 5, // an order open at the venue that the node counts as closed (light check)
 };
 
 [[nodiscard]] constexpr std::string_view to_string(ReconcileDiffKind v) noexcept {
@@ -47,12 +48,14 @@ enum class ReconcileDiffKind : std::uint8_t {
     return "LOST_ORDER";
   case ReconcileDiffKind::ExternalOrder:
     return "EXTERNAL_ORDER";
+  case ReconcileDiffKind::UntrackedOrder:
+    return "UNTRACKED_ORDER";
   }
   return "?";
 }
 
 [[nodiscard]] constexpr core::Status from_value(std::uint8_t v, ReconcileDiffKind& out) noexcept {
-  if (v > static_cast<std::uint8_t>(ReconcileDiffKind::ExternalOrder)) {
+  if (v > static_cast<std::uint8_t>(ReconcileDiffKind::UntrackedOrder)) {
     return core::Status::OutOfRange;
   }
   out = static_cast<ReconcileDiffKind>(v);
@@ -109,6 +112,9 @@ struct PositionStatusReport {
 // One snapshot of the venue at its time `ts_snapshot` (T_s): the balances, every open order and
 // the final state of the node's orders that closed while it was not listening, the fills it
 // may have missed, and the positions. The spans are borrowed like AccountState's.
+//
+// With `check` it is the light check a synced node takes every minute (section 15.3): the open
+// orders and the positions only, compared with the node's state and never applied.
 struct VenueSnapshot {
   AccountId account_id;
   core::UnixNanos ts_snapshot;
@@ -116,6 +122,7 @@ struct VenueSnapshot {
   std::span<const OrderStatusReport> orders;
   std::span<const FillReport> fills;
   std::span<const PositionStatusReport> positions;
+  bool check = false;
   Uuid4 event_id;
   core::UnixNanos ts_init;
 };

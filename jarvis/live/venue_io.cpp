@@ -41,6 +41,8 @@ struct Counters {
   std::atomic<std::uint64_t> key_failures{0};
   std::atomic<std::uint64_t> countdowns{0};
   std::atomic<std::uint64_t> countdown_failures{0};
+  std::atomic<std::uint64_t> checks{0};
+  std::atomic<std::uint64_t> check_failures{0};
 
   static void add(std::atomic<std::uint64_t>& c) { c.fetch_add(1, std::memory_order_relaxed); }
 };
@@ -169,10 +171,13 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   std::unique_ptr<binance::WsApiSession> api;
   std::unique_ptr<binance::UserStreamSession> stream;
   std::unique_ptr<network::Timer> retry;
+  std::unique_ptr<network::Timer> check_timer;
   RawFrameWriter raw;
   bool recording = false;
   bool live = false;            // the user stream (IO thread)
   std::uint64_t generation = 0; // changes with every live and down
+  std::uint64_t synced = 0;     // the generation whose snapshot was recorded
+  bool checking = false;        // a light check is being read
   std::uint64_t seed = 0;
   std::atomic<bool> stopping{false};
   std::thread thread;
@@ -314,6 +319,55 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     }
     Counters::add(counters.snapshots);
     tracker.absorb(v);
+    synced = gen;
+  }
+
+  // ---- the light check (section 15.3) -------------------------------------------------------
+
+  void schedule_check() {
+    if (config.check_every.count() > 0) {
+      check_timer->after(config.check_every, [this] {
+        if (live && synced == generation && !checking) {
+          ask_check(generation);
+        }
+        schedule_check();
+      });
+    }
+  }
+
+  void ask_check(std::uint64_t gen) {
+    checking = true;
+    binance::AccountSnapshotRequest req;
+    req.account_id = config.identity.account_id;
+    req.seed = config.identity.seed ^ (++seed * 0x9E3779B97F4A7C15ULL);
+    rest.post([this, gen, req = std::move(req)](binance::RestClient& client) {
+      auto snap = std::make_shared<binance::AccountSnapshot>();
+      std::string e;
+      const Status s = binance::assemble_check(client, config.symbols, req, *snap, e);
+      for (const model::RateLimitFeedback& f : client.take_limits()) {
+        io.post([this, f] { static_cast<void>(event(model::Event{f})); });
+      }
+      io.post([this, gen, s, snap, e = std::move(e)] { on_check(gen, s, *snap, e); });
+    });
+  }
+
+  void on_check(std::uint64_t gen, Status s, const binance::AccountSnapshot& snap,
+                const std::string& e) {
+    checking = false;
+    if (gen != generation || !live) {
+      return; // the stream dropped meanwhile: a reconciliation follows
+    }
+    if (!core::ok(s)) {
+      Counters::add(counters.check_failures);
+      set_error("light check: " + e);
+      return; // the next one comes at the next tick
+    }
+    if (!core::ok(event(model::Event{snap.event(core::UnixNanos{clock->now()})}))) {
+      Counters::add(counters.check_failures);
+      set_error("light check: too large for a record");
+      return;
+    }
+    Counters::add(counters.checks);
   }
 
   // ---- the listenKey (REST thread) ----------------------------------------------------------
@@ -471,6 +525,8 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     uh.on_frame = [this](std::span<const std::byte> f, std::int64_t recv) { on_frame(f, recv); };
     stream = std::make_unique<binance::UserStreamSession>(io, std::move(uc), std::move(uh));
     retry = std::make_unique<network::Timer>(io);
+    check_timer = std::make_unique<network::Timer>(io);
+    schedule_check();
     api->start();
   }
 
@@ -503,6 +559,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
 
   void close_all() const {
     retry->cancel();
+    check_timer->cancel();
     stream->stop();
     api->stop();
   }
@@ -575,7 +632,9 @@ VenueIoStats VenueIo::stats() const noexcept {
                       v(c.stale_snapshots),
                       v(c.key_failures),
                       v(c.countdowns),
-                      v(c.countdown_failures)};
+                      v(c.countdown_failures),
+                      v(c.checks),
+                      v(c.check_failures)};
 }
 
 } // namespace jarvis::live

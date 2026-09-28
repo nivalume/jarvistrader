@@ -187,6 +187,9 @@ void append_snapshot(std::string& out, const m::VenueSnapshot& e) {
   value(out, e.account_id);
   out += " ts_snapshot=";
   value(out, e.ts_snapshot);
+  if (e.check) {
+    out += " check=true";
+  }
   for (const m::AccountBalance& b : e.balances) {
     out += " [balance total=";
     value(out, b.total);
