@@ -1,6 +1,7 @@
 // The venue-io thread (jarvis/live/venue_io.hpp) against a scripted venue: the WebSocket API and
 // the user data stream over WSS, the listenKey and the reconciliation snapshot over HTTPS.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -37,9 +38,10 @@ template <typename Id> Id make(std::string_view text) {
   return id;
 }
 
-std::string http(std::string_view body) {
-  return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
-         std::to_string(body.size()) + "\r\n\r\n" + std::string{body};
+std::string http(std::string_view body, std::string_view status = "200 OK") {
+  return "HTTP/1.1 " + std::string{status} +
+         "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+         "\r\n\r\n" + std::string{body};
 }
 
 // A string field of a flat JSON request: "key":"value".
@@ -336,6 +338,60 @@ TEST_SUITE("unit") {
     CHECK(requests[6].starts_with("GET /fapi/v1/openOrders"));
     CHECK(requests[7].starts_with("GET /fapi/v3/positionRisk"));
     CHECK(requests[8].starts_with("GET /fapi/v1/openOrders"));
+    CHECK(wss.error().empty());
+  }
+
+  TEST_CASE("venue-io: with the WebSocket API down, orders go over REST") {
+    std::atomic<ScriptedWssServer*> server{nullptr};
+    ScriptedWssServer wss{4, [&server](std::size_t conn, const std::string& message) {
+                            return venue(*server.load(), conn, message);
+                          }};
+    server.store(&wss);
+    ScriptedHttpsServer https{
+        std::vector<std::string>{
+            http(R"({"listenKey":"LK1"})"),
+            http("[]"),
+            http("[]"),
+            http(kBalances),
+            http("[]"),
+            http("[]"), // the snapshot
+            http(
+                R"({"orderId":42,"symbol":"BTCUSDT","status":"NEW","clientOrderId":"C-1","updateTime":1700000003000})"),
+            http(R"({"code":-2011,"msg":"Unknown order sent."})", "400 Bad Request"),
+        },
+        wss.ca_file(), wss.key_file()};
+    const live::ArrivalClock clock;
+    live::VenueIoConfig config = config_for(wss, https);
+    config.endpoints.ws_api = "wss://127.0.0.1:1/ws-fapi/v1"; // nothing listens there
+    live::VenueIo io{clock, config};
+    std::string error;
+    REQUIRE(io.start(error) == Status::Ok);
+    Reader reader{io.ring()};
+    REQUIRE(reader.wait_for("VenueSnapshot"));
+
+    REQUIRE(io.commands().try_push(live::VenueCommand{limit_buy("C-1")}));
+    REQUIRE(reader.wait_for("OrderAccepted"));
+    m::CancelOrder cancel;
+    cancel.client_order_id = make<m::ClientOrderId>("C-1");
+    cancel.instrument_id = limit_buy("C-1").instrument_id;
+    REQUIRE(io.commands().try_push(live::VenueCommand{cancel}));
+    REQUIRE(reader.wait_for("OrderCancelRejected"));
+    io.stop();
+
+    const auto rejected =
+        std::find_if(reader.records.begin(), reader.records.end(),
+                     [](const auto& r) { return r.kind == "OrderCancelRejected"; });
+    REQUIRE(rejected != reader.records.end());
+    CHECK(std::get<m::OrderCancelRejected>(rejected->event).reason.view().find("-2011") !=
+          std::string_view::npos);
+    CHECK(io.stats().rest_orders == 2);
+    CHECK(io.stats().refused_locally == 0);
+    const std::vector<std::string> requests = https.requests();
+    REQUIRE(requests.size() == 8);
+    CHECK(requests[6].starts_with("POST /fapi/v1/order"));
+    CHECK(requests[6].find("newClientOrderId=C-1") != std::string::npos);
+    CHECK(requests[7].starts_with("DELETE /fapi/v1/order"));
+    CHECK(requests[7].find("origClientOrderId=C-1") != std::string::npos);
     CHECK(wss.error().empty());
   }
 }

@@ -43,6 +43,7 @@ struct Counters {
   std::atomic<std::uint64_t> countdown_failures{0};
   std::atomic<std::uint64_t> checks{0};
   std::atomic<std::uint64_t> check_failures{0};
+  std::atomic<std::uint64_t> rest_orders{0};
 
   static void add(std::atomic<std::uint64_t>& c) { c.fetch_add(1, std::memory_order_relaxed); }
 };
@@ -422,28 +423,92 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     std::visit([this](const auto& cmd) { send(cmd); }, c);
   }
 
+  // Each command goes on the WebSocket API when it is ready, else over REST (rest_fallback),
+  // else it is refused here.
   void send(const model::SubmitOrder& c) {
     tracker.on_submit(c);
     const std::optional<std::string> symbol = symbol_of(c.instrument_id);
-    std::string e = "order entry is down";
-    if (!symbol || !api->ready() || !core::ok(api->place(c, *symbol, e))) {
-      refuse(binance::RequestKind::Place, c, symbol ? e : "unknown instrument");
+    if (!symbol) {
+      refuse(binance::RequestKind::Place, c, "unknown instrument");
+      return;
     }
+    std::string e = "order entry is down";
+    if (api->ready() && core::ok(api->place(c, *symbol, e))) {
+      return;
+    }
+    binance::Params params;
+    if (!config.rest_fallback || !core::ok(binance::place_params(c, *symbol, params, e))) {
+      refuse(binance::RequestKind::Place, c, e);
+      return;
+    }
+    over_rest(binance::RequestKind::Place, std::move(params));
   }
   void send(const model::ModifyOrder& c) {
     const std::optional<std::string> symbol = symbol_of(c.instrument_id);
     const std::optional<model::OrderSide> side = tracker.side_of(c.client_order_id.view());
-    std::string e = "order entry is down";
-    if (!symbol || !side || !api->ready() || !core::ok(api->modify(c, *symbol, *side, e))) {
-      refuse(binance::RequestKind::Modify, c, side ? e : "unknown order");
+    if (!symbol || !side) {
+      refuse(binance::RequestKind::Modify, c, "unknown order");
+      return;
     }
+    std::string e = "order entry is down";
+    if (api->ready() && core::ok(api->modify(c, *symbol, *side, e))) {
+      return;
+    }
+    binance::Params params;
+    if (!config.rest_fallback || !core::ok(binance::modify_params(c, *symbol, *side, params, e))) {
+      refuse(binance::RequestKind::Modify, c, e);
+      return;
+    }
+    over_rest(binance::RequestKind::Modify, std::move(params));
   }
   void send(const model::CancelOrder& c) {
     const std::optional<std::string> symbol = symbol_of(c.instrument_id);
-    std::string e = "order entry is down";
-    if (!symbol || !api->ready() || !core::ok(api->cancel(c, *symbol, e))) {
-      refuse(binance::RequestKind::Cancel, c, symbol ? e : "unknown instrument");
+    if (!symbol) {
+      refuse(binance::RequestKind::Cancel, c, "unknown instrument");
+      return;
     }
+    std::string e = "order entry is down";
+    if (api->ready() && core::ok(api->cancel(c, *symbol, e))) {
+      return;
+    }
+    binance::Params params;
+    if (!config.rest_fallback || !core::ok(binance::cancel_params(c, *symbol, params))) {
+      refuse(binance::RequestKind::Cancel, c, e);
+      return;
+    }
+    over_rest(binance::RequestKind::Cancel, std::move(params));
+  }
+
+  // The order fallback (section 14.4): the request goes on the REST thread, signed like any
+  // other, and its outcome comes back here like the WebSocket API's. It still runs when the
+  // venue-io stops (a shutdown's cancels).
+  void over_rest(binance::RequestKind kind, binance::Params params) {
+    Counters::add(counters.rest_orders);
+    rest.post(
+        [this, kind, params = std::move(params)](binance::RestClient& client) {
+          binance::OrderOutcome o;
+          o.request = kind;
+          bool refused = false;
+          Status s = Status::Ok;
+          if (kind == binance::RequestKind::Place) {
+            s = client.place(params, o.ack, o.error, refused, o.reason);
+          } else if (kind == binance::RequestKind::Modify) {
+            s = client.modify(params, o.ack, o.error, refused, o.reason);
+          } else {
+            s = client.cancel(params, o.ack, o.error, refused, o.reason);
+          }
+          o.recv_ns = network::steady_ns();
+          if (!core::ok(s)) {
+            o.kind = binance::OutcomeKind::Unknown;
+          } else {
+            o.kind = refused ? binance::OutcomeKind::Refused : binance::OutcomeKind::Acknowledged;
+          }
+          for (const model::RateLimitFeedback& f : client.take_limits()) {
+            io.post([this, f] { static_cast<void>(event(model::Event{f})); });
+          }
+          io.post([this, o = std::move(o)] { on_outcome(o); });
+        },
+        /*keep=*/true);
   }
 
   // The dead man's switch goes over REST (the WebSocket API has no such method).
@@ -634,7 +699,8 @@ VenueIoStats VenueIo::stats() const noexcept {
                       v(c.countdowns),
                       v(c.countdown_failures),
                       v(c.checks),
-                      v(c.check_failures)};
+                      v(c.check_failures),
+                      v(c.rest_orders)};
 }
 
 } // namespace jarvis::live

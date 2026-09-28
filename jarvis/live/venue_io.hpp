@@ -40,7 +40,9 @@
 // records ConnectionStatus(down): the kernel halts trading and holds venue events until the next
 // snapshot. Order entry going up or down is recorded as ConnectionStatus(OrderEntry).
 //
-// Commands while the WebSocket API is down are refused locally (OrderRejected, OrderModifyRejected,
+// Commands while the WebSocket API is down go over REST on the REST thread (rest_fallback), with
+// the same outcomes: acknowledged, refused with the venue's code, or unknown (a 5xx, a timeout).
+// Without the fallback they are refused locally (OrderRejected, OrderModifyRejected,
 // OrderCancelRejected with reason "BINANCE_0 order entry is down"): nothing reached the venue. An
 // order whose outcome is unknown (a timeout, a connection lost with it in flight) is left for
 // reconciliation.
@@ -80,6 +82,7 @@ struct VenueIoConfig {
   std::chrono::milliseconds reconnect_max{30'000};
   std::chrono::milliseconds rest_tick{1'000};    // the REST thread's listenKey check
   std::chrono::milliseconds check_every{60'000}; // the light check while synced; 0: off
+  bool rest_fallback = true;                     // orders over REST while the WebSocket API is down
   adapter::binance::ListenKeyKeeperConfig keeper;
   std::function<std::int64_t()> now_ms; // local UTC milliseconds for signing; system clock if empty
 };
@@ -100,6 +103,7 @@ struct VenueIoStats {
   std::uint64_t countdown_failures = 0;
   std::uint64_t checks = 0; // light checks recorded
   std::uint64_t check_failures = 0;
+  std::uint64_t rest_orders = 0; // commands sent over REST (the WebSocket API was down)
 };
 
 class VenueIo {

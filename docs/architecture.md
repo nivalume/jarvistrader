@@ -202,7 +202,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
 - 停止（`SIGINT`、`SIGTERM`、`--run-for` 到期或 `HaltNode`）按 `[node] shutdown` 进行（第 19.4 节）：默认撤单、在 `Stopping` 中等待交易所确认，再解除 `countdownCancelAll`。
-- 尚未实现：REST 下单兜底、行情新鲜度（按时间判断行情陈旧）。
+- 尚未实现：行情新鲜度（按时间判断行情陈旧）。
 
 ### 4.2 NodeConfig
 
@@ -636,7 +636,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
-- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll`。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
 
 ### 7.2 路由
@@ -1257,7 +1257,7 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 ### 14.4 下单通道
 
 - 主通道是 WS API：连接后 `session.logon`（Ed25519），之后 `order.place / order.modify / order.cancel` 无需逐条签名。
-- WS API 不可用时退回 REST 下单，同样签名，同样受令牌桶约束。
+- WS API 不可用时退回 REST 下单，同样签名，同样受令牌桶约束（令牌桶在内核里，与通道无关）。实现见第 7.1 节的 venue-io（M5-F）；同步闸门此时让节点处于 `Degraded`（`Reducing`），兜底通道主要承载撤单与减仓单。
 - 每个命令先写入 WAL（`barrier` 模式下等待落盘）再发送；发出而未收到回执的命令组成 in-flight 集合，是对账的输入。
 - `timestamp` 与 `recvWindow`（默认 5000 毫秒）按服务器时间偏移校正；偏移与 `-5028`（超出撮合引擎 recvWindow）作为指标监控。
 - 实现（M4-D）：`jarvis/adapter/binance/requests.hpp` 不做 I/O，把内核命令变成请求参数，再变成签名的 REST 查询串或 WS API 请求；应答变成 `PlaceAck`、`RequestError` 与 `RateLimitFeedback`。
