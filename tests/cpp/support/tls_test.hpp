@@ -105,10 +105,18 @@ inline std::string header_value(const std::string& head, std::string_view name) 
 class ScriptedHttpsServer {
 public:
   explicit ScriptedHttpsServer(std::vector<std::string> responses)
+      : ScriptedHttpsServer{std::move(responses), {}, {}} {}
+  // With another server's certificate and key, so one CA file trusts both.
+  ScriptedHttpsServer(std::vector<std::string> responses, std::string cert, std::string key)
       : ssl_{asio::ssl::context::tls_server}, responses_{std::move(responses)} {
-    make_certificate(dir_.file("cert.pem"), dir_.file("key.pem"));
-    ssl_.use_certificate_chain_file(dir_.file("cert.pem"));
-    ssl_.use_private_key_file(dir_.file("key.pem"), asio::ssl::context::pem);
+    if (cert.empty()) {
+      cert = dir_.file("cert.pem");
+      key = dir_.file("key.pem");
+      make_certificate(cert, key);
+    }
+    cert_ = cert;
+    ssl_.use_certificate_chain_file(cert);
+    ssl_.use_private_key_file(key, asio::ssl::context::pem);
     acceptor_.open(asio::ip::tcp::v4());
     acceptor_.bind({asio::ip::make_address("127.0.0.1"), 0});
     acceptor_.listen();
@@ -119,7 +127,7 @@ public:
   ScriptedHttpsServer& operator=(const ScriptedHttpsServer&) = delete;
 
   [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
-  [[nodiscard]] std::string ca_file() const { return dir_.file("cert.pem"); }
+  [[nodiscard]] std::string ca_file() const { return cert_; }
   [[nodiscard]] std::string url() const { return "https://localhost:" + std::to_string(port()); }
   void join() {
     if (thread_.joinable()) {
@@ -167,6 +175,7 @@ private:
   }
 
   TempDir dir_;
+  std::string cert_;
   asio::io_context io_;
   asio::ssl::context ssl_;
   asio::ip::tcp::acceptor acceptor_{io_};

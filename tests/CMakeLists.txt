@@ -132,6 +132,7 @@ endif()
 
 if(TARGET jarvis_live)
   jarvis_add_layer_test(live SOURCES cpp/test_live.cpp cpp/test_rings.cpp cpp/test_sandbox.cpp
+                        cpp/test_venue_io.cpp
                         SUITES unit LIBS jarvis::live jarvis_asio)
   target_compile_definitions(test_live PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()

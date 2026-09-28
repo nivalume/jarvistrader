@@ -129,6 +129,7 @@ public:
   ScriptedWssServer& operator=(const ScriptedWssServer&) = delete;
 
   [[nodiscard]] std::string ca_file() const { return dir_.file("cert.pem"); }
+  [[nodiscard]] std::string key_file() const { return dir_.file("key.pem"); }
   [[nodiscard]] std::string url(std::string_view target) const {
     return "wss://localhost:" + std::to_string(port_) + std::string{target};
   }

@@ -616,6 +616,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
 
 ### 7.2 路由

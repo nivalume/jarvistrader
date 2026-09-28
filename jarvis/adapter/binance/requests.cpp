@@ -173,7 +173,13 @@ Status modify_params(const model::ModifyOrder& c, std::string_view symbol, model
 Status cancel_params(const model::CancelOrder& c, std::string_view symbol, Params& out) {
   out.clear();
   out.emplace_back("symbol", std::string{symbol});
-  out.emplace_back("origClientOrderId", std::string{c.client_order_id.view()});
+  if (!c.client_order_id.empty()) {
+    out.emplace_back("origClientOrderId", std::string{c.client_order_id.view()});
+  } else if (c.venue_order_id && !c.venue_order_id->empty()) {
+    out.emplace_back("orderId", std::string{c.venue_order_id->view()}); // an external order
+  } else {
+    return Status::InvalidArgument;
+  }
   return Status::Ok;
 }
 

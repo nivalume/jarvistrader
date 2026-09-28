@@ -69,6 +69,11 @@ std::vector<TrackedOrder> OrderTracker::unclosed() const {
   return out;
 }
 
+std::optional<model::OrderSide> OrderTracker::side_of(std::string_view client_order_id) const {
+  const auto it = orders_.find(std::string{client_order_id});
+  return it == orders_.end() ? std::nullopt : std::optional{it->second.side};
+}
+
 std::map<std::string, std::uint64_t> OrderTracker::next_trades() const {
   std::map<std::string, std::uint64_t> out;
   for (const auto& [cid, o] : orders_) {
@@ -175,9 +180,26 @@ Status OrderTracker::on_place_ack(const PlaceAck& a, core::UnixNanos recv, Event
 Status OrderTracker::on_request_error(const RequestError& e, core::UnixNanos recv,
                                       EventEmitter& out) {
   Order* o = find(e.client_order_id);
-  if (o == nullptr) {
-    return Status::Ok;
+  return o == nullptr ? Status::Ok : refusal(*o, e, recv, out);
+}
+
+Status OrderTracker::on_local_refusal(const RequestError& e, std::uint16_t strategy,
+                                      const model::InstrumentId& instrument, core::UnixNanos recv,
+                                      EventEmitter& out) {
+  const auto it = orders_.find(e.client_order_id);
+  if (it != orders_.end()) {
+    return refusal(it->second, e, recv, out);
   }
+  Order o; // a command for an order this tracker never sent: the command says whose it is
+  o.strategy = strategy;
+  o.instrument_id = instrument;
+  static_cast<void>(model::ClientOrderId::from(e.client_order_id, o.client_order_id));
+  return refusal(o, e, recv, out);
+}
+
+Status OrderTracker::refusal(Order& order, const RequestError& e, core::UnixNanos recv,
+                             EventEmitter& out) {
+  Order* o = &order;
   const model::ReasonText reason = reason_of(e.code, e.message);
   const std::optional<model::VenueOrderId> vid =
       o->venue_order_id.empty()

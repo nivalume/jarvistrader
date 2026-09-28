@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -95,6 +96,11 @@ public:
                                           EventEmitter& out);
   [[nodiscard]] core::Status on_request_error(const RequestError& e, core::UnixNanos recv,
                                               EventEmitter& out);
+  // A command the adapter could not send (order entry down, unknown instrument or order): the
+  // same refusal events, built from the command when the tracker does not know the order.
+  [[nodiscard]] core::Status on_local_refusal(const RequestError& e, std::uint16_t strategy,
+                                              const model::InstrumentId& instrument,
+                                              core::UnixNanos recv, EventEmitter& out);
   [[nodiscard]] core::Status on_report(const UserReport& r, core::UnixNanos recv,
                                        EventEmitter& out);
 
@@ -103,6 +109,8 @@ public:
   // what it showed: venue ids, acceptance, closed orders and trades, so later reports of them are
   // passed on as the tracker would have had it seen them.
   [[nodiscard]] std::vector<TrackedOrder> unclosed() const;
+  // The side of an order this node sent (a modify needs it).
+  [[nodiscard]] std::optional<model::OrderSide> side_of(std::string_view client_order_id) const;
   [[nodiscard]] std::map<std::string, std::uint64_t> next_trades() const;
   void absorb(const model::VenueSnapshot& snapshot);
 
@@ -136,6 +144,7 @@ private:
                     std::string_view commission_asset, std::uint64_t ts_ms, core::UnixNanos recv,
                     EventEmitter& out);
   core::Status order_report(const OrderReport& r, core::UnixNanos recv, EventEmitter& out);
+  core::Status refusal(Order& o, const RequestError& e, core::UnixNanos recv, EventEmitter& out);
   core::Status account_report(const AccountReport& r, core::UnixNanos recv, EventEmitter& out);
   core::Status fail(core::Status s, std::string what) {
     error_ = std::move(what);
