@@ -22,7 +22,33 @@ std::optional<std::string> env(const std::string& name) {
   return std::string{v};
 }
 
+// A file holding a secret is readable by its owner only (mode 0600 or 0400).
+Status check_private(const std::filesystem::path& path, std::string& error) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::file_status st = fs::status(path, ec);
+  if (ec || !fs::exists(st)) {
+    error = "cannot read " + path.string();
+    return Status::IoError;
+  }
+  const fs::perms open = st.permissions() & (fs::perms::group_all | fs::perms::others_all);
+  if (open != fs::perms::none) {
+    const auto mode = static_cast<unsigned>(st.permissions() & fs::perms::mask);
+    const std::string octal{static_cast<char>('0' + ((mode >> 6U) & 7U)),
+                            static_cast<char>('0' + ((mode >> 3U) & 7U)),
+                            static_cast<char>('0' + (mode & 7U))};
+    error = path.string() + " holds a secret but is open to group or others (mode " + octal +
+            "); chmod 600 " + path.string();
+    return Status::InvalidState;
+  }
+  return Status::Ok;
+}
+
 Status read_file(const std::filesystem::path& path, std::string& out, std::string& error) {
+  const Status s = check_private(path, error);
+  if (!core::ok(s)) {
+    return s;
+  }
   std::ifstream in{path};
   if (!in) {
     error = "cannot read " + path.string();
@@ -54,6 +80,10 @@ Status from_env(std::string_view prefix, ApiCredentials& out, std::string& error
 }
 
 Status from_file(std::string_view path, ApiCredentials& out, std::string& error) {
+  const Status s = check_private(std::filesystem::path{path}, error);
+  if (!core::ok(s)) {
+    return s;
+  }
   toml::parse_result parsed = toml::parse_file(path);
   if (!parsed) {
     error = std::string{path} + ": " + std::string{parsed.error().description()};

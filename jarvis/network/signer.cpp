@@ -1,9 +1,6 @@
 #include "jarvis/network/signer.hpp"
 
 #include <array>
-#include <cstdlib>
-#include <fstream>
-#include <iterator>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -12,31 +9,6 @@
 #include "jarvis/network/crypto.hpp"
 
 namespace jarvis::network {
-
-core::Status resolve_secret(std::string_view reference, std::string& out, std::string& error) {
-  if (reference.starts_with("env:")) {
-    const std::string name{reference.substr(4)};
-    const char* value = std::getenv(name.c_str()); // NOLINT(concurrency-mt-unsafe): startup only
-    if (value == nullptr || *value == '\0') {
-      error = "environment variable " + name + " is not set";
-      return core::Status::NotFound;
-    }
-    out = value;
-    return core::Status::Ok;
-  }
-  if (reference.starts_with("file:")) {
-    const std::string path{reference.substr(5)};
-    std::ifstream in{path, std::ios::binary};
-    if (!in) {
-      error = "cannot read " + path;
-      return core::Status::NotFound;
-    }
-    out.assign(std::istreambuf_iterator<char>{in}, {});
-    return core::Status::Ok;
-  }
-  error = "a credentials reference is env:NAME or file:PATH";
-  return core::Status::InvalidArgument;
-}
 
 std::string HmacSha256Signer::sign(std::string_view payload) const {
   return hex(hmac_sha256(secret_, payload));

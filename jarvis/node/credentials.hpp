@@ -12,7 +12,9 @@
 //   file:PATH    a TOML file: api_key, and secret or private_key_file (relative to the file)
 //
 // The secret is an HMAC secret or an Ed25519 private key in PEM (the WebSocket API then logs on
-// once instead of signing every request). Errors name what is missing, never a secret.
+// once instead of signing every request). A file holding a secret (the TOML file, a private key
+// file) must be readable by its owner only (mode 0600 or 0400); otherwise resolving fails.
+// Errors name what is missing, never a secret.
 
 namespace jarvis::node {
 

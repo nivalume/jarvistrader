@@ -1625,7 +1625,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 - `NodeConfig` 的 hash 写入日志头。testnet 与 prod 是不同的 endpoint 配置值，不存在默认指向 prod 的布尔开关。
 - 密钥只以引用形式出现在配置中（`env:` 或权限为 0600 的文件路径）。签名经 `Signer` 接口实现，Ed25519 使用 OpenSSL 3。启动时校验 key 的权限（有交易权限、无提现权限）与 IP 白名单。
-- 实现（M5-C3，`jarvis/node/credentials.hpp`）：`env:PREFIX` 读取 `PREFIX_API_KEY`，以及 `PREFIX_API_SECRET` 或 `PREFIX_PRIVATE_KEY_FILE`；`file:PATH` 读取 TOML 文件中的 `api_key`，以及 `secret` 或 `private_key_file`（相对于该文件）。secret 是 HMAC secret 或 PEM 格式的 Ed25519 私钥，由 `Signer::from_secret` 识别。错误只说明缺什么，从不包含 secret。文件权限检查尚未实现。
+- 实现（M5-C3，`jarvis/node/credentials.hpp`）：`env:PREFIX` 读取 `PREFIX_API_KEY`，以及 `PREFIX_API_SECRET` 或 `PREFIX_PRIVATE_KEY_FILE`；`file:PATH` 读取 TOML 文件中的 `api_key`，以及 `secret` 或 `private_key_file`（相对于该文件）。secret 是 HMAC secret 或 PEM 格式的 Ed25519 私钥，由 `Signer::from_secret` 识别。错误只说明缺什么，从不包含 secret。保存 secret 的文件（TOML 文件与私钥文件）只能由属主读写（权限 0600 或 0400），组或其他用户可读时拒绝启动，错误中给出当前权限与 `chmod 600` 命令（M5-D4）。
 
 ### 19.2 可观测性
 

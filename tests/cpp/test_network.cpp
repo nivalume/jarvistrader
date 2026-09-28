@@ -304,13 +304,6 @@ TEST_SUITE("unit") {
     CHECK(from_hmac.sign("x") == net::hex(net::hmac_sha256("secret", "x")));
     net::Signer none;
     CHECK(net::Signer::from_secret("-----BEGIN nonsense", none, error) == Status::ParseError);
-
-    ::setenv("JARVIS_TEST_SECRET", "abc", 1);
-    std::string secret;
-    CHECK(net::resolve_secret("env:JARVIS_TEST_SECRET", secret, error) == Status::Ok);
-    CHECK(secret == "abc");
-    CHECK(net::resolve_secret("env:JARVIS_NOT_SET_ANYWHERE", secret, error) == Status::NotFound);
-    CHECK(net::resolve_secret("plain", secret, error) == Status::InvalidArgument);
   }
 
   TEST_CASE("backoff grows to its cap with bounded jitter") {

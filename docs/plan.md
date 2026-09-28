@@ -168,7 +168,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: ops — 遥测：`LogRecord` 格式化为 JSON lines，按 §19.2 暴露 Prometheus 指标
 - [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）
 - [ ] task: ops — `SIGTERM` 优雅关停流程（§19.4）：已完成（M5-D2，`[node] shutdown` 与 `shutdown_timeout_ms`：记录的 `Shutdown` 输入、`Halted` 与 KillSwitch、`Stopping` 中等待确认或超时、`on_stop` 后不再回调、`Stopped` 时解除 `countdownCancelAll`、`RunSummary::left_open`；引擎、driver 与脚本化交易所端到端测试）；最终快照随 WAL
-- [ ] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查待做
+- [x] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查已完成（M5-D4：保存 secret 的文件须为 0600 或 0400）
 - [ ] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）
 - [ ] task: execution — 内置执行算法 `PassiveThenAggressive`
 - [ ] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点

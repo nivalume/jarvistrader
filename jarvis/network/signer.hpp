@@ -9,14 +9,9 @@
 
 // Request signing (docs/architecture.md sections 13.2 and 19): HMAC-SHA256 (hex, Binance REST
 // with an HMAC key) and Ed25519 (base64, REST with an Ed25519 key and the WS API session.logon).
-// Keys are never in configuration files: a credentials reference names where the secret lives.
+// Keys are never in configuration files: node/credentials.hpp resolves a credentials reference.
 
 namespace jarvis::network {
-
-// "env:NAME" (an environment variable) or "file:PATH" (a file, e.g. a PEM key); the secret is
-// written to `out`.
-[[nodiscard]] core::Status resolve_secret(std::string_view reference, std::string& out,
-                                          std::string& error);
 
 class HmacSha256Signer {
 public:

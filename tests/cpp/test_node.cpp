@@ -30,6 +30,7 @@
 #include "jarvis/node/build_info.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/corpus.hpp"
+#include "jarvis/node/credentials.hpp"
 #include "jarvis/node/epoch_store.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/event_text.hpp"
@@ -671,6 +672,54 @@ params = { spread = 0.5 }
                 .empty());
     CHECK(node::canonical_hashed_text(a) == node::canonical_hashed_text(b));
     CHECK(node::config_hash(a) == node::config_hash(b));
+  }
+
+  TEST_CASE("credentials resolve from env: and file:, and secret files must be owner-only") {
+    namespace fs = std::filesystem;
+    const TempDir dir{"creds"};
+    fs::create_directories(dir.str());
+    const fs::perms owner = fs::perms::owner_read | fs::perms::owner_write;
+    const auto write = [owner](const std::string& path, std::string_view text) {
+      std::ofstream{path} << text;
+      fs::permissions(path, owner);
+    };
+    node::ApiCredentials c;
+    std::string error;
+    write(dir.sub("key.toml"), "api_key = \"K1\"\nsecret = \"S1\"\n");
+    REQUIRE(node::resolve_credentials("file:" + dir.sub("key.toml"), c, error) == Status::Ok);
+    CHECK(c.api_key == "K1");
+    CHECK(c.secret == "S1");
+    write(dir.sub("ed.pem"), "-----BEGIN PRIVATE KEY-----\n");
+    write(dir.sub("ed.toml"), "api_key = \"K2\"\nprivate_key_file = \"ed.pem\"\n");
+    REQUIRE(node::resolve_credentials("file:" + dir.sub("ed.toml"), c, error) == Status::Ok);
+    CHECK(c.secret == "-----BEGIN PRIVATE KEY-----\n");
+
+    // A file holding a secret that group or others can read is refused, naming the fix.
+    fs::permissions(dir.sub("key.toml"), fs::perms::group_read, fs::perm_options::add);
+    CHECK(node::resolve_credentials("file:" + dir.sub("key.toml"), c, error) ==
+          Status::InvalidState);
+    CHECK(error.find("mode 640") != std::string::npos);
+    CHECK(error.find("chmod 600") != std::string::npos);
+    CHECK(error.find("S1") == std::string::npos);
+    fs::permissions(dir.sub("ed.pem"), fs::perms::others_read, fs::perm_options::add);
+    CHECK(node::resolve_credentials("file:" + dir.sub("ed.toml"), c, error) ==
+          Status::InvalidState);
+
+    // env: with the secret itself, or with a private key file (checked the same way).
+    ::setenv("JARVIS_TEST_CRED_API_KEY", "K3", 1);
+    ::setenv("JARVIS_TEST_CRED_API_SECRET", "S3", 1);
+    REQUIRE(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::Ok);
+    CHECK(c.api_key == "K3");
+    CHECK(c.secret == "S3");
+    ::unsetenv("JARVIS_TEST_CRED_API_SECRET");
+    ::setenv("JARVIS_TEST_CRED_PRIVATE_KEY_FILE", dir.sub("ed.pem").c_str(), 1);
+    CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::InvalidState);
+    fs::permissions(dir.sub("ed.pem"), owner);
+    CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::Ok);
+    ::unsetenv("JARVIS_TEST_CRED_PRIVATE_KEY_FILE");
+    CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::NotFound);
+    ::unsetenv("JARVIS_TEST_CRED_API_KEY");
+    CHECK(node::resolve_credentials("plain-secret", c, error) == Status::InvalidArgument);
   }
 
   TEST_CASE("the epoch counter starts at 1, persists and refuses damaged files") {
