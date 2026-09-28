@@ -166,7 +166,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [x] task: risk — `countdownCancelAll`：进入 `Synced` 时武装，每 30 秒续期，关停确认后解除（§10.3）：武装与续期已完成（M5-D1：内核输出 `CountdownCancelAll`，进入 `Running` 时与内核定时器每 30 秒覆盖有挂单的 instrument，新单所在 instrument 未被覆盖时同一步补上；只在 `env = "live"` 打开；venue-io 的 REST 线程发出；引擎单元测试与脚本化交易所端到端测试）；关停确认后解除已完成（M5-D2）
 - [ ] task: persist — WAL 三种模式（`none`、`async`、`barrier`）、`EngineState` 快照与日志截断、崩溃恢复（§16.2、§16.3）
 - [ ] task: ops — 遥测：`LogRecord` 格式化为 JSON lines，按 §19.2 暴露 Prometheus 指标
-- [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）
+- [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）：admin socket（0600）、记录的 `AdminCommand` 输入（`halt`、`reduce`、`resume`、`cancel_all`、`shutdown`）、`status`（ready 与 alive）、`jarvis admin` 已完成（M5-G，sandbox 端到端测试含回放一致）；`set_param` 与 `snapshot` 待做
 - [ ] task: ops — `SIGTERM` 优雅关停流程（§19.4）：已完成（M5-D2，`[node] shutdown` 与 `shutdown_timeout_ms`：记录的 `Shutdown` 输入、`Halted` 与 KillSwitch、`Stopping` 中等待确认或超时、`on_stop` 后不再回调、`Stopped` 时解除 `countdownCancelAll`、`RunSummary::left_open`；引擎、driver 与脚本化交易所端到端测试）；最终快照随 WAL
 - [x] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查已完成（M5-D4：保存 secret 的文件须为 0600 或 0400）
 - [ ] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）

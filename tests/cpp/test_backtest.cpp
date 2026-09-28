@@ -742,6 +742,34 @@ TEST_SUITE("unit") {
     CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
   }
 
+  TEST_CASE("in real time, an admin shutdown stops the node like a stop request") {
+    const std::vector<Keyed> arrivals = {
+        {key(1000, 1, 1), trade(1000, 1000)},
+        {key(2000, 3, 2), md::Event{md::AdminCommand{md::AdminAction::Shutdown, UnixNanos{2000}}}},
+        {key(3000, 1, 3), trade(3000, 1001)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    LivePushSource source;
+    MemoryRecorder recorder;
+    bt::Driver driver{engine, source, recorder};
+    StepPump pump{arrivals, source, 500, 5500};
+    bt::RunSummary summary;
+    REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+    CHECK(summary.state == md::NodeState::Stopped);
+    CHECK(calls == std::vector<std::string>{"start@500", "trade@1000", "stop@2000"});
+    std::vector<std::string> moves;
+    for (const Keyed& k : recorder.inputs) {
+      if (const auto* lc = std::get_if<md::NodeLifecycle>(&k.event)) {
+        moves.push_back(std::string{md::to_string(lc->to)} + "@" +
+                        std::to_string(k.key.ts.value()));
+      }
+    }
+    CHECK(moves.back() == "STOPPED@2000");
+  }
+
   TEST_CASE("a node whose market data goes down degrades until it is back") {
     const auto market = [](std::uint64_t ts, bool up) {
       md::ConnectionStatus c;

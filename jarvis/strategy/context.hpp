@@ -482,6 +482,8 @@ public:
   core::FixedVector<StrategyFailure> failures;
   core::FixedVector<std::uint8_t> disabled; // 1 once a strategy is halted
   bool halt_requested = false;
+  bool stop_requested = false; // an admin shutdown: the driver stops the node
+  model::NodeState node_state = model::NodeState::Init; // as the last NodeLifecycle left it
   bool stopped = false; // Stopping: on_stop has run, strategies receive nothing more
   std::optional<model::ShutdownMode> shutdown; // the Shutdown input, once stepped
   execution::ConnectionHealth health;          // market data and order entry

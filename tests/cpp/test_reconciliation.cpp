@@ -1180,6 +1180,30 @@ TEST_SUITE("property") {
     CHECK(h.outputs_of<md::ReconciliationDiff>().empty());
   }
 
+  TEST_CASE("admin commands change the trading state, cancel everything, or ask to stop") {
+    const auto admin = [](md::AdminAction a, std::uint64_t ts) {
+      return md::Event{md::AdminCommand{a, UnixNanos{ts}}};
+    };
+    Harness h{2};
+    start(h, 2);
+    const auto state = [&h] { return h.trading().risk.trading_state(); };
+    h.run({admin(md::AdminAction::Halt, 10)});
+    CHECK(state() == md::TradingState::Halted);
+    h.run({admin(md::AdminAction::Resume, 11)});
+    CHECK(state() == md::TradingState::Active);
+    h.run({admin(md::AdminAction::Reduce, 12)});
+    CHECK(state() == md::TradingState::Reducing);
+    h.run({admin(md::AdminAction::Resume, 13)});
+    h.outputs.clear();
+    h.run({admin(md::AdminAction::CancelAll, 14)});
+    CHECK(h.outputs_of<md::CancelOrder>().size() == 2);
+    CHECK(state() == md::TradingState::Active); // cancel_all leaves the state alone
+    CHECK(h.log == std::vector<std::string>{"PENDING_CANCEL", "PENDING_CANCEL"});
+    CHECK_FALSE(h.engine().stop_requested());
+    h.run({admin(md::AdminAction::Shutdown, 15)});
+    CHECK(h.engine().stop_requested());
+  }
+
   TEST_CASE("without a countdown the kernel sends none and arms no timer") {
     Harness h{1};
     start(h, 1);

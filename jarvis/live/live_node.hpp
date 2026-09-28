@@ -17,6 +17,8 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
+#include "jarvis/live/admin_pump.hpp"
+#include "jarvis/live/admin_server.hpp"
 #include "jarvis/live/clock.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
@@ -26,6 +28,7 @@
 #include "jarvis/live/venue_io.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/credentials.hpp"
@@ -74,6 +77,7 @@ struct LiveResult {
   VenueIoStats venue;
   adapter::binance::StartupReport startup;
   std::uint64_t epoch = 0;
+  std::uint64_t admin_commands = 0; // taken from the admin socket
 };
 
 // What is built before the loop starts.
@@ -92,8 +96,9 @@ struct LivePlan {
 // "epoch" in the directory persistence.dir puts the runs of this node in.
 [[nodiscard]] std::string default_epoch_file(const node::NodeConfig& config);
 
-// The driver's pump in real time: the account ring first (its answers come before market data,
-// section 5.5), then the market data ring, both into the one live source.
+// The driver's pump in real time: the admin socket's commands, then the account ring (its answers
+// come before market data, section 5.5), then the market data ring, all into the one live
+// source.
 template <typename Hook> class LivePump {
 public:
   LivePump(const MonotonicClock& clock, MarketFeed& feed, VenueIo& venue, LiveSource& source,
@@ -104,8 +109,17 @@ public:
   [[nodiscard]] core::UnixNanos now() const { return clock_->now(); }
 
   [[nodiscard]] core::Status pump(core::UnixNanos now) {
-    const core::Status s = drain(venue_->ring(), venue_->source_id(), now);
+    core::Status s = pump_admin(admin_, kernel_, *source_, now);
+    if (core::ok(s)) {
+      s = drain(venue_->ring(), venue_->source_id(), now);
+    }
     return core::ok(s) ? drain(feed_->ring(), feed_->source_id(), now) : s;
+  }
+
+  // The admin socket's commands come first in every round; `kernel` is published for status.
+  void attach_admin(AdminServer* admin, const strategy::KernelServices* kernel) noexcept {
+    admin_ = admin;
+    kernel_ = kernel;
   }
 
   [[nodiscard]] core::Status idle(core::UnixNanos now) {
@@ -147,6 +161,8 @@ private:
   Hook* hook_;
   const std::atomic<bool>* stop_;
   std::optional<core::UnixNanos> deadline_;
+  AdminServer* admin_ = nullptr;
+  const strategy::KernelServices* kernel_ = nullptr;
 };
 
 // A recorder that also hands the venue commands to the venue-io thread. A full command ring is
@@ -271,7 +287,14 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   MarketFeed feed{anchor, plan.feed};
   VenueIo venue{anchor, plan.venue};
-  s = feed.start(error);
+  std::unique_ptr<AdminServer> admin;
+  if (const std::string path = node::admin_socket_path(config); !path.empty()) {
+    admin = std::make_unique<AdminServer>(path);
+    s = admin->start(error);
+  }
+  if (core::ok(s)) {
+    s = feed.start(error);
+  }
   if (core::ok(s)) {
     s = venue.start(error);
   }
@@ -286,6 +309,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
         core::UnixNanos{start.value() + static_cast<std::uint64_t>(request.run_for->count())};
   }
   LivePump<Hook> pump{clock, feed, venue, source, hook, request.stop, deadline};
+  pump.attach_admin(admin.get(), &engine.kernel());
   if (persist) {
     node::LogRecorder<Hook> recorder{writer, hook};
     s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop, result,
@@ -297,6 +321,10 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   venue.stop();
   feed.stop();
+  if (admin) {
+    admin->stop();
+    result.admin_commands = admin->accepted();
+  }
   result.feed = feed.stats();
   result.venue = venue.stats();
   if (persist) {

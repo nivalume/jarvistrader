@@ -13,9 +13,12 @@
 #include "jarvis/backtest/venue_loop.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/engine/engine.hpp"
+#include "jarvis/live/admin_pump.hpp"
+#include "jarvis/live/admin_server.hpp"
 #include "jarvis/live/clock.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
+#include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/event_log.hpp"
@@ -47,6 +50,7 @@ struct SandboxResult {
   std::string directory; // empty when persistence.mode = "none"
   backtest::RunSummary summary;
   MarketFeedStats feed;
+  std::uint64_t admin_commands = 0; // taken from the admin socket
 };
 
 // What is built before the loop starts: the instruments (exchangeInfo), the preamble (their
@@ -94,7 +98,16 @@ public:
 
   [[nodiscard]] core::UnixNanos now() const { return clock_->now(); }
 
+  // The admin socket's commands come first in every round; `kernel` is published for status.
+  void attach_admin(AdminServer* admin, const strategy::KernelServices* kernel) noexcept {
+    admin_ = admin;
+    kernel_ = kernel;
+  }
+
   [[nodiscard]] core::Status pump(core::UnixNanos now) {
+    if (const core::Status s = pump_admin(admin_, kernel_, *source_, now); !core::ok(s)) {
+      return s;
+    }
     SpscByteRing& ring = feed_->ring();
     for (std::size_t n = 0; n < kMaxPerPump; ++n) {
       bool empty = false;
@@ -133,6 +146,8 @@ private:
   Hook* hook_;
   const std::atomic<bool>* stop_;
   std::optional<core::UnixNanos> deadline_;
+  AdminServer* admin_ = nullptr;
+  const strategy::KernelServices* kernel_ = nullptr;
 };
 
 namespace detail {
@@ -226,7 +241,14 @@ template <strategy::StrategySet SS, node::InputHook Hook>
     }
   }
   MarketFeed feed{anchor, plan.feed};
-  s = feed.start(error);
+  std::unique_ptr<AdminServer> admin;
+  if (const std::string path = node::admin_socket_path(config); !path.empty()) {
+    admin = std::make_unique<AdminServer>(path);
+    s = admin->start(error);
+  }
+  if (core::ok(s)) {
+    s = feed.start(error);
+  }
   if (!core::ok(s)) {
     return s;
   }
@@ -237,6 +259,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
         core::UnixNanos{start.value() + static_cast<std::uint64_t>(request.run_for->count())};
   }
   SandboxPump<Hook> pump{clock, feed, source, hook, request.stop, deadline};
+  pump.attach_admin(admin.get(), &engine.kernel());
   if (persist) {
     node::LogRecorder<Hook> recorder{writer, hook};
     s = detail::run_wired(config, engine, plan, source, recorder, pump, start, result, error);
@@ -245,6 +268,10 @@ template <strategy::StrategySet SS, node::InputHook Hook>
     s = detail::run_wired(config, engine, plan, source, recorder, pump, start, result, error);
   }
   feed.stop();
+  if (admin) {
+    admin->stop();
+    result.admin_commands = admin->accepted();
+  }
   result.feed = feed.stats();
   if (persist) {
     const core::Status closed = writer.close();

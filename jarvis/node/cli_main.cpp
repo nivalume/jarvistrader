@@ -10,6 +10,7 @@
 //   jarvis replay RUN_DIR [--until SEQ] [--dump-state]
 //   jarvis trace-export LOG_DIR --spec NAME --out DIR
 //   jarvis report RUN_DIR [--out FILE]
+//   jarvis admin SOCKET COMMAND | jarvis admin --config FILE COMMAND
 //
 // Exit status: 0 success, 1 failure or difference, 2 usage error, 3 replay divergence.
 
@@ -33,6 +34,7 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
+#include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/build_info.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/corpus.hpp"
@@ -69,7 +71,9 @@ constexpr std::string_view kUsageText =
     "  jarvis replay RUN_DIR [--until SEQ] [--dump-state]\n"
     "  jarvis trace-export LOG_DIR --spec NAME --out DIR\n"
     "  jarvis report RUN_DIR [--out FILE]\n"
-    "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n";
+    "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n"
+    "  jarvis admin SOCKET COMMAND | jarvis admin --config FILE COMMAND\n"
+    "    COMMAND: halt | reduce | resume | cancel_all | shutdown | status\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
 // those listed as flags.
@@ -449,6 +453,43 @@ int cmd_config(const Args& args) {
   return kOk;
 }
 
+// A running node's admin socket (section 19.3): sends one command, prints the reply.
+int cmd_admin(const Args& args) {
+  std::string path;
+  std::string_view command;
+  if (const auto file = args.option("--config")) {
+    if (args.positional.size() != 1) {
+      return usage("admin --config FILE needs one command");
+    }
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    if (!jarvis::core::ok(node::load_config(std::string{*file}, {}, config, errors))) {
+      std::cerr << node::format_errors(std::string{*file}, errors);
+      return kFailed;
+    }
+    path = node::admin_socket_path(config);
+    command = args.positional[0];
+  } else {
+    if (args.positional.size() != 2) {
+      return usage("admin needs a socket and one command");
+    }
+    path = std::string{args.positional[0]};
+    command = args.positional[1];
+  }
+  if (path.empty()) {
+    std::cerr << "jarvis: the configuration has no [admin] socket\n";
+    return kFailed;
+  }
+  std::string reply;
+  std::string error;
+  if (!jarvis::core::ok(node::admin_request(path, command, reply, error))) {
+    std::cerr << "jarvis: " << error << "\n";
+    return kFailed;
+  }
+  std::cout << reply << "\n";
+  return reply.starts_with("error") ? kFailed : kOk;
+}
+
 } // namespace
 
 // The backtest report of a run directory: fills, fees and PnL, labelled with data and models.
@@ -545,6 +586,10 @@ int main(int argc, char** argv) {
   if (command == "config") {
     constexpr std::array<std::string_view, 3> kValues = {"--env", "--set", "--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_config(args) : kUsage;
+  }
+  if (command == "admin") {
+    constexpr std::array<std::string_view, 1> kValues = {"--config"};
+    return parse_args(rest, kValues, {}, args) ? cmd_admin(args) : kUsage;
   }
   if (command == "--help" || command == "help") {
     std::cout << kUsageText;

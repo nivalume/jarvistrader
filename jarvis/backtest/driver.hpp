@@ -164,11 +164,13 @@ public:
   // time, and every input the pump delivers is stamped with the clock's reading, so the log is
   // a backtest input sequence that happened to arrive in real time and replays the same way.
   // A batch closes when the next input has a later ts or when nothing more is due. The run
-  // ends when the pump asks to stop (ShutdownRequested) or a strategy error halts the node.
+  // ends when the pump asks to stop (ShutdownRequested), an admin shutdown was stepped, or a
+  // strategy error halts the node.
   template <Pump P> [[nodiscard]] core::Status run_realtime(P& pump, RunSummary& out) {
     summary_ = RunSummary{};
     core::Status s = start(pump.now());
-    while (core::ok(s) && !engine_->halt_requested() && !pump.stop_requested()) {
+    while (core::ok(s) && !engine_->halt_requested() && !engine_->stop_requested() &&
+           !pump.stop_requested()) {
       s = realtime_round(pump);
     }
     if (!core::ok(s)) {

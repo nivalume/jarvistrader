@@ -287,7 +287,7 @@ prometheus = "0.0.0.0:9100"
 jsonl = true
 
 [admin]
-socket = "unix:///run/jarvis/{node_id}.sock"
+socket = "unix:///run/jarvis/{node_id}.sock"   # sandbox 与 live；不设置则没有 admin socket
 ```
 
 ### 4.3 组成
@@ -1436,6 +1436,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
 | `jarvis trace-export <log> --spec <X> --out <dir>` | 按规约变量投影日志，生成 `<X>Trace.tla` 与 `.cfg`（第 18.2 节） |
+| `jarvis admin <socket> <command>`（或 `--config <file>`） | 向运行中节点的 admin socket 发一条命令并打印回复（第 19.3 节） |
 | `jarvis report <run-dir> [--out file]` | 回测报告：成交、手续费、盈亏与订单去向，标注数据与成交模型（第 12.4 节） |
 
 ### 16.5 Parquet 互转
@@ -1657,6 +1658,12 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 - readiness = 已同步 ∧ 行情新鲜 ∧ 用户流心跳正常。liveness = core 线程在规定时间内推进了 `seq` 或处于空闲。
 - admin 命令经 Unix socket 进入，作为记录事件处理，因此可审计、可回放：`halt`、`reduce`、`resume`、`cancel_all`、`set_param`、`snapshot`、`shutdown`。
+- 实现（M5-G）：
+  - `[admin] socket`（`unix://` 路径，可含 `{node_id}`）设置后，sandbox 与 live 节点启动 admin 线程（`jarvis/live/admin_server.hpp`）。socket 文件权限为 0600，只有属主能发命令；启动时替换遗留的 socket 文件，停止时删除。每个连接一条命令、一行回复（协议见 `jarvis/node/admin_protocol.hpp`）。
+  - `halt`、`reduce`、`resume`、`cancel_all`、`shutdown` 回复 `ok`，经 SPSC 环交给 core 线程；泵在每一轮最先取它们（先于账户环与行情环），变成记录的 `AdminCommand` 输入，回放时复现。内核的处理：`halt` 与 `reduce` 把 TradingState 的基础状态设为 `Halted` 或 `Reducing`，`resume` 恢复为 `Active`（清除监控与轻量对账造成的降级；同步与降级保持不受影响）；`cancel_all` 撤销全部未完成订单（KillSwitch，不改变状态）；`shutdown` 让 driver 按 `[node] shutdown` 停止节点，与信号相同。
+  - `status` 回复一行 JSON：Node 状态、TradingState、最后步进的 `seq`、`ready`（Node 处于 `Running`，即已同步且没有连接处于 down）、`alive`（core 线程 5 秒内发布过状态；它每一轮都发布，空闲时也是）。`status` 不产生输入。
+  - 命令行：`jarvis admin <socket> <command>` 或 `jarvis admin --config <file> <command>`；回复以 `error` 开头时退出码为 1。
+  - `set_param` 与 `snapshot` 尚未实现（随 `ParamUpdate` 与 `EngineState` 快照）。
 
 ### 19.4 关停
 

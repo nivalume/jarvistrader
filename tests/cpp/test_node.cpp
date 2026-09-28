@@ -225,6 +225,7 @@ TEST_SUITE("unit") {
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::TradeTick) == 1);
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::OrderFilled) == 35);
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::Shutdown) == 54);
+    CHECK(static_cast<std::uint16_t>(wire::RecordKind::AdminCommand) == 57);
     CHECK(wire::kind_name(wire::RecordKind::OrderBookDeltas) == "OrderBookDeltas");
     CHECK(wire::known_kind(40));
     CHECK_FALSE(wire::known_kind(0));

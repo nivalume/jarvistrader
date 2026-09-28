@@ -56,6 +56,15 @@ enum class ShutdownMode : std::uint8_t {
   ExitKeepOrders = 1,
 };
 
+// What an operator's admin command asks for (docs/architecture.md section 19.3).
+enum class AdminAction : std::uint8_t {
+  Halt = 0,      // TradingState Halted: nothing new, cancels only
+  Reduce = 1,    // TradingState Reducing
+  Resume = 2,    // TradingState back to Active (what monitors or light checks lowered)
+  CancelAll = 3, // cancel every open order of every strategy
+  Shutdown = 4,  // stop the node ([node] shutdown decides how)
+};
+
 // Which connection a ConnectionStatus reports (docs/architecture.md section 4.4).
 enum class ConnectionKind : std::uint8_t {
   MarketData = 0, // the market data streams
@@ -126,6 +135,21 @@ enum class RateLimitKind : std::uint8_t {
   }
   return "";
 }
+[[nodiscard]] constexpr std::string_view to_string(AdminAction v) noexcept {
+  switch (v) {
+  case AdminAction::Halt:
+    return "HALT";
+  case AdminAction::Reduce:
+    return "REDUCE";
+  case AdminAction::Resume:
+    return "RESUME";
+  case AdminAction::CancelAll:
+    return "CANCEL_ALL";
+  case AdminAction::Shutdown:
+    return "SHUTDOWN";
+  }
+  return "";
+}
 [[nodiscard]] constexpr std::string_view to_string(ShutdownMode v) noexcept {
   switch (v) {
   case ShutdownMode::CancelAllThenExit:
@@ -178,6 +202,13 @@ enum class RateLimitKind : std::uint8_t {
     return core::Status::OutOfRange;
   }
   out = static_cast<StrategyErrorKind>(v);
+  return core::Status::Ok;
+}
+[[nodiscard]] constexpr core::Status from_value(std::uint8_t v, AdminAction& out) noexcept {
+  if (v > static_cast<std::uint8_t>(AdminAction::Shutdown)) {
+    return core::Status::OutOfRange;
+  }
+  out = static_cast<AdminAction>(v);
   return core::Status::Ok;
 }
 [[nodiscard]] constexpr core::Status from_value(std::uint8_t v, ShutdownMode& out) noexcept {
@@ -235,6 +266,12 @@ struct Shutdown {
   core::UnixNanos ts_init;
 };
 
+// An operator's command from the admin socket, recorded like any input so it replays.
+struct AdminCommand {
+  AdminAction action = AdminAction::Halt;
+  core::UnixNanos ts_init;
+};
+
 // The venue's count of one rate limit window (docs/architecture.md section 10.4), from response
 // headers and the WebSocket API's rateLimits: the kernel raises its own count of the matching
 // order window to at least `used`. An HTTP 429 arrives as used = limit (the window is spent).
@@ -267,7 +304,7 @@ using Event =
                  OrderPendingUpdate, OrderPendingCancel, OrderModifyRejected, OrderCancelRejected,
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
-                 CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot>;
+                 CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot, AdminCommand>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.

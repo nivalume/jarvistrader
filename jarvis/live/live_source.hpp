@@ -61,6 +61,16 @@ public:
     return core::Status::Ok;
   }
 
+  // Queues an event without lists (an admin command) at `ts`.
+  [[nodiscard]] core::Status push_event(const model::Event& event, core::UnixNanos ts,
+                                        std::uint16_t source_id) {
+    Entry e;
+    e.event = event;
+    e.key = core::EventKey{ts, source_id, ++pushed_};
+    queue_.push_back(std::move(e));
+    return core::Status::Ok;
+  }
+
   [[nodiscard]] core::Status next(core::EventKey& key, model::Event& event) {
     if (queue_.empty()) {
       return core::Status::WouldBlock;

@@ -130,6 +130,8 @@ public:
   [[nodiscard]] bool next_timer(core::FiredTimer& out) noexcept { return k_.timers.peek(out); }
 
   [[nodiscard]] bool halt_requested() const noexcept { return k_.halt_requested; }
+  // An admin shutdown: the driver stops the node the configured way.
+  [[nodiscard]] bool stop_requested() const noexcept { return k_.stop_requested; }
 
   // Orders not yet in a terminal state; the drain at shutdown waits until there are none.
   [[nodiscard]] std::uint32_t open_orders() const noexcept {
@@ -191,6 +193,8 @@ private:
       return k_.trading.reconciler.reconcile(host, e);
     } else if constexpr (std::is_same_v<T, model::Shutdown>) {
       return on_shutdown(e);
+    } else if constexpr (std::is_same_v<T, model::AdminCommand>) {
+      return on_admin(e);
     } else {
       return core::Status::Ok;
     }
@@ -736,6 +740,7 @@ private:
   // ---- lifecycle, timers, errors ------------------------------------------------------------
 
   core::Status on_lifecycle(const model::NodeLifecycle& e) {
+    k_.node_state = e.to;
     k_.trading.on_lifecycle(e.from, e.to);
     countdown_on_lifecycle(e.to);
     if (e.to == model::NodeState::Running && !started_) {
@@ -766,6 +771,28 @@ private:
         k_.fail(s, status);
       }
     }
+  }
+
+  // An operator's command (section 19.3). The TradingState changes are the TradingState spec's
+  // admin triggers; cancel_all is the KillSwitch without a state change.
+  core::Status on_admin(const model::AdminCommand& e) {
+    switch (e.action) {
+    case model::AdminAction::Halt:
+      static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::AdminHalt));
+      return core::Status::Ok;
+    case model::AdminAction::Reduce:
+      static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::AdminReduce));
+      return core::Status::Ok;
+    case model::AdminAction::Resume:
+      static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::AdminResume));
+      return core::Status::Ok;
+    case model::AdminAction::CancelAll:
+      return k_.trading.kill_switch(k_.current, k_.outputs);
+    case model::AdminAction::Shutdown:
+      k_.stop_requested = true;
+      return core::Status::Ok;
+    }
+    return core::Status::InvalidArgument;
   }
 
   // The node is shutting down (section 19.4). CancelAllThenExit halts trading and cancels every

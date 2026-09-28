@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -12,12 +13,15 @@
 
 #include <doctest/doctest.h>
 
+#include "jarvis/live/admin_server.hpp"
 #include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/redecode.hpp"
 #include "jarvis/live/sandbox_node.hpp"
 #include "jarvis/model/wire.hpp"
+#include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/config.hpp"
+#include "jarvis/node/event_log.hpp"
 #include "jarvis/node/replay.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -172,6 +176,128 @@ dir = ")" +
 } // namespace
 
 TEST_SUITE("unit") {
+  TEST_CASE("the admin socket takes commands, answers status, and is its owner's only") {
+    namespace fs = std::filesystem;
+    const TempDir dir;
+    const std::string path = dir.file("admin.sock");
+    live::AdminServer server{path};
+    std::string error;
+    REQUIRE(server.start(error) == Status::Ok);
+    CHECK((fs::status(path).permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
+          fs::perms::none);
+    std::string reply;
+    REQUIRE(node::admin_request(path, "halt", reply, error) == Status::Ok);
+    CHECK(reply == "ok");
+    REQUIRE(node::admin_request(path, "bogus", reply, error) == Status::Ok);
+    CHECK(reply.starts_with("error unknown command"));
+    md::AdminAction action{};
+    REQUIRE(server.commands().try_pop(action));
+    CHECK(action == md::AdminAction::Halt);
+    CHECK_FALSE(server.commands().try_pop(action));
+    CHECK(server.accepted() == 1);
+
+    REQUIRE(node::admin_request(path, "status", reply, error) == Status::Ok);
+    CHECK(reply.find(R"("ready":false,"alive":false)") != std::string::npos); // nothing published
+    server.status().publish(md::NodeState::Running, md::TradingState::Reducing, 42,
+                            jarvis::network::steady_ns());
+    REQUIRE(node::admin_request(path, "status", reply, error) == Status::Ok);
+    CHECK(reply ==
+          R"({"state":"RUNNING","trading":"REDUCING","seq":42,"ready":true,"alive":true})");
+
+    server.stop();
+    CHECK_FALSE(fs::exists(path));
+    CHECK(node::admin_request(path, "status", reply, error) == Status::IoError);
+  }
+
+  TEST_CASE("an operator halts and stops a sandbox node through its admin socket") {
+    std::atomic<std::uint64_t> trades{0};
+    ScriptedWssServer server{8, [&trades](std::size_t /*conn*/, const std::string& m) {
+                               std::vector<WsReply> out;
+                               if (m.empty()) {
+                                 out.push_back(WsReply::send(agg_trade(++trades, "84550.1")));
+                               }
+                               return out;
+                             }};
+    const TempDir dir;
+    std::string text = config_text(dir);
+    const std::string all = R"(streams = ["aggTrade", "bookTicker", "depth@100ms"])";
+    text.replace(text.find(all), all.size(), R"(streams = ["aggTrade"])");
+    const std::string socket = dir.file("admin.sock");
+    text += "\n[admin]\nsocket = \"unix://" + socket + "\"\n";
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::parse_config(text, "sandbox.toml", {}, config, errors) == Status::Ok);
+    live::SandboxRequest request;
+    request.config = &config;
+    request.manifest.config_text = text;
+    request.manifest.source = "sandbox.toml";
+    live::FeedEndpoints endpoints;
+    endpoints.streams = server.url("");
+    endpoints.ws_api = server.url("/ws-fapi/v1");
+    endpoints.tls.ca_file = server.ca_file();
+    request.endpoints = endpoints;
+    request.run_for = std::chrono::seconds{20};
+
+    // The operator: waits for the node to run, halts it, sees the state change, stops it.
+    std::vector<std::string> replies;
+    std::thread operator_thread{[&socket, &replies] {
+      const auto wait_for = [&socket](std::string_view needle) {
+        const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        std::string reply;
+        std::string error;
+        while (std::chrono::steady_clock::now() < give_up) {
+          if (jarvis::core::ok(node::admin_request(socket, "status", reply, error)) &&
+              reply.find(needle) != std::string::npos) {
+            return reply;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        }
+        return std::string{};
+      };
+      std::string reply;
+      std::string error;
+      replies.push_back(wait_for(R"("state":"RUNNING")"));
+      static_cast<void>(node::admin_request(socket, "halt", reply, error));
+      replies.push_back(reply);
+      replies.push_back(wait_for(R"("trading":"HALTED")"));
+      static_cast<void>(node::admin_request(socket, "shutdown", reply, error));
+      replies.push_back(reply);
+    }};
+    st::StaticStrategySet<Tapper> set{Tapper{}};
+    live::SandboxResult result;
+    std::string error;
+    node::NoHook hook;
+    const auto started = std::chrono::steady_clock::now();
+    const Status s = live::run_sandbox(request, set, result, error, hook);
+    operator_thread.join();
+    INFO(error);
+    REQUIRE(s == Status::Ok);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{15});
+    REQUIRE(replies.size() == 4);
+    CHECK(replies[0].find(R"("ready":true,"alive":true)") != std::string::npos);
+    CHECK(replies[1] == "ok");
+    CHECK_FALSE(replies[2].empty());
+    CHECK(replies[3] == "ok");
+    CHECK(result.admin_commands == 2);
+    CHECK(result.summary.state == md::NodeState::Stopped);
+
+    // Both commands are recorded inputs, and the session replays with the same outputs.
+    node::EventLogReader reader;
+    REQUIRE(reader.open(result.directory) == Status::Ok);
+    wire::RecordView v;
+    int admins = 0;
+    while (reader.next(v) == Status::Ok) {
+      admins += v.header.kind == static_cast<std::uint16_t>(wire::RecordKind::AdminCommand) ? 1 : 0;
+    }
+    CHECK(admins == 2);
+    st::StaticStrategySet<Tapper> fresh{Tapper{}};
+    node::ReplayReport report;
+    REQUIRE(node::replay_run(result.directory, config, fresh, node::ReplayOptions{}, report,
+                             error) == Status::Ok);
+    CHECK_FALSE(report.divergence.has_value());
+    CHECK(report.outputs == result.summary.outputs);
+  }
+
   TEST_CASE("the market feed records its stream connection going down and back up") {
     ScriptedWssServer* self = nullptr;
     std::atomic<int> opens{0};
