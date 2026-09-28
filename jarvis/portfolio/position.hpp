@@ -120,6 +120,20 @@ public:
     return core::Status::Ok;
   }
 
+  // Replaces the position with `signed_raw` held at `avg_px` (reconciliation sets the venue's
+  // position, docs/architecture.md section 15.2). The totals since the node started stay; the
+  // per-position figures restart as for a newly opened position.
+  constexpr void reset(std::int64_t signed_raw, std::uint8_t precision, model::Price avg_px,
+                       core::UnixNanos ts) noexcept {
+    open(signed_raw < 0 ? model::OrderSide::Sell : model::OrderSide::Buy, precision,
+         model::ClientOrderId{}, ts);
+    signed_raw_ = signed_raw;
+    const std::uint64_t held = core::magnitude(signed_raw);
+    avg_open_raw_ = held == 0 ? 0 : core::magnitude(avg_px.raw());
+    open_notional_ = static_cast<core::u128>(avg_open_raw_) * held;
+    peak_raw_ = held;
+  }
+
   // Commission paid (positive) or a rebate (negative), in the settlement currency.
   constexpr void add_commission(std::int64_t raw) noexcept {
     commission_raw_ += raw;

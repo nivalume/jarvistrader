@@ -710,6 +710,7 @@ M2 的实测值（本仓库的云端开发容器，单核，Release 构建；`be
   - `OrderFilled` 之后按数量决定 `PartiallyFilled`、`Filled` 或 `Voided`；若订单处于 `Pending*`，状态保持不变，并把 `PartiallyFilled` 记为 `previous_status`。
   - `OrderModifyRejected`、`OrderCancelRejected`、从 `Pending*` 出发的 `OrderUpdated` 都恢复 `previous_status`。
   - 同一个 `trade_id` 的第二次成交被拒绝（`DuplicateFill`）。
+  - 过期的状态事件被拒绝（`Stale`）：OMS 记录每个订单最近一次应用的 venue 事件的交易所时间（`ts_venue`），`ts_event` 早于它的非成交事件不再应用，否则乱序到达的旧改单会覆盖新改单。成交不受此限，按 `trade_id` 只记一次。对账把比对过的订单一律视为 `T_s` 时的状态（第 15 节）。
 - nautilus 的表已经包含 `Submitted → Filled`、`PendingCancel → Filled`、`Canceled → Filled` 这些"真实世界可能发生"的边。F4 把前两条画成蓝色虚线，因为在 Binance 上它们是常态：WS API 回执与用户数据流是两条独立连接，成交或终态事件可能先于下单回执到达。
 - jarvis 新增一条边：`Submitted → Expired`。Binance 对 IOC 余量和自成交保护都回报 `EXPIRED`，它同样可能先于回执到达。nautilus 的表只有 `Submitted → Canceled`（用于 IOC/FOK）。新增边只扩大允许集合，不改变任何已有状态或事件的语义。
 - C++ 转移表由 TLA+ 规约 `OrderLifecycle` 核对（第 18 节）。修改转移表必须同时修改规约并通过形式化验证。
@@ -830,7 +831,7 @@ C++ 的 `Strategy` concept 要求以下成员函数中的任意子集，未实�
 
 Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 
-订单事件的投递顺序：venue 事件先推进 OMS，被接受后立即投递给订单所属策略；OMS 拒绝的转移、重复成交和未知订单的事件只计数、不投递。内核为命令产生的事件（`OrderSubmitted`、`OrderDenied`、`OrderPendingUpdate`、`OrderPendingCancel`）在引起它的回调返回后、同一步内按命令发出的顺序投递，这些投递中再发出的命令也在同一步内处理，总数受 `order_events` 容量约束。被停用的策略不再收到任何事件，内核撤销它的全部未完成订单。
+订单事件的投递顺序：venue 事件先推进 OMS，被接受后立即投递给订单所属策略；OMS 拒绝的转移、重复成交、过期状态和未知订单的事件只计数、不投递。对账期间暂存的 venue 事件与对账合成的事件同样走这条路径（第 15 节），`on_reconciled` 在它们之后调用，首次启动时早于 `on_start`。内核为命令产生的事件（`OrderSubmitted`、`OrderDenied`、`OrderPendingUpdate`、`OrderPendingCancel`）在引起它的回调返回后、同一步内按命令发出的顺序投递，这些投递中再发出的命令也在同一步内处理，总数受 `order_events` 容量约束。被停用的策略不再收到任何事件，内核撤销它的全部未完成订单。
 
 `Context` 的主要方法：
 
@@ -1285,9 +1286,18 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 
 ### 15.1 会话状态
 
-`Disconnected → Buffering → Snapshotting → Reconciling → Synced`。进入 `Synced` 之前 TradingState 固定为 `Halted`。
+协议的会话状态为 `Disconnected → Buffering → Snapshotting → Reconciling → Synced`。进入 `Synced` 之前 TradingState 固定为 `Halted`。
 
 朴素做法"先取快照、再订阅"会丢失两者之间的事件，所以顺序必须是先订阅、后快照。
+
+实现（M5-B2，`jarvis/execution/reconciliation.hpp`）：内核只看记录下来的输入，会话阶段为 `SyncPhase`：
+
+- `Local`：从未收到用户流的 `ConnectionStatus`（backtest、sandbox），venue 事件直接应用。
+- `Disconnected`：用户流断开。当步立即施加 TradingState 的同步保持（`SyncStarted`，`Halted`），丢弃已暂存的事件，与网络丢失在途消息一致。
+- `Buffering`：用户流连上。venue 订单事件与 `AccountState` 暂存、不应用。规约的 `Snapshotting` 与 `Reconciling` 属于适配器（发请求、组装快照），内核在 `VenueSnapshot` 到达前一直是 `Buffering`，处理它的那一步完成对账。
+- `Synced`：对账完成。同步保持在 Node 进入 `Running` 时解除，由 driver 在对账完成后推动（M5-B3），因此 `HaltedUntilSynced` 在内核层面成立。
+
+暂存容量 `ReconcileConfig::held`（默认 4096），超出时 `step` 返回 `CapacityExceeded`。适配器应在快照迟迟不到时主动重连，而不是让暂存溢出。`Synced` 时到达的快照计数后忽略，第 15.3 节的轻量对账另行实现。
 
 ### 15.2 步骤
 
@@ -1295,12 +1305,36 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 2. 取快照：账户（余额、仓位）、`openOrders`、`positionRisk`，记录快照的 `updateTime = T_s`。
 3. 对每个本地非终态订单（含 in-flight 集合中的命令）：
    - 在 `openOrders` 中：采纳交易所的 `executedQty` 与状态。
-   - 不在：`GET /fapi/v1/order?origClientOrderId=...` 查询终态并补发对应事件；返回 `-2013` 且超过宽限期，判为 `Denied(LOST)`。
+   - 不在：`GET /fapi/v1/order?origClientOrderId=...` 查询终态并补发对应事件；返回 `-2013` 且超过宽限期，判为 LOST。
    - 对有成交的 symbol 调用 `userTrades`，从最后已知的 `tradeId` 开始，合成漏掉的 `OrderFilled`（含手续费与已实现盈亏）。
-4. 交易所有、本地没有的订单：若 `ClientOrderId` 可解码为本节点上一 epoch，按遗留订单处理；否则视为外部订单。按配置 adopt（纳入管理）或 cancel。
+4. 交易所有、本地没有的订单：若 `ClientOrderId` 可解码为本节点上一 epoch，按遗留订单处理；否则视为外部订单。按配置撤单或只报告。
 5. 仓位与余额以快照**置位**，不做增量推导；与本地计算值的差异写成 `ReconciliationDiff` 事件并进入指标。
 6. 回放缓冲：只应用 `updateTime > T_s` 的事件，成交按 `(symbol, orderId, tradeId)` 去重。
 7. 产出 `ReconcileOutcome`，策略收到 `on_reconciled`，随后 `on_start`（首次启动）；TradingState 恢复为配置初值；为有挂单的 symbol 武装 `countdownCancelAll`。
+
+内核一侧（M5-B2）的做法。步骤 2 到 4 的 REST 调用由适配器完成，结果以一条 `VenueSnapshot` 记录；内核按以下顺序处理：
+
+- 本地只到 `SUBMITTED`、交易所有记录的订单，先合成 `OrderAccepted`。
+- 成交报告逐条合成 `OrderFilled`，与 venue 成交一样应用。已记过的 `trade_id` 是重复成交，丢弃，所以同一笔成交既在报告中、又在暂存中时只记一次。
+- 每个本地非终态订单与它的报告比对：
+  - 数量或价格变了，合成 `OrderUpdated`；终态合成对应终态事件（该状态没有此转移时退为 `OrderCanceled`）。
+  - 交易所为 `FILLED`、但成交报告不全的订单，以 `OrderCanceled(UNREPORTED_FILLS)` 关闭，并产生 `FILLED_QUANTITY` 差异。缺失的成交没有 `trade_id` 可去重，内核不推断成交。
+  - 交易所不认识的订单判为 LOST：从未确认的合成 `OrderRejected(LOST)`，已确认的合成 `OrderCanceled(LOST)`。从未确认、且提交时间距 `T_s` 不足 `lost_grace`（默认 5 秒）的订单可能仍在途，留待下一次对账。
+  - 比对过的订单记为 `T_s` 时的状态，之后到达的更旧状态事件为过期事件（第 8.1 节）。
+- 本节点未管理的交易所挂单产生 `EXTERNAL_ORDER` 差异。带本节点标签的（早先 epoch，或本地已关闭、已淘汰的）按 `own` 策略处理，其余按 `foreign` 策略。策略为撤单时，内核输出 `strategy_index = kNoStrategy` 的 `CancelOrder`；默认对 `own` 撤单、对 `foreign` 只报告。
+- 仓位与余额置位：
+  - 仓位按 `PositionStatusReport` 置位 venue 仓位，含 `avg_px_open`。没有报告的 instrument 视为在交易所空仓，因为 Binance `positionRisk` 只列有仓位的 symbol。各策略的份额仍由各自的成交决定。
+  - 快照没有余额时保留本地余额。
+- 暂存事件中 `ts_event > T_s` 的按交易所时间排序后应用；暂存的最新 `AccountState` 若晚于 `T_s`，覆盖快照余额。
+- 输出每个差异一条 `ReconciliationDiff`，最后一条 `ReconcileOutcome`；随后调用每个策略的 `on_reconciled`。合成事件使用交易所时间作 `ts_event`，并走 venue 事件的正常路径，策略看到的与实时事件相同。
+
+适配器组装快照的约束（不满足时不再精确）：
+
+- `T_s` 不晚于它组合的第一次 REST 调用。
+- 订阅早于 `T_s`。
+- 成交最后获取，保证仓位或余额反映的每一笔成交都在成交报告中。
+
+测试：`tests/cpp/test_reconciliation.cpp` 为每一步写了单元用例，并有一个性质测试：随机生成交易所历史（开单、逐笔成交、撤单、断线、重连、重排与重复投递、快照与对账交错），每一步检查规约的 `HaltedUntilSynced`、`CountedOnce`、`NoPhantom`，最终检查 `Converged`（成交量、开闭状态与确切状态）。变异检验：去掉成交报告、不回放暂存、断线不停止交易都会被抓到。
 
 ### 15.3 重连与持续对账
 

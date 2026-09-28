@@ -20,6 +20,7 @@
 #include "jarvis/execution/oms.hpp"
 #include "jarvis/execution/order_fsm.hpp"
 #include "jarvis/execution/order_intent.hpp"
+#include "jarvis/execution/reconciliation.hpp"
 #include "jarvis/model/client_order_id.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/identifiers.hpp"
@@ -72,6 +73,7 @@ struct TradingConfig {
   std::uint32_t parents = 256;       // execution algorithm parents working at once
   portfolio::Margin margin = portfolio::StandardMargin{};
   risk::RiskConfig risk;
+  execution::ReconcileConfig reconcile;
 };
 
 // An event the kernel produced for a strategy in this step.
@@ -90,6 +92,7 @@ struct TradingStats {
   std::uint64_t venue_events = 0;         // applied venue order events
   std::uint64_t unknown_order_events = 0; // venue events for orders the OMS does not know
   std::uint64_t refused_order_events = 0; // transitions or quantities the OMS refused
+  std::uint64_t stale_order_events = 0;   // status events older than the order's latest
   std::uint64_t duplicate_fills = 0;
   std::uint64_t dropped_events = 0; // kernel events lost to a full queue (position events)
   std::uint64_t parents = 0;        // parents accepted by Gate A
@@ -186,7 +189,7 @@ public:
         strategy_ids{strategies}, events{c.order_events},
         portfolio{portfolio::PortfolioConfig{instruments, strategies, c.currencies, c.margin}},
         risk{c.risk, instruments, strategies}, algos{c.parents, instruments},
-        event_rng_{seed ^ detail::kEventIdSalt} {
+        reconciler{c.reconcile, c.orders, c.currencies}, event_rng_{seed ^ detail::kEventIdSalt} {
     for (std::uint32_t i = 0; i < instruments; ++i) {
       static_cast<void>(definitions.push_back(std::nullopt));
     }
@@ -598,6 +601,9 @@ public:
     case execution::EventOutcome::Refused:
       ++stats.refused_order_events;
       return false;
+    case execution::EventOutcome::Stale:
+      ++stats.stale_order_events;
+      return false;
     }
     return false;
   }
@@ -626,6 +632,16 @@ public:
         dispatch(p.kind, [&](const auto& algo) { return algo.on_event(p, ctx, event); });
     static_cast<void>(algos.settle(parent));
     return st;
+  }
+
+  // The header of an event the kernel synthesizes for order `index` at venue time `ts_event`
+  // (reconciliation).
+  [[nodiscard]] model::OrderEventHeader venue_header(const core::EventKey& now, std::uint32_t index,
+                                                     core::UnixNanos ts_event) noexcept {
+    const execution::OrderRecord& r = oms.at(index);
+    model::OrderEventHeader h = header(now, r.strategy, r);
+    h.ts_event = ts_event;
+    return h;
   }
 
   // ---- market inputs the portfolio values positions with ----------------------------------
@@ -865,6 +881,7 @@ public:
   portfolio::Portfolio portfolio;
   risk::RiskEngine risk;
   AlgoBook algos;
+  execution::Reconciler reconciler;
   TradingStats stats;
 
 private:

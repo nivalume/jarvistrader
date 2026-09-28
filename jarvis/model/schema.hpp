@@ -293,8 +293,9 @@ template <typename F> constexpr void fields(FillReport& e, F&& f) {
 }
 template <typename F> constexpr void fields(PositionStatusReport& e, F&& f) {
   f("account_id", e.account_id), f("instrument_id", e.instrument_id),
-      f("position_side", e.position_side), f("quantity", e.quantity), f("report_id", e.report_id),
-      f("ts_last", e.ts_last), f("ts_init", e.ts_init);
+      f("position_side", e.position_side), f("quantity", e.quantity),
+      f("avg_px_open", e.avg_px_open), f("report_id", e.report_id), f("ts_last", e.ts_last),
+      f("ts_init", e.ts_init);
 }
 
 // ---- kernel outputs ------------------------------------------------------------------------

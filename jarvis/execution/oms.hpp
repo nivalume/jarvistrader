@@ -45,6 +45,7 @@ struct OrderRecord {
   OrderState state;
   core::i128 fill_notional = 0; // sum of last_px.raw * last_qty.raw (10^18 scale)
   core::UnixNanos ts_init;
+  core::UnixNanos ts_venue;        // venue time of the latest venue event applied
   std::uint32_t trades = kNoIndex; // head of this order's trade list
   std::uint32_t parent = kNoIndex; // the execution algorithm's parent slot, for child orders
   std::uint64_t parent_seq = 0;    // and that parent's ClientOrderId sequence number (the slot

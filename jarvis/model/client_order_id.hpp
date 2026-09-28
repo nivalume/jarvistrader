@@ -84,6 +84,8 @@ public:
   }
 
   [[nodiscard]] constexpr std::uint64_t last_seq() const noexcept { return seq_; }
+  [[nodiscard]] constexpr std::string_view node_tag() const noexcept { return tag_.view(); }
+  [[nodiscard]] constexpr std::uint64_t epoch() const noexcept { return epoch_; }
 
   // The id this generator gave (or will give) sequence number `seq`.
   [[nodiscard]] constexpr core::Status id_of(std::uint64_t seq, ClientOrderId& out) const noexcept {

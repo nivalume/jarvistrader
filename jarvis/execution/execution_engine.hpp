@@ -18,14 +18,17 @@
 //                  (an overfill, a void of more than was filled);
 //   DuplicateFill  a second report of a trade already applied (TRADE_LITE and
 //                  ORDER_TRADE_UPDATE, section 8.3); the caller books its commission when
-//                  the first report was Lite (Oms::take_pending_commission).
+//                  the first report was Lite (Oms::take_pending_commission);
+//   Stale          a status event older (by venue time) than the latest venue event applied to
+//                  the order, delivered out of order: applying it would undo a newer change.
+//                  Fills are never stale: a trade counts whatever its time, once.
 //
 // OrderInitialized is not accepted from outside: orders enter the OMS through submit, and
 // adopting a venue order is reconciliation's (section 15).
 
 namespace jarvis::execution {
 
-enum class EventOutcome : std::uint8_t { Applied, UnknownOrder, Refused, DuplicateFill };
+enum class EventOutcome : std::uint8_t { Applied, UnknownOrder, Refused, DuplicateFill, Stale };
 
 namespace detail {
 
@@ -73,6 +76,11 @@ core::Status apply_to(Oms& oms, std::uint32_t index, OrderEventKind kind, const 
   if (!kind_of(event, kind)) {
     return EventOutcome::Refused; // OrderInitialized
   }
+  const core::UnixNanos ts = model::header_of(event).ts_event;
+  const bool fill = kind == OrderEventKind::Filled || kind == OrderEventKind::FillVoided;
+  if (!fill && ts < oms.at(index).ts_venue) {
+    return EventOutcome::Stale;
+  }
   const std::uint32_t i = index;
   const core::Status s = std::visit(
       [&oms, i, kind](const auto& e) noexcept {
@@ -86,7 +94,12 @@ core::Status apply_to(Oms& oms, std::uint32_t index, OrderEventKind kind, const 
   if (s == core::Status::DuplicateFill) {
     return EventOutcome::DuplicateFill;
   }
-  return core::ok(s) ? EventOutcome::Applied : EventOutcome::Refused;
+  if (!core::ok(s)) {
+    return EventOutcome::Refused;
+  }
+  OrderRecord& r = oms.at(index);
+  r.ts_venue = ts > r.ts_venue ? ts : r.ts_venue;
+  return EventOutcome::Applied;
 }
 
 } // namespace jarvis::execution

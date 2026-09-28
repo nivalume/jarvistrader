@@ -28,10 +28,12 @@ template <typename SS>
 concept StrategySet =
     requires(SS& ss, StrategyIndex i, Context& ctx, const DataView& data, const BatchView& batch,
              core::TimerKey key, core::UnixNanos ts, const model::StrategyError& error,
-             const model::OrderEvent& order_event, const model::PositionEvent& position_event) {
+             const model::OrderEvent& order_event, const model::PositionEvent& position_event,
+             const model::ReconcileOutcome& outcome) {
       { ss.size() } -> std::convertible_to<std::size_t>;
       { ss.on_start(i, ctx) } -> std::same_as<core::Status>;
       { ss.on_stop(i, ctx) } -> std::same_as<core::Status>;
+      { ss.on_reconciled(i, ctx, outcome) } -> std::same_as<core::Status>;
       { ss.on_data(i, ctx, data) } -> std::same_as<core::Status>;
       { ss.on_batch(i, ctx, batch) } -> std::same_as<core::Status>;
       { ss.on_timer(i, ctx, key, ts) } -> std::same_as<core::Status>;
@@ -53,6 +55,9 @@ public:
   }
   core::Status on_stop(StrategyIndex i, Context& ctx) {
     return visit(i, [&](auto& s) { return invoke_stop(s, ctx); });
+  }
+  core::Status on_reconciled(StrategyIndex i, Context& ctx, const model::ReconcileOutcome& o) {
+    return visit(i, [&](auto& s) { return invoke_reconciled(s, ctx, o); });
   }
   core::Status on_data(StrategyIndex i, Context& ctx, const DataView& data) {
     return visit(i, [&](auto& s) { return invoke_data(s, ctx, data); });
@@ -98,6 +103,7 @@ struct StrategyVTable {
   core::Status (*on_error)(void* self, Context& ctx, const model::StrategyError& error);
   core::Status (*on_order_event)(void* self, Context& ctx, const model::OrderEvent& event);
   core::Status (*on_position_event)(void* self, Context& ctx, const model::PositionEvent& event);
+  core::Status (*on_reconciled)(void* self, Context& ctx, const model::ReconcileOutcome& outcome);
 };
 
 template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexcept {
@@ -121,6 +127,9 @@ template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexc
       },
       [](void* self, Context& ctx, const model::PositionEvent& event) {
         return invoke_position_event(*static_cast<S*>(self), ctx, event);
+      },
+      [](void* self, Context& ctx, const model::ReconcileOutcome& outcome) {
+        return invoke_reconciled(*static_cast<S*>(self), ctx, outcome);
       },
   };
 }
@@ -147,6 +156,9 @@ public:
   }
   core::Status on_stop(StrategyIndex i, Context& ctx) {
     return entries_[i].vtable->on_stop(entries_[i].self, ctx);
+  }
+  core::Status on_reconciled(StrategyIndex i, Context& ctx, const model::ReconcileOutcome& o) {
+    return entries_[i].vtable->on_reconciled(entries_[i].self, ctx, o);
   }
   core::Status on_data(StrategyIndex i, Context& ctx, const DataView& data) {
     return entries_[i].vtable->on_data(entries_[i].self, ctx, data);

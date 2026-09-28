@@ -439,6 +439,39 @@ TEST_SUITE("unit") {
     CHECK(units(oms.at(i).state.quantity()) == 4);
     CHECK(oms.at(i).price == px("99.50"));
   }
+
+  TEST_CASE("venue events: a status older than the order's latest is stale; fills never are") {
+    ex::Oms oms{8, 32};
+    std::uint32_t i = ex::kNoIndex;
+    REQUIRE(oms.create(order_record(1), i) == Status::Ok);
+    REQUIRE(oms.apply(i, K::Submitted) == Status::Ok);
+    std::uint32_t index = ex::kNoIndex;
+    const auto at = [](auto e, std::uint64_t ts) {
+      e.header.client_order_id = cid(1);
+      e.header.ts_event = jarvis::core::UnixNanos{ts};
+      return m::OrderEvent{e};
+    };
+    m::OrderAccepted accepted;
+    accepted.venue_order_id = make_id<m::VenueOrderId>("88");
+    REQUIRE(ex::apply_order_event(oms, at(accepted, 10), index) == ex::EventOutcome::Applied);
+    m::OrderUpdated newer;
+    newer.quantity = q(3);
+    newer.price = px("99.00");
+    REQUIRE(ex::apply_order_event(oms, at(newer, 20), index) == ex::EventOutcome::Applied);
+    CHECK(oms.at(i).ts_venue == jarvis::core::UnixNanos{20});
+    m::OrderUpdated older = newer;
+    older.quantity = q(4);
+    CHECK(ex::apply_order_event(oms, at(older, 15), index) == ex::EventOutcome::Stale);
+    CHECK(units(oms.at(i).state.quantity()) == 3);
+    CHECK(ex::apply_order_event(oms, at(older, 20), index) ==
+          ex::EventOutcome::Applied); // the same venue time is not older
+    m::OrderFilled fill;
+    fill.trade_id = tid("t1");
+    fill.last_qty = q(1);
+    fill.last_px = px("99.00");
+    CHECK(ex::apply_order_event(oms, at(fill, 5), index) == ex::EventOutcome::Applied);
+    CHECK(oms.at(i).ts_venue == jarvis::core::UnixNanos{20});
+  }
 }
 
 TEST_SUITE("property") {

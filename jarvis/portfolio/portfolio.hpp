@@ -105,6 +105,15 @@ public:
     return core::Status::Ok;
   }
 
+  // Reconciliation sets the venue position of instrument `slot` to `signed_raw` at `avg_px`
+  // (docs/architecture.md section 15.2); the strategies' shares stay as their fills made them.
+  void set_venue_position(std::uint32_t slot, std::int64_t signed_raw, std::uint8_t precision,
+                          model::Price avg_px, core::UnixNanos ts) noexcept {
+    if (slot < venue_.size()) {
+      venue_[slot].reset(signed_raw, precision, avg_px, ts);
+    }
+  }
+
   void set_mark(std::uint32_t slot, model::Price mark) noexcept {
     if (slot < marks_.size()) {
       marks_[slot].mark = mark;

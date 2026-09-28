@@ -56,6 +56,7 @@ jarvis_add_layer_test(risk SOURCES cpp/test_risk.cpp SUITES unit property confor
 target_compile_definitions(test_risk PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 jarvis_add_layer_test(engine SOURCES cpp/test_engine.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(execution SOURCES cpp/test_execution.cpp SUITES unit property conformance LIBS jarvis::kernel)
+jarvis_add_layer_test(reconciliation SOURCES cpp/test_reconciliation.cpp SUITES unit property LIBS jarvis::kernel)
 target_compile_definitions(test_execution PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 jarvis_add_layer_test(matching SOURCES cpp/test_matching.cpp SUITES unit property LIBS jarvis::kernel)
 jarvis_add_layer_test(backtest SOURCES cpp/test_backtest.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)

@@ -18,6 +18,8 @@ Callbacks::
     on_order_event(ctx, event)             every event of this strategy's orders
     on_position_event(ctx, event)          this strategy's positions: opened, changed, closed,
                                            adjusted (funding)
+    on_reconciled(ctx, outcome)            the account was reconciled with the venue (live: at
+                                           start, before on_start, and after each reconnect)
 
 Orders: ``ctx.submit(ctx.limit(iid, side, qty, price))`` returns the ClientOrderId; the outcome
 (submitted or denied, then the venue's answers) arrives in ``on_order_event``. ``ctx.modify``,
@@ -71,6 +73,7 @@ CALLBACKS = (
     "on_error",
     "on_order_event",
     "on_position_event",
+    "on_reconciled",
 )
 
 

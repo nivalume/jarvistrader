@@ -24,6 +24,8 @@
 // becomes a StrategyError event.
 //
 //   on_start(ctx) / on_stop(ctx)                  node enters Running / Stopping
+//   on_reconciled(ctx, ReconcileOutcome)          the account was reconciled with the venue (at
+//                                                 start, before on_start, and after reconnects)
 //   on_trade(ctx, TradeTick)                      trades
 //   on_quote(ctx, QuoteTick)                      best bid and ask
 //   on_book(ctx, BookView)                        the book after an update
@@ -87,6 +89,15 @@ template <typename S> core::Status invoke_start(S& s, Context& ctx) {
 template <typename S> core::Status invoke_stop(S& s, Context& ctx) {
   if constexpr (requires { s.on_stop(ctx); }) {
     return detail::status_of([&] { return s.on_stop(ctx); });
+  } else {
+    return core::Status::Ok;
+  }
+}
+
+template <typename S>
+core::Status invoke_reconciled(S& s, Context& ctx, const model::ReconcileOutcome& outcome) {
+  if constexpr (requires { s.on_reconciled(ctx, outcome); }) {
+    return detail::status_of([&] { return s.on_reconciled(ctx, outcome); });
   } else {
     return core::Status::Ok;
   }

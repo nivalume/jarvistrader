@@ -216,7 +216,8 @@ constexpr std::string_view kCallbackNames[] = { // NOLINT(cppcoreguidelines-avoi
     "on_timer",
     "on_error",
     "on_order_event",
-    "on_position_event"};
+    "on_position_event",
+    "on_reconciled"};
 
 enum Callback : std::uint8_t {
   kOnStart,
@@ -239,8 +240,10 @@ enum Callback : std::uint8_t {
   kOnError,
   kOnOrderEvent,
   kOnPositionEvent,
+  kOnReconciled,
   kCallbackCount
 };
+static_assert(std::size(kCallbackNames) == kCallbackCount);
 
 struct HostOptions {
   bool measure_overruns = false; // sandbox and live; never in backtest or replay
@@ -603,12 +606,22 @@ struct HostVTable {
       return h.call(ctx, kOnPositionEvent, event);
     });
   }
+  static Status on_reconciled(void* p, st::Context& ctx, const m::ReconcileOutcome& o) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnReconciled)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnReconciled, [&] {
+      h.gil_->acquire();
+      return h.call(ctx, kOnReconciled, nb::cast(o, nb::rv_policy::copy));
+    });
+  }
 };
 
 const st::StrategyVTable PyStrategyHost::kVTable{
-    &HostVTable::on_start,       &HostVTable::on_stop,          &HostVTable::on_data,
-    &HostVTable::on_batch,       &HostVTable::on_timer,         &HostVTable::on_error,
-    &HostVTable::on_order_event, &HostVTable::on_position_event};
+    &HostVTable::on_start,       &HostVTable::on_stop,           &HostVTable::on_data,
+    &HostVTable::on_batch,       &HostVTable::on_timer,          &HostVTable::on_error,
+    &HostVTable::on_order_event, &HostVTable::on_position_event, &HostVTable::on_reconciled};
 
 // ---- node setup -----------------------------------------------------------------------------
 

@@ -22,7 +22,7 @@
 // Left out from nautilus: OrderStatusReport's order_list_id, contingency_type, expire_time,
 // trigger_price, trigger_type, limit_offset, trailing_offset(_type), avg_px, display_qty,
 // cancel_reason, ts_triggered; FillReport's venue_position_id; PositionStatusReport's
-// venue_position_id and avg_px_open (netting accounts: one position per instrument).
+// venue_position_id (netting accounts: one position per instrument).
 
 namespace jarvis::model {
 
@@ -30,7 +30,7 @@ namespace jarvis::model {
 enum class ReconcileDiffKind : std::uint8_t {
   Position = 0,       // the venue position (signed raw) against the local one
   Balance = 1,        // a wallet balance
-  FilledQuantity = 2, // an order's filled quantity, before the missed fills were applied
+  FilledQuantity = 2, // an order's filled quantity the fill reports do not account for
   LostOrder = 3,      // a local open order the venue does not know (closed as lost)
   ExternalOrder = 4,  // a venue order the node did not place
 };
@@ -100,6 +100,7 @@ struct PositionStatusReport {
   InstrumentId instrument_id;
   PositionSide position_side = PositionSide::Flat;
   Quantity quantity; // unsigned; the side says which way
+  std::optional<Price> avg_px_open;
   Uuid4 report_id;
   core::UnixNanos ts_last;
   core::UnixNanos ts_init;

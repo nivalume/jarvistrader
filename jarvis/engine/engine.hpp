@@ -17,10 +17,15 @@
 #include "jarvis/data/book.hpp"
 #include "jarvis/data/features.hpp"
 #include "jarvis/data/subscription.hpp"
+#include "jarvis/execution/oms.hpp"
+#include "jarvis/execution/reconciliation.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/model/reports.hpp"
+#include "jarvis/portfolio/portfolio.hpp"
+#include "jarvis/risk/trading_state.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -39,6 +44,12 @@
 // for commands (OrderSubmitted, OrderDenied, pending update and cancel) are delivered after the
 // input's other callbacks, in the order they arose, including those arising from these
 // deliveries.
+//
+// Reconciliation (execution/reconciliation.hpp): the user data stream's ConnectionStatus and
+// VenueSnapshot drive the account's session. While it is not synced, venue order events and
+// account states are held instead of applied; the snapshot sets the local state through
+// synthesized venue events, each delivered like a venue event with its position events right
+// after it, then the held events newer than the snapshot are applied.
 
 namespace jarvis::engine {
 
@@ -162,9 +173,14 @@ private:
     } else if constexpr (detail::is_alternative_v<T, model::Instrument>) {
       return k_.define_instrument(model::Instrument{e});
     } else if constexpr (detail::is_alternative_v<T, model::OrderEvent>) {
-      return on_venue_order_event(model::OrderEvent{e});
+      return on_venue_input(model::OrderEvent{e});
     } else if constexpr (std::is_same_v<T, model::AccountState>) {
-      return k_.trading.portfolio.set_account(e);
+      return on_venue_input(e);
+    } else if constexpr (std::is_same_v<T, model::ConnectionStatus>) {
+      return on_connection(e);
+    } else if constexpr (std::is_same_v<T, model::VenueSnapshot>) {
+      ReconcileHost host{*this};
+      return k_.trading.reconciler.reconcile(host, e);
     } else {
       return core::Status::Ok; // Shutdown is the node's
     }
@@ -543,10 +559,15 @@ private:
 
   // ---- orders -------------------------------------------------------------------------------
 
-  core::Status on_venue_order_event(const model::OrderEvent& e) {
+  // `applied`, when given, tells whether the OMS applied the event.
+  core::Status on_venue_order_event(const model::OrderEvent& e, bool* applied = nullptr) {
     StrategyIndex owner = 0;
     core::Status algo = core::Status::Ok;
-    if (!k_.trading.on_venue_event(k_.current, e, owner, k_.outputs, algo)) {
+    const bool ok = k_.trading.on_venue_event(k_.current, e, owner, k_.outputs, algo);
+    if (applied != nullptr) {
+      *applied = ok;
+    }
+    if (!ok) {
       return core::Status::Ok; // refused and unknown events are counted, not fatal
     }
     if (!core::ok(algo)) {
@@ -599,6 +620,97 @@ private:
     }
     events.clear();
   }
+
+  // ---- reconciliation -----------------------------------------------------------------------
+
+  // A venue order event or account state: held while the account is not synced.
+  core::Status on_venue_input(const model::OrderEvent& e) {
+    if (k_.trading.reconciler.holding()) {
+      return k_.trading.reconciler.hold(e);
+    }
+    return on_venue_order_event(e);
+  }
+  core::Status on_venue_input(const model::AccountState& e) {
+    if (k_.trading.reconciler.holding()) {
+      return k_.trading.reconciler.hold(e);
+    }
+    return k_.trading.portfolio.set_account(e);
+  }
+
+  // The user data stream going down halts trading at once; Running releases the hold once the
+  // account is synced again.
+  core::Status on_connection(const model::ConnectionStatus& e) {
+    if (e.kind == model::ConnectionKind::UserStream && k_.trading.reconciler.on_connection(e.up)) {
+      static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::SyncStarted));
+    }
+    return core::Status::Ok;
+  }
+
+  // Every strategy learns of the reconciliation, started or not: at start it comes before
+  // on_start.
+  void deliver_reconciled(const model::ReconcileOutcome& outcome) {
+    for (std::size_t i = 0; i < ss_->size(); ++i) {
+      const auto s = static_cast<StrategyIndex>(i);
+      if (k_.is_disabled(s)) {
+        continue;
+      }
+      strategy::Context ctx{k_, s};
+      const core::Status status = ss_->on_reconciled(s, ctx, outcome);
+      if (!core::ok(status)) {
+        k_.fail(s, status);
+      }
+    }
+  }
+
+  // What reconciliation reads and changes (execution::ReconcileHost).
+  class ReconcileHost {
+  public:
+    explicit ReconcileHost(Engine& engine) noexcept : e_{&engine} {}
+
+    [[nodiscard]] const execution::Oms& oms() const noexcept { return e_->k_.trading.oms; }
+    [[nodiscard]] portfolio::Portfolio& portfolio() noexcept { return e_->k_.trading.portfolio; }
+    [[nodiscard]] const model::Instrument* definition(std::uint32_t slot) const noexcept {
+      return e_->k_.trading.definition(slot);
+    }
+    [[nodiscard]] std::uint32_t slot_of(const model::InstrumentId& id) const noexcept {
+      std::uint32_t slot = 0;
+      return e_->slot_of(id, slot) ? slot : execution::kNoIndex;
+    }
+    [[nodiscard]] model::OrderEventHeader header(std::uint32_t index,
+                                                 core::UnixNanos ts_event) noexcept {
+      return e_->k_.trading.venue_header(e_->k_.current, index, ts_event);
+    }
+    [[nodiscard]] const model::AccountId& account_id() const noexcept {
+      return e_->k_.trading.account_id;
+    }
+    [[nodiscard]] const model::ClientOrderIdGenerator& ids() const noexcept {
+      return e_->k_.trading.ids;
+    }
+    [[nodiscard]] core::UnixNanos now() const noexcept { return e_->k_.current.ts; }
+    [[nodiscard]] std::size_t outputs_left() const noexcept {
+      return e_->k_.outputs.capacity() - e_->k_.outputs.size();
+    }
+    [[nodiscard]] core::Status apply(const model::OrderEvent& e, bool& applied) {
+      const core::Status s = e_->on_venue_order_event(e, &applied);
+      e_->deliver_order_events();
+      return s;
+    }
+    [[nodiscard]] bool emit(const model::Output& o) noexcept {
+      return core::ok(e_->k_.outputs.push_back(o));
+    }
+    void note_venue_time(std::uint32_t index, core::UnixNanos ts) noexcept {
+      execution::OrderRecord& r = e_->k_.trading.oms.at(index);
+      r.ts_venue = ts > r.ts_venue ? ts : r.ts_venue;
+    }
+    void reconciled(const model::ReconcileOutcome& outcome) {
+      e_->deliver_reconciled(outcome);
+      e_->deliver_order_events();
+    }
+
+  private:
+    Engine* e_;
+  };
+  static_assert(execution::ReconcileHost<ReconcileHost>);
 
   // ---- lifecycle, timers, errors ------------------------------------------------------------
 

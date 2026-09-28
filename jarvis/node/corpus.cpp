@@ -614,6 +614,7 @@ struct CorpusMakers {
     p.position_side =
         f.order_side == m::OrderSide::Buy ? m::PositionSide::Long : m::PositionSide::Short;
     p.quantity = f.last_qty;
+    p.avg_px_open = f.last_px;
     p.report_id = m::Uuid4::derive(g.rng_, g.seq_, 90);
     p.ts_last = g.ts_;
     p.ts_init = g.ts_;
