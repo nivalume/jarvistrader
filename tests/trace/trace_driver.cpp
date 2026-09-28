@@ -878,10 +878,14 @@ private:
     input(m::Event{event});
   }
 
-  // The driver's sync gate, as backtest::Driver applies it with await_sync.
+  // The driver's sync gate, as backtest::Driver applies it with await_sync (market data and order
+  // entry, outside the spec, stay up).
   void gate() {
+    jarvis::execution::ConnectionHealth up;
+    up.market_data = jarvis::execution::LinkState::Up;
+    up.order_entry = jarvis::execution::LinkState::Up;
     while (const std::optional<m::LifecycleReason> move = jarvis::engine::sync_move(
-               lifecycle_.state(), engine_.kernel().trading.reconciler.phase(), true)) {
+               lifecycle_.state(), engine_.kernel().trading.reconciler.phase(), true, up)) {
       transition(*move);
     }
   }

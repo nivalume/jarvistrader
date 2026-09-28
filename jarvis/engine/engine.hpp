@@ -657,6 +657,7 @@ private:
   // The user data stream going down halts trading at once; Running releases the hold once the
   // account is synced again.
   core::Status on_connection(const model::ConnectionStatus& e) {
+    k_.health.apply(e.kind, e.up);
     if (e.kind == model::ConnectionKind::UserStream && k_.trading.reconciler.on_connection(e.up)) {
       static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::SyncStarted));
     }

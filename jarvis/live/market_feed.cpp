@@ -50,6 +50,7 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
     std::unique_ptr<network::WsClient> ws;
     std::unique_ptr<network::Timer> reconnect;
     network::Backoff backoff;
+    bool open = false;
   };
 
   Impl(const ArrivalClock& clock_, MarketFeedConfig config_)
@@ -73,6 +74,8 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
   RawFrameWriter raw;
   bool recording = false;
   std::uint32_t api_conn = 0;
+  std::size_t open_streams = 0; // stream connections open
+  bool market_up = false;       // all of them, as last recorded
   std::atomic<bool> stopping{false};
   std::thread thread;
 
@@ -110,6 +113,20 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
   }
   Status depth(const adapter::DepthDiff& d) override { return books.on_diff(d, *this); }
 
+  // ConnectionStatus(MarketData): up once every stream connection is open, down when one closes.
+  void market_data(bool up) {
+    if (up == market_up) {
+      return;
+    }
+    market_up = up;
+    model::ConnectionStatus c;
+    c.venue = config.venue;
+    c.kind = model::ConnectionKind::MarketData;
+    c.up = up;
+    c.ts_init = core::UnixNanos{clock->now()};
+    static_cast<void>(event(model::Event{c}));
+  }
+
   void on_message(Conn& c, network::WsOpcode op, std::span<const std::byte> payload,
                   std::int64_t recv) {
     Counters::add(counters.messages);
@@ -129,6 +146,11 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
   void on_close(Conn& c, const std::string& reason) {
     const core::UnixNanos now{clock->now()};
     record(RawKind::Close, c.id, 0, reason, now.value());
+    if (c.open) {
+      c.open = false;
+      --open_streams;
+      market_data(false);
+    }
     if (c.depth) {
       static_cast<void>(books.disconnected(now, *this));
     }
@@ -157,6 +179,11 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
         conn->backoff.reset();
         if (conn->depth) {
           books.connected();
+        }
+        conn->open = true;
+        ++open_streams;
+        if (open_streams == conns.size()) {
+          market_data(true);
         }
       };
       h.on_message = [this, conn](network::WsOpcode op, std::span<const std::byte> payload,

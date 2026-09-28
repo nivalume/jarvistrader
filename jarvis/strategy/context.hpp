@@ -484,6 +484,7 @@ public:
   bool halt_requested = false;
   bool stopped = false; // Stopping: on_stop has run, strategies receive nothing more
   std::optional<model::ShutdownMode> shutdown; // the Shutdown input, once stepped
+  execution::ConnectionHealth health;          // market data and order entry
   CountdownState countdown;
   Trading trading;
 

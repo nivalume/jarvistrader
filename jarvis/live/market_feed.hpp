@@ -11,6 +11,7 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/spsc_ring.hpp"
+#include "jarvis/model/identifiers.hpp"
 #include "jarvis/network/io.hpp"
 
 // The md-io thread (docs/architecture.md sections 7.1, 13 and 14): it owns the market data
@@ -20,7 +21,9 @@
 // WebSocket API answers included, so that the decoded stream can be rebuilt from it.
 //
 // A dropped connection reconnects with backoff; the depth books leave Synced when the depth
-// connection drops (the kernel gets a lone CLEAR) and sync again from a fresh snapshot. A full
+// connection drops (the kernel gets a lone CLEAR) and sync again from a fresh snapshot. The feed
+// records ConnectionStatus(MarketData) up once every stream connection is open and down when one
+// closes; the sync gate moves a Running node to Degraded while it is down. A full
 // ring stops the thread until the core has read (back-pressure: dropping a book diff would
 // desynchronise the book).
 
@@ -37,6 +40,7 @@ struct MarketFeedConfig {
   adapter::SymbolTable symbols;     // the instruments, in the order of `symbol_names`
   std::vector<std::string> names;   // venue symbols ("BTCUSDT") by table index
   std::vector<std::string> streams; // full stream names ("btcusdt@aggTrade")
+  model::Venue venue;               // of the ConnectionStatus(MarketData) records
   std::string raw_frames;           // raw frame file; empty: none
   std::size_t ring_bytes = std::size_t{8} << 20U;
   std::uint16_t source_id = 1;

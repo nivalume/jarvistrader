@@ -36,7 +36,8 @@ struct RedecodeResult {
                                     node::EventLogWriter* writer, RedecodeResult& out,
                                     std::string& error);
 
-// The market data inputs of a run (the feed's source id, 1) must be exactly the first
+// The market data inputs of a run (the feed's source id, 1; its ConnectionStatus records aside,
+// since they come from connections, not frames) must be exactly the first
 // redecoded events, in order and byte for byte; later events reached the feed after the run
 // stopped. Ok with `compared` set, or InvalidState with `error` naming the first difference.
 [[nodiscard]] core::Status check_market_inputs(const std::string& run_dir,

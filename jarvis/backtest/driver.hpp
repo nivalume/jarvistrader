@@ -326,8 +326,9 @@ private:
     gate_active_ = true;
     core::Status s = core::Status::Ok;
     while (core::ok(s)) {
-      const std::optional<model::LifecycleReason> move = engine::sync_move(
-          lifecycle_.state(), engine_->kernel().trading.reconciler.phase(), options_.await_sync);
+      const std::optional<model::LifecycleReason> move =
+          engine::sync_move(lifecycle_.state(), engine_->kernel().trading.reconciler.phase(),
+                            options_.await_sync, engine_->kernel().health);
       if (!move) {
         break;
       }

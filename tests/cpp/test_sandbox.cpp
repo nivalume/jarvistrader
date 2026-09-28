@@ -12,9 +12,11 @@
 
 #include <doctest/doctest.h>
 
+#include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/redecode.hpp"
 #include "jarvis/live/sandbox_node.hpp"
+#include "jarvis/model/wire.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/replay.hpp"
 #include "jarvis/strategy/context.hpp"
@@ -25,6 +27,7 @@ namespace {
 
 namespace live = jarvis::live;
 namespace md = jarvis::model;
+namespace wire = jarvis::model::wire;
 namespace st = jarvis::strategy;
 namespace node = jarvis::node;
 using jarvis::core::Status;
@@ -169,6 +172,72 @@ dir = ")" +
 } // namespace
 
 TEST_SUITE("unit") {
+  TEST_CASE("the market feed records its stream connection going down and back up") {
+    ScriptedWssServer* self = nullptr;
+    std::atomic<int> opens{0};
+    ScriptedWssServer server{8, [&self, &opens](std::size_t conn, const std::string& m) {
+                               std::vector<WsReply> out;
+                               if (m.empty() && self->target(conn).starts_with("/market/stream")) {
+                                 if (opens++ == 0) {
+                                   out.push_back(WsReply::send(agg_trade(1, "84550.1")));
+                                   out.push_back(WsReply::drop());
+                                 } else {
+                                   out.push_back(WsReply::send(agg_trade(2, "84550.2")));
+                                 }
+                               }
+                               return out;
+                             }};
+    self = &server;
+    const TempDir dir;
+    std::string text = config_text(dir);
+    const std::string all = R"(streams = ["aggTrade", "bookTicker", "depth@100ms"])";
+    text.replace(text.find(all), all.size(), R"(streams = ["aggTrade"])");
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::parse_config(text, "sandbox.toml", {}, config, errors) == Status::Ok);
+    live::SandboxRequest request;
+    request.config = &config;
+    live::FeedEndpoints endpoints;
+    endpoints.streams = server.url("");
+    endpoints.ws_api = server.url("/ws-fapi/v1");
+    endpoints.tls.ca_file = server.ca_file();
+    request.endpoints = endpoints;
+    live::SandboxPlan plan;
+    std::string error;
+    REQUIRE(live::plan_sandbox(request, UnixNanos{1}, plan, error) == Status::Ok);
+    plan.feed.reconnect_initial = std::chrono::milliseconds{20};
+
+    const live::ArrivalClock anchor;
+    live::MarketFeed feed{anchor, plan.feed};
+    REQUIRE(feed.start(error) == Status::Ok);
+    std::vector<std::string> seen;
+    wire::DecodeScratch scratch{16};
+    const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (seen.size() < 5 && std::chrono::steady_clock::now() < give_up) {
+      bool empty = false;
+      const std::span<const std::byte> record = feed.ring().peek(empty);
+      if (empty) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        continue;
+      }
+      wire::RecordView v;
+      md::Event e;
+      REQUIRE(wire::decode_record(record, v) == Status::Ok);
+      REQUIRE(wire::decode_event(v, scratch, e) == Status::Ok);
+      if (const auto* c = std::get_if<md::ConnectionStatus>(&e)) {
+        CHECK(c->kind == md::ConnectionKind::MarketData);
+        CHECK(c->venue.view() == "BINANCE");
+        seen.emplace_back(c->up ? "up" : "down");
+      } else if (std::holds_alternative<md::TradeTick>(e)) {
+        seen.emplace_back("trade");
+      }
+      feed.ring().release();
+    }
+    feed.stop();
+    CHECK(seen == std::vector<std::string>{"up", "trade", "down", "up", "trade"});
+    CHECK(server.error().empty());
+  }
+
   TEST_CASE("a sandbox session replays under the backtest wiring with the same outputs") {
     ScriptedWssServer* self = nullptr;
     ScriptedWssServer server{
@@ -277,7 +346,8 @@ TEST_SUITE("unit") {
     INFO(error);
     REQUIRE(live::check_market_inputs(result.directory, redecoded.events, compared, error) ==
             Status::Ok);
-    CHECK(compared == result.summary.data_events);
+    // Every feed input but its ConnectionStatus(MarketData) up, which no frame decodes to.
+    CHECK(compared + 1 == result.summary.data_events);
 
     // The environment equivalence: the recorded session under the backtest wiring.
     st::StaticStrategySet<Tapper> fresh{Tapper{}};

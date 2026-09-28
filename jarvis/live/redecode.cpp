@@ -190,7 +190,9 @@ Status check_market_inputs(const std::string& run_dir, const std::vector<Redecod
   wire::RecordView v;
   compared = 0;
   while ((s = reader.next(v)) == Status::Ok) {
-    if (v.header.kind >= wire::kFirstOutputKind || v.header.source_id != 1) {
+    // The feed's ConnectionStatus records come from its connections, not from decoding.
+    if (v.header.kind >= wire::kFirstOutputKind || v.header.source_id != 1 ||
+        v.header.kind == static_cast<std::uint16_t>(wire::RecordKind::ConnectionStatus)) {
       continue;
     }
     const bool same = compared < events.size() && events[compared].kind == v.header.kind &&

@@ -202,7 +202,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
 - 停止（`SIGINT`、`SIGTERM`、`--run-for` 到期或 `HaltNode`）按 `[node] shutdown` 进行（第 19.4 节）：默认撤单、在 `Stopping` 中等待交易所确认，再解除 `countdownCancelAll`。
-- 尚未实现：REST 下单兜底、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
+- 尚未实现：REST 下单兜底、行情新鲜度（按时间判断行情陈旧）、每 60 秒轻量对账。
 
 ### 4.2 NodeConfig
 
@@ -325,7 +325,13 @@ public:
 | `Stopping` | 写最终快照与报告 | 默认 `cancel_all_then_exit`：撤单、确认、排空出站环、关闭连接 | core 线程，依据 EOF 或 `Shutdown` 事件 |
 | `Faulted` | 保留日志，非零退出 | KillSwitch（尽力撤全单），非零退出 | core 线程，依据 `step` 返回错误、容量耗尽、日志写失败、Python 致命错误 |
 
-- 同步闸门（`jarvis/engine/sync_gate.hpp`，M5-B3）：driver 在每个输入之后按账户的对账阶段推动生命周期，直到不再需要转移为止，每次转移都记录下来。规则：`Syncing` 在账户已同步时进入 `Running`；`Syncing` 或 `Running` 在用户流断开时进入 `Degraded`（`Running` 在用户流重连、重新缓冲时也是）；`Degraded` 在用户流恢复后回到 `Syncing`。`DriverOptions::await_sync`（实盘）让节点在前导事件之后停在 `Syncing`，直到收到用户流并完成对账；backtest 与 sandbox 没有用户流，照旧立即进入 `Running`，闸门不会移动它们。回放不需要闸门，因为转移已经记录在日志中。行情与 WS API 的健康状态尚未接入闸门（随 `LiveWiring`）。
+- 同步闸门（`jarvis/engine/sync_gate.hpp`，M5-B3、M5-D3）：driver 在每个输入之后按账户的对账阶段与其他连接的状态推动生命周期，直到不再需要转移为止，每次转移都记录下来。回放不需要闸门，因为转移已经记录在日志中。
+  - 连接状态来自记录的 `ConnectionStatus` 输入：用户流由对账器跟踪；行情（md-io 线程在全部行情连接打开时记录 up，任一关闭时记录 down）与下单通道（venue-io 线程在 WS API 就绪与断开时记录）由内核的 `ConnectionHealth` 跟踪，状态为未知、up 或 down。
+  - `Syncing → Running`：账户已同步，且没有连接处于 down；`DriverOptions::await_sync`（实盘）还要求收到过用户流并完成对账、下单通道已经 up。
+  - `Syncing → Degraded`：对账期间用户流断开。
+  - `Running → Degraded`：用户流断开或重连后重新缓冲，或行情、下单通道 down。TradingState 随之降为 `Reducing`；`countdownCancelAll` 不再续期，所以降级持续整个倒计时后由交易所撤单。
+  - `Degraded → Syncing`：用户流恢复（缓冲中或已同步）且行情与下单通道都不处于 down；随后按上面的规则回到 `Running`。
+  - backtest 没有这些输入，闸门不会移动它；sandbox 没有用户流，按账户已同步处理，只有行情连接会让它降级。
 - 转移表位于 `jarvis/engine/lifecycle.hpp`，是纯函数 `next_state(from, reason)`。原因码：`Configured`（Init → Wired）、`RunRequested`（Wired → Starting）、`Started`（Starting → Syncing）、`Synced`（Syncing → Running）、`HealthLost`（Syncing 或 Running → Degraded）、`HealthRestored`（Degraded → Syncing）、`EndOfData`（Running → Stopping）、`ShutdownRequested`（Wired 到 Degraded 之间任一状态 → Stopping；Stopping 中重复请求保持原状态）、`Drained`（Stopping → Stopped）、`Fault`（任一非终态 → Faulted）。表外的组合返回 `InvalidTransition`。
 - 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它；回放时每条记录都必须与转移表给出的结果一致，否则报 `InvalidTransition`。
 - 只有 core 线程推动状态。IO、admin、信号处理只入队事件。
@@ -625,7 +631,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 
 *F2：引擎状态只有 core 线程一个写者。其他线程只通过 SPSC 环与它交换数据。Python 节点只在一批事件的处理期间持有 GIL。*
 
-- 每个 md-io 线程拥有一个或多个行情连接，在本线程完成 TLS、WebSocket 解帧、`Codec` 解码，推入环的是归一化后的定点事件。
+- 每个 md-io 线程拥有一个或多个行情连接，在本线程完成 TLS、WebSocket 解帧、`Codec` 解码，推入环的是归一化后的定点事件。全部行情连接打开时它记录 `ConnectionStatus(MarketData, up)`，任一连接关闭时记录 down（同步闸门据此降级，第 4.4 节）。
 - order-sender 线程拥有 WS API 连接。它从出站环取命令发出，并把回执与错误码推入自己的回执环。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
@@ -935,7 +941,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
   - 两次续期之间，某个 instrument 若还未被覆盖就有新单，同一步里紧跟在 `SubmitOrder` 之后产出它的 `CountdownCancelAll`。
   - 离开 `Running`（`Degraded`、`Syncing`、`Stopping`）后定时器到期不再续期，也不再重排：节点失步超过整个倒计时，由交易所撤单；回到 `Running` 时立即续期。
   - 只在 `env = "live"` 时打开（`kernel_config`）；设置值为 0 表示关闭，非 0 时至少 10000 毫秒，因为续期间隔是它的四分之一。
-- 命令经 venue-io 的 REST 线程发出（WS API 没有这个方法）。失败计入 `VenueIoStats::countdown_failures` 并写入 `last_error`，交易所上已有的倒计时继续走；接入健康事件随 M5-D3。venue-io 停止时，已交给 REST 线程的倒计时请求仍会发出。
+- 命令经 venue-io 的 REST 线程发出（WS API 没有这个方法）。失败计入 `VenueIoStats::countdown_failures` 并写入 `last_error`，不作为健康事件：交易所上已有的倒计时继续走，一直失败时由交易所撤单，节点从用户流看到撤单。venue-io 停止时，已交给 REST 线程的倒计时请求仍会发出。
 - 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时（第 19.4 节）。
 
 ### 10.4 限速窗口与权重反馈
@@ -1186,7 +1192,7 @@ Binance 的 SBE 可用范围（2026-09-26 按官方文档核对）：
 - **解码事件日志**：归一化事件，即 WAL，回放只读这一份（第 16 节）。
 - **原始帧文件**：每个连接一份，记录 `(recv_ts, conn_id, len, bytes)`，由 IO 线程写入。`persistence.raw_frames` 可设为 `true`、`false` 或 `sampled`。
 
-只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis-capture redecode raw-frames.jraw --exchange-info JSON [--out DIR] [--check RUN_DIR]` 可以从原始帧重建解码日志用于研究（放在 `jarvis-capture` 而不是 `jarvis`，因为 `jarvis` CLI 在不带 live shell 的构建中也要能编译）。重解码用与 md-io 线程相同的 Codec 与订单簿同步，按文件中的顺序处理同样的帧；IO 线程按处理顺序写帧，WS API 的快照请求与应答也写入，所以结果与当时交给 core 的事件流逐条相同。`--check` 要求运行日志中的行情输入恰好是重解码事件的前缀，逐字节相同；之后的几条是运行停止时仍在环里、没有被步进的事件。2026-09-27 对一段 40 秒的生产 sandbox 会话（含 depth 与一次快照）验证：运行的 2704 条行情输入与重解码结果逐字节相同。
+只存解码日志，修复 Codec 缺陷后无法重新推导，也没有 fuzz 语料；只存原始帧，回放就依赖 Codec 版本，且回放时必须解码。两者都存，`jarvis-capture redecode raw-frames.jraw --exchange-info JSON [--out DIR] [--check RUN_DIR]` 可以从原始帧重建解码日志用于研究（放在 `jarvis-capture` 而不是 `jarvis`，因为 `jarvis` CLI 在不带 live shell 的构建中也要能编译）。重解码用与 md-io 线程相同的 Codec 与订单簿同步，按文件中的顺序处理同样的帧；IO 线程按处理顺序写帧，WS API 的快照请求与应答也写入，所以结果与当时交给 core 的事件流逐条相同。`--check` 要求运行日志中的行情输入（md-io 的 `ConnectionStatus` 记录除外，它们来自连接而不是帧）恰好是重解码事件的前缀，逐字节相同；之后的几条是运行停止时仍在环里、没有被步进的事件。2026-09-27 对一段 40 秒的生产 sandbox 会话（含 depth 与一次快照）验证：运行的 2704 条行情输入与重解码结果逐字节相同。
 
 原始帧文件的格式（`jarvis/live/raw_frames.hpp`，小端）：文件头为 `"JVRAWFR1"`、`u32 version`、`u32 reserved`；每条记录为 `u64 recv_ns`、`u32 conn_id`、`u8 kind`、`u8 opcode`、`u16 reserved`、`u32 length` 加字节。`kind` 区分 Open（字节为 URL）、Message、Close（字节为原因）与 Sent（节点在该连接上发出的请求，例如 WS API 的 depth 请求，用来把快照应答与其 symbol 配对；带凭证的请求从不写入），因此重解码知道每个连接订阅了什么，也能看到断线。`recv_ns` 是 UTC 纳秒，取自启动时锚定一次的单调时钟。`jarvis-capture record|dump|decode` 采集、打印并离线解码这种文件，codec 的测试夹具与 fuzz 语料都由它采集。
 

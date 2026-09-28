@@ -694,6 +694,13 @@ TEST_SUITE("unit") {
       c.ts_init = UnixNanos{ts};
       return md::Event{c};
     };
+    const auto entry = [](std::uint64_t ts, bool up) {
+      md::ConnectionStatus c;
+      c.kind = md::ConnectionKind::OrderEntry;
+      c.up = up;
+      c.ts_init = UnixNanos{ts};
+      return md::Event{c};
+    };
     const auto snapshot = [](std::uint64_t ts) {
       md::VenueSnapshot v;
       v.ts_snapshot = UnixNanos{ts - 1};
@@ -701,10 +708,11 @@ TEST_SUITE("unit") {
       return md::Event{v};
     };
     const std::vector<Keyed> arrivals = {
-        {key(1000, 1, 1), trade(1000, 1000)},   {key(2000, 2, 2), stream(2000, true)},
-        {key(3000, 2, 3), snapshot(3000)},      {key(4000, 1, 4), trade(4000, 1001)},
-        {key(5000, 2, 5), stream(5000, false)}, {key(6000, 2, 6), stream(6000, true)},
-        {key(7000, 2, 7), snapshot(7000)},      {key(8000, 1, 8), trade(8000, 1002)}};
+        {key(900, 2, 0), entry(900, true)},    {key(1000, 1, 1), trade(1000, 1000)},
+        {key(2000, 2, 2), stream(2000, true)}, {key(3000, 2, 3), snapshot(3000)},
+        {key(4000, 1, 4), trade(4000, 1001)},  {key(5000, 2, 5), stream(5000, false)},
+        {key(6000, 2, 6), stream(6000, true)}, {key(7000, 2, 7), snapshot(7000)},
+        {key(8000, 1, 8), trade(8000, 1002)}};
     std::vector<std::string> calls;
     Echo echo;
     echo.log = &calls;
@@ -734,23 +742,94 @@ TEST_SUITE("unit") {
     CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
   }
 
-  TEST_CASE("the sync gate follows the account's phase") {
-    using jarvis::engine::sync_move;
+  TEST_CASE("a node whose market data goes down degrades until it is back") {
+    const auto market = [](std::uint64_t ts, bool up) {
+      md::ConnectionStatus c;
+      c.kind = md::ConnectionKind::MarketData;
+      c.up = up;
+      c.ts_init = UnixNanos{ts};
+      return md::Event{c};
+    };
+    const std::vector<Keyed> arrivals = {
+        {key(900, 1, 0), market(900, true)},    {key(1000, 1, 1), trade(1000, 1000)},
+        {key(2000, 1, 2), market(2000, false)}, {key(3000, 1, 3), trade(3000, 1001)},
+        {key(4000, 1, 4), market(4000, true)},  {key(5000, 1, 5), trade(5000, 1002)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    LivePushSource source;
+    MemoryRecorder recorder;
+    bt::Driver driver{engine, source, recorder}; // sandbox: no user stream
+    StepPump pump{arrivals, source, 500, 5500};
+    bt::RunSummary summary;
+    REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+
+    std::vector<std::string> moves;
+    for (const Keyed& k : recorder.inputs) {
+      if (const auto* lc = std::get_if<md::NodeLifecycle>(&k.event)) {
+        moves.push_back(std::string{md::to_string(lc->to)} + "@" +
+                        std::to_string(k.key.ts.value()));
+      }
+    }
+    CHECK(moves == std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500",
+                                            "RUNNING@500", "DEGRADED@2000", "SYNCING@4000",
+                                            "RUNNING@4000", "STOPPING@5500", "STOPPED@5500"});
+    // Market data still reaches the strategy; on_start runs once.
+    CHECK(calls == std::vector<std::string>{"start@500", "trade@1000", "trade@3000", "trade@5000",
+                                            "stop@5500"});
+    CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
+  }
+
+  TEST_CASE("the sync gate follows the account's phase and the other connections") {
     using ex = jarvis::execution::SyncPhase;
+    using jarvis::execution::ConnectionHealth;
+    using jarvis::execution::LinkState;
     using md::LifecycleReason;
     using md::NodeState;
-    CHECK(sync_move(NodeState::Syncing, ex::Local, false) == LifecycleReason::Synced);
-    CHECK(sync_move(NodeState::Syncing, ex::Local, true) == std::nullopt);
-    CHECK(sync_move(NodeState::Syncing, ex::Buffering, true) == std::nullopt);
-    CHECK(sync_move(NodeState::Syncing, ex::Synced, true) == LifecycleReason::Synced);
-    CHECK(sync_move(NodeState::Syncing, ex::Disconnected, true) == LifecycleReason::HealthLost);
-    CHECK(sync_move(NodeState::Running, ex::Local, false) == std::nullopt);
-    CHECK(sync_move(NodeState::Running, ex::Synced, true) == std::nullopt);
-    CHECK(sync_move(NodeState::Running, ex::Disconnected, true) == LifecycleReason::HealthLost);
-    CHECK(sync_move(NodeState::Running, ex::Buffering, false) == LifecycleReason::HealthLost);
-    CHECK(sync_move(NodeState::Degraded, ex::Disconnected, true) == std::nullopt);
-    CHECK(sync_move(NodeState::Degraded, ex::Buffering, true) == LifecycleReason::HealthRestored);
-    CHECK(sync_move(NodeState::Degraded, ex::Synced, true) == LifecycleReason::HealthRestored);
-    CHECK(sync_move(NodeState::Stopping, ex::Disconnected, true) == std::nullopt);
+    const auto health = [](LinkState market, LinkState entry) {
+      ConnectionHealth h;
+      h.market_data = market;
+      h.order_entry = entry;
+      return h;
+    };
+    const ConnectionHealth fresh = health(LinkState::Unknown, LinkState::Unknown);
+    const ConnectionHealth up = health(LinkState::Up, LinkState::Up);
+    const auto move = [](NodeState s, ex p, bool await, ConnectionHealth h) {
+      return jarvis::engine::sync_move(s, p, await, h);
+    };
+    // The account's phase.
+    CHECK(move(NodeState::Syncing, ex::Local, false, fresh) == LifecycleReason::Synced);
+    CHECK(move(NodeState::Syncing, ex::Local, true, up) == std::nullopt);
+    CHECK(move(NodeState::Syncing, ex::Buffering, true, up) == std::nullopt);
+    CHECK(move(NodeState::Syncing, ex::Synced, true, up) == LifecycleReason::Synced);
+    CHECK(move(NodeState::Syncing, ex::Disconnected, true, up) == LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Running, ex::Local, false, fresh) == std::nullopt);
+    CHECK(move(NodeState::Running, ex::Synced, true, up) == std::nullopt);
+    CHECK(move(NodeState::Running, ex::Disconnected, true, up) == LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Running, ex::Buffering, false, up) == LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Degraded, ex::Disconnected, true, up) == std::nullopt);
+    CHECK(move(NodeState::Degraded, ex::Buffering, true, up) == LifecycleReason::HealthRestored);
+    CHECK(move(NodeState::Degraded, ex::Synced, true, up) == LifecycleReason::HealthRestored);
+    CHECK(move(NodeState::Stopping, ex::Disconnected, true, up) == std::nullopt);
+
+    // Live waits for order entry to come up; a connection that is down holds or degrades.
+    CHECK(move(NodeState::Syncing, ex::Synced, true, fresh) == std::nullopt);
+    CHECK(move(NodeState::Syncing, ex::Synced, true, health(LinkState::Unknown, LinkState::Up)) ==
+          LifecycleReason::Synced);
+    CHECK(move(NodeState::Syncing, ex::Synced, true, health(LinkState::Down, LinkState::Up)) ==
+          std::nullopt);
+    CHECK(move(NodeState::Running, ex::Synced, true, health(LinkState::Down, LinkState::Up)) ==
+          LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Running, ex::Synced, true, health(LinkState::Up, LinkState::Down)) ==
+          LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Degraded, ex::Synced, true, health(LinkState::Up, LinkState::Down)) ==
+          std::nullopt);
+    // Without a user stream only market data moves the node.
+    CHECK(move(NodeState::Running, ex::Local, false, health(LinkState::Down, LinkState::Unknown)) ==
+          LifecycleReason::HealthLost);
+    CHECK(move(NodeState::Degraded, ex::Local, false, health(LinkState::Up, LinkState::Unknown)) ==
+          LifecycleReason::HealthRestored);
   }
 }

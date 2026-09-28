@@ -15,6 +15,7 @@
 #include "jarvis/execution/order_fsm.hpp"
 #include "jarvis/model/account.hpp"
 #include "jarvis/model/client_order_id.hpp"
+#include "jarvis/model/event.hpp"
 #include "jarvis/model/fixed_point.hpp"
 #include "jarvis/model/generated/enums.hpp"
 #include "jarvis/model/identifiers.hpp"
@@ -86,6 +87,29 @@ enum class SyncPhase : std::uint8_t { Local = 0, Disconnected = 1, Buffering = 2
   }
   return "";
 }
+
+// The node's other connections, from their ConnectionStatus inputs (the user data stream is the
+// Reconciler's): the sync gate moves a node whose market data or order entry is down to Degraded
+// (docs/architecture.md section 4.4).
+enum class LinkState : std::uint8_t { Unknown = 0, Up = 1, Down = 2 };
+
+struct ConnectionHealth {
+  LinkState market_data = LinkState::Unknown;
+  LinkState order_entry = LinkState::Unknown;
+
+  constexpr void apply(model::ConnectionKind kind, bool up) noexcept {
+    const LinkState state = up ? LinkState::Up : LinkState::Down;
+    if (kind == model::ConnectionKind::MarketData) {
+      market_data = state;
+    } else if (kind == model::ConnectionKind::OrderEntry) {
+      order_entry = state;
+    }
+  }
+  // Nothing known to be down.
+  [[nodiscard]] constexpr bool healthy() const noexcept {
+    return market_data != LinkState::Down && order_entry != LinkState::Down;
+  }
+};
 
 // What happens to a venue order the node does not manage.
 enum class ExternalPolicy : std::uint8_t { Report = 0, Cancel = 1 };

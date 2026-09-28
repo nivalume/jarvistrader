@@ -105,6 +105,7 @@ Status feed_instruments(std::span<const binance::PerpetualDefinition> instrument
       return s;
     }
     feed.names.emplace_back(d.instrument.common.raw_symbol.view());
+    feed.venue = d.instrument.common.id.venue;
     preamble.events.emplace_back(d.instrument);
   }
   return Status::Ok;
