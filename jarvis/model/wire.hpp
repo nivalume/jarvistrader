@@ -80,12 +80,14 @@ enum class RecordKind : std::uint16_t {
   OrderFilled = 35,
   OrderFillVoided = 36,
   AccountState = 40,
+  VenueSnapshot = 41,
   TimerFired = 50,
   BatchEnd = 51,
   NodeLifecycle = 52,
   StrategyError = 53,
   Shutdown = 54,
   RateLimitFeedback = 55,
+  ConnectionStatus = 56,
   CurrencyPair = 60,
   CryptoPerpetual = 61,
   CryptoFuture = 62,
@@ -97,10 +99,12 @@ enum class RecordKind : std::uint16_t {
   CancelOrder = 0x8005,
   CancelAllOrders = 0x8006,
   OrderDeniedOutput = 0x8007, // a model::OrderDenied the risk gates produced
+  ReconciliationDiff = 0x8008,
+  ReconcileOutcome = 0x8009,
 };
 
 // Same order as the alternatives of model::Event.
-inline constexpr std::array<RecordKind, 37> kKindByAlternative = {
+inline constexpr std::array<RecordKind, 39> kKindByAlternative = {
     RecordKind::TradeTick,
     RecordKind::QuoteTick,
     RecordKind::OrderBookDeltas,
@@ -138,6 +142,8 @@ inline constexpr std::array<RecordKind, 37> kKindByAlternative = {
     RecordKind::CryptoPerpetual,
     RecordKind::CryptoFuture,
     RecordKind::RateLimitFeedback,
+    RecordKind::ConnectionStatus,
+    RecordKind::VenueSnapshot,
 };
 static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 
@@ -146,10 +152,10 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 }
 
 // Same order as the alternatives of model::Output.
-inline constexpr std::array<RecordKind, 7> kOutputKindByAlternative = {
-    RecordKind::FeatureUpdate,    RecordKind::StrategyRecord, RecordKind::SubmitOrder,
-    RecordKind::ModifyOrder,      RecordKind::CancelOrder,    RecordKind::CancelAllOrders,
-    RecordKind::OrderDeniedOutput};
+inline constexpr std::array<RecordKind, 9> kOutputKindByAlternative = {
+    RecordKind::FeatureUpdate,     RecordKind::StrategyRecord,     RecordKind::SubmitOrder,
+    RecordKind::ModifyOrder,       RecordKind::CancelOrder,        RecordKind::CancelAllOrders,
+    RecordKind::OrderDeniedOutput, RecordKind::ReconciliationDiff, RecordKind::ReconcileOutcome};
 static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
 
 [[nodiscard]] constexpr RecordKind kind_of(const Output& output) noexcept {
@@ -214,6 +220,8 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "OrderFillVoided";
   case RecordKind::AccountState:
     return "AccountState";
+  case RecordKind::VenueSnapshot:
+    return "VenueSnapshot";
   case RecordKind::TimerFired:
     return "TimerFired";
   case RecordKind::BatchEnd:
@@ -226,6 +234,8 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "Shutdown";
   case RecordKind::RateLimitFeedback:
     return "RateLimitFeedback";
+  case RecordKind::ConnectionStatus:
+    return "ConnectionStatus";
   case RecordKind::CurrencyPair:
     return "CurrencyPair";
   case RecordKind::CryptoPerpetual:
@@ -246,6 +256,10 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "CancelAllOrders";
   case RecordKind::OrderDeniedOutput:
     return "OrderDenied";
+  case RecordKind::ReconciliationDiff:
+    return "ReconciliationDiff";
+  case RecordKind::ReconcileOutcome:
+    return "ReconcileOutcome";
   }
   return "";
 }
@@ -567,6 +581,8 @@ constexpr void put(Writer& w, std::uint32_t v) noexcept { w.u32(v); }
 constexpr void get(Reader& r, std::uint32_t& v) noexcept { v = r.u32(); }
 constexpr void put(Writer& w, std::uint64_t v) noexcept { w.u64(v); }
 constexpr void get(Reader& r, std::uint64_t& v) noexcept { v = r.u64(); }
+constexpr void put(Writer& w, std::int64_t v) noexcept { w.u64(static_cast<std::uint64_t>(v)); }
+constexpr void get(Reader& r, std::int64_t& v) noexcept { v = static_cast<std::int64_t>(r.u64()); }
 
 template <typename E>
   requires std::is_enum_v<E>
@@ -627,13 +643,23 @@ template <typename T> constexpr void get_fields(Reader& r, T& value) {
 }
 
 // Storage for the variable-length parts of decoded events (book deltas, account balances and
-// margins). Decoded spans point into it and stay valid until the next decode.
+// margins, venue reports). Decoded spans point into it and stay valid until the next decode.
+// The venue reports are large and few (a VenueSnapshot per reconciliation): at most
+// kMaxReports of each kind.
+inline constexpr std::size_t kMaxReports = 4096;
+
 struct DecodeScratch {
   explicit DecodeScratch(std::size_t capacity)
-      : deltas{capacity}, balances{capacity}, margins{capacity} {}
+      : deltas{capacity}, balances{capacity}, margins{capacity},
+        orders{capacity < kMaxReports ? capacity : kMaxReports},
+        fills{capacity < kMaxReports ? capacity : kMaxReports},
+        positions{capacity < kMaxReports ? capacity : kMaxReports} {}
   core::FixedVector<OrderBookDelta> deltas;
   core::FixedVector<AccountBalance> balances;
   core::FixedVector<MarginBalance> margins;
+  core::FixedVector<OrderStatusReport> orders;
+  core::FixedVector<FillReport> fills;
+  core::FixedVector<PositionStatusReport> positions;
 };
 
 constexpr void put_payload(Writer& w, const OrderBookDeltas& e) {
@@ -722,12 +748,68 @@ inline void get_payload(Reader& r, DecodeScratch& scratch, AccountState& e) {
   get(r, e.ts_init);
 }
 
+// A list of described items: a u32 count, then each item's fields.
+template <typename T> constexpr void put_list(Writer& w, std::span<const T> items) {
+  w.u32(static_cast<std::uint32_t>(items.size()));
+  for (const T& item : items) {
+    put_fields(w, item);
+  }
+}
+template <typename T>
+void get_list(Reader& r, core::FixedVector<T>& storage, std::span<const T>& out) {
+  storage.clear();
+  const std::uint32_t count = r.u32();
+  for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
+    T item{};
+    get_fields(r, item);
+    r.check(storage.push_back(item));
+  }
+  out = storage.span();
+}
+
+constexpr void put_payload(Writer& w, const VenueSnapshot& e) {
+  put(w, e.account_id);
+  put(w, e.ts_snapshot);
+  w.u32(static_cast<std::uint32_t>(e.balances.size()));
+  for (const AccountBalance& b : e.balances) {
+    put(w, b);
+  }
+  put_list(w, e.orders);
+  put_list(w, e.fills);
+  put_list(w, e.positions);
+  put(w, e.event_id);
+  put(w, e.ts_init);
+}
+inline void get_payload(Reader& r, DecodeScratch& scratch, VenueSnapshot& e) {
+  get(r, e.account_id);
+  get(r, e.ts_snapshot);
+  scratch.balances.clear();
+  const std::uint32_t balances = r.u32();
+  for (std::uint32_t i = 0; i < balances && r.ok(); ++i) {
+    AccountBalance b;
+    get(r, b);
+    r.check(scratch.balances.push_back(b));
+  }
+  e.balances = scratch.balances.span();
+  get_list(r, scratch.orders, e.orders);
+  get_list(r, scratch.fills, e.fills);
+  get_list(r, scratch.positions, e.positions);
+  get(r, e.event_id);
+  get(r, e.ts_init);
+}
+
+// Events whose lists are written by put_payload rather than a field descriptor.
+template <typename T>
+inline constexpr bool kHasPayload =
+    std::is_same_v<T, OrderBookDeltas> || std::is_same_v<T, AccountState> ||
+    std::is_same_v<T, VenueSnapshot>;
+
 // Encodes the payload of `event` (no record header).
 inline void put_event(Writer& w, const Event& event) {
   std::visit(
       [&w](const auto& e) {
         using T = std::decay_t<decltype(e)>;
-        if constexpr (std::is_same_v<T, OrderBookDeltas> || std::is_same_v<T, AccountState>) {
+        if constexpr (kHasPayload<T>) {
           put_payload(w, e);
         } else {
           put_fields(w, e);
@@ -738,7 +820,7 @@ inline void put_event(Writer& w, const Event& event) {
 
 template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& out) {
   T value{};
-  if constexpr (std::is_same_v<T, OrderBookDeltas> || std::is_same_v<T, AccountState>) {
+  if constexpr (kHasPayload<T>) {
     get_payload(r, scratch, value);
   } else {
     get_fields(r, value);
@@ -835,6 +917,9 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::AccountState:
     decode_as<AccountState>(r, scratch, out);
     break;
+  case RecordKind::VenueSnapshot:
+    decode_as<VenueSnapshot>(r, scratch, out);
+    break;
   case RecordKind::TimerFired:
     decode_as<TimerFired>(r, scratch, out);
     break;
@@ -853,6 +938,9 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::RateLimitFeedback:
     decode_as<RateLimitFeedback>(r, scratch, out);
     break;
+  case RecordKind::ConnectionStatus:
+    decode_as<ConnectionStatus>(r, scratch, out);
+    break;
   case RecordKind::CurrencyPair:
     decode_as<CurrencyPair>(r, scratch, out);
     break;
@@ -869,6 +957,8 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::CancelOrder:
   case RecordKind::CancelAllOrders:
   case RecordKind::OrderDeniedOutput:
+  case RecordKind::ReconciliationDiff:
+  case RecordKind::ReconcileOutcome:
     return core::Status::UnsupportedMessage; // outputs decode with decode_output
   }
   if (!r.ok()) {

@@ -12,6 +12,7 @@
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/reports.hpp"
 
 namespace jarvis::model {
 
@@ -53,6 +54,13 @@ enum class StrategyErrorKind : std::uint8_t {
 enum class ShutdownMode : std::uint8_t {
   CancelAllThenExit = 0,
   ExitKeepOrders = 1,
+};
+
+// Which connection a ConnectionStatus reports (docs/architecture.md section 4.4).
+enum class ConnectionKind : std::uint8_t {
+  MarketData = 0, // the market data streams
+  UserStream = 1, // the user data stream (orders, fills, account)
+  OrderEntry = 2, // the order channel (WebSocket API, REST fallback)
 };
 
 // Which venue limit a RateLimitFeedback reports (docs/architecture.md section 10.4).
@@ -138,6 +146,18 @@ enum class RateLimitKind : std::uint8_t {
   return "?";
 }
 
+[[nodiscard]] constexpr std::string_view to_string(ConnectionKind v) noexcept {
+  switch (v) {
+  case ConnectionKind::MarketData:
+    return "MARKET_DATA";
+  case ConnectionKind::UserStream:
+    return "USER_STREAM";
+  case ConnectionKind::OrderEntry:
+    return "ORDER_ENTRY";
+  }
+  return "?";
+}
+
 // Wire decoding helpers for the kernel enums above (the nautilus enums get theirs generated).
 [[nodiscard]] constexpr core::Status from_value(std::uint8_t v, NodeState& out) noexcept {
   if (v > static_cast<std::uint8_t>(NodeState::Faulted)) {
@@ -173,6 +193,14 @@ enum class RateLimitKind : std::uint8_t {
     return core::Status::OutOfRange;
   }
   out = static_cast<RateLimitKind>(v);
+  return core::Status::Ok;
+}
+
+[[nodiscard]] constexpr core::Status from_value(std::uint8_t v, ConnectionKind& out) noexcept {
+  if (v > static_cast<std::uint8_t>(ConnectionKind::OrderEntry)) {
+    return core::Status::OutOfRange;
+  }
+  out = static_cast<ConnectionKind>(v);
   return core::Status::Ok;
 }
 
@@ -218,6 +246,16 @@ struct RateLimitFeedback {
   core::UnixNanos ts_init;
 };
 
+// A venue connection went down or came back (the Health* events of docs/architecture.md section
+// 4.4). The user stream going down sends the account's session back to the start of
+// reconciliation (section 15.3); the node is Degraded until it is synced again.
+struct ConnectionStatus {
+  Venue venue;
+  ConnectionKind kind = ConnectionKind::UserStream;
+  bool up = false;
+  core::UnixNanos ts_init;
+};
+
 // The closed set of kernel input events. Adding an alternative forces every visitor to handle
 // it at compile time. Instrument definitions (exchangeInfo, catalog files) are inputs too, so a
 // replay sees the same tick sizes, filters and margins the run saw.
@@ -229,7 +267,7 @@ using Event =
                  OrderPendingUpdate, OrderPendingCancel, OrderModifyRejected, OrderCancelRejected,
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
-                 CryptoFuture, RateLimitFeedback>;
+                 CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.

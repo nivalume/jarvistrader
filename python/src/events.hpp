@@ -32,6 +32,23 @@ struct PyAccountState {
   }
 };
 
+struct PyVenueSnapshot {
+  model::VenueSnapshot base; // the lists are empty here
+  std::vector<model::AccountBalance> balances;
+  std::vector<model::OrderStatusReport> orders;
+  std::vector<model::FillReport> fills;
+  std::vector<model::PositionStatusReport> positions;
+
+  [[nodiscard]] model::VenueSnapshot view() const {
+    model::VenueSnapshot s = base;
+    s.balances = balances;
+    s.orders = orders;
+    s.fills = fills;
+    s.positions = positions;
+    return s;
+  }
+};
+
 // Python object for an event decoded from a log (copies borrowed parts into owners).
 nanobind::object event_to_py(const model::Event& event);
 

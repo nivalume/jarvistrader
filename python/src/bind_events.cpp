@@ -170,6 +170,62 @@ void bind_account_state(nb::module_& mod) {
       .def("__repr__", [](const PyAccountState& s) { return event_repr(m::Event{s.view()}); });
 }
 
+template <typename T>
+void append_items(const nb::list& items, std::vector<T>& out, const char* what) {
+  for (nb::handle item : items) {
+    T value{};
+    from_py(item, value, what);
+    out.push_back(value);
+  }
+}
+
+void bind_venue_snapshot(nb::module_& mod) {
+  bind_struct<m::OrderStatusReport>(mod, "OrderStatusReport",
+                                    "The venue's state of one order (reconciliation).");
+  bind_struct<m::FillReport>(mod, "FillReport", "One fill as the venue reports it.");
+  bind_struct<m::PositionStatusReport>(mod, "PositionStatusReport",
+                                       "The venue's position in one instrument.");
+  nb::class_<PyVenueSnapshot>(mod, "VenueSnapshot",
+                              "The venue's view of an account at its time ts_snapshot (T_s), "
+                              "the input reconciliation works from.")
+      .def(
+          "__init__",
+          [](PyVenueSnapshot* self, nb::handle account_id, nb::handle ts_snapshot,
+             const nb::list& balances, const nb::list& orders, const nb::list& fills,
+             const nb::list& positions, nb::handle event_id, nb::handle ts_init) {
+            PyVenueSnapshot out;
+            from_py(account_id, out.base.account_id, "account_id");
+            from_py(ts_snapshot, out.base.ts_snapshot, "ts_snapshot");
+            append_items(balances, out.balances, "balances");
+            append_items(orders, out.orders, "orders");
+            append_items(fills, out.fills, "fills");
+            append_items(positions, out.positions, "positions");
+            from_py(event_id, out.base.event_id, "event_id");
+            from_py(ts_init, out.base.ts_init, "ts_init");
+            new (self) PyVenueSnapshot{std::move(out)};
+          },
+          nb::arg("account_id"), nb::arg("ts_snapshot"), nb::arg("balances"), nb::arg("orders"),
+          nb::arg("fills"), nb::arg("positions"), nb::arg("event_id"), nb::arg("ts_init"))
+      .def_prop_ro("account_id", [](const PyVenueSnapshot& s) { return s.base.account_id; })
+      .def_prop_ro("ts_snapshot",
+                   [](const PyVenueSnapshot& s) { return s.base.ts_snapshot.value(); })
+      .def_prop_ro("balances", [](const PyVenueSnapshot& s) { return s.balances; })
+      .def_prop_ro("orders", [](const PyVenueSnapshot& s) { return s.orders; })
+      .def_prop_ro("fills", [](const PyVenueSnapshot& s) { return s.fills; })
+      .def_prop_ro("positions", [](const PyVenueSnapshot& s) { return s.positions; })
+      .def_prop_ro("event_id", [](const PyVenueSnapshot& s) { return s.base.event_id; })
+      .def_prop_ro("ts_init", [](const PyVenueSnapshot& s) { return s.base.ts_init.value(); })
+      .def("__eq__",
+           [](const PyVenueSnapshot& a, nb::handle b) {
+             if (!nb::isinstance<PyVenueSnapshot>(b)) {
+               return false;
+             }
+             return encode_payload(a.view()) ==
+                    encode_payload(nb::cast<const PyVenueSnapshot&>(b).view());
+           })
+      .def("__repr__", [](const PyVenueSnapshot& s) { return event_repr(m::Event{s.view()}); });
+}
+
 template <typename E, std::size_t N>
 void bind_kernel_enum(nb::module_& mod, const char* name, const std::array<E, N>& values) {
   nb::enum_<E> e(mod, name);
@@ -203,6 +259,15 @@ void bind_kernel(nb::module_& mod) {
                    std::array{m::RateLimitKind::Orders, m::RateLimitKind::RequestWeight});
   bind_struct<m::RateLimitFeedback>(mod, "RateLimitFeedback",
                                     "The venue's count of one rate limit window.");
+  bind_kernel_enum(mod, "ConnectionKind",
+                   std::array{m::ConnectionKind::MarketData, m::ConnectionKind::UserStream,
+                              m::ConnectionKind::OrderEntry});
+  bind_struct<m::ConnectionStatus>(mod, "ConnectionStatus",
+                                   "A venue connection went down or came back.");
+  bind_kernel_enum(mod, "ReconcileDiffKind",
+                   std::array{m::ReconcileDiffKind::Position, m::ReconcileDiffKind::Balance,
+                              m::ReconcileDiffKind::FilledQuantity, m::ReconcileDiffKind::LostOrder,
+                              m::ReconcileDiffKind::ExternalOrder});
 }
 
 template <typename T> void bind_instrument(nb::module_& mod, const char* name, const char* doc) {
@@ -250,6 +315,7 @@ void bind_events(nb::module_& mod) {
       .def_prop_ro("currency", [](const m::AccountBalance& b) { return b.total.currency(); });
   bind_struct<m::MarginBalance>(mod, "MarginBalance", "Initial and maintenance margin.");
   bind_account_state(mod);
+  bind_venue_snapshot(mod);
 
   bind_struct<m::OrderInitialized>(mod, "OrderInitialized", "An order was created.");
   bind_struct<m::OrderDenied>(mod, "OrderDenied", "The risk gates denied an order.");
@@ -285,6 +351,9 @@ void bind_events(nb::module_& mod) {
   bind_struct<m::CancelOrder>(mod, "CancelOrder", "A cancel request for one order.");
   bind_struct<m::CancelAllOrders>(mod, "CancelAllOrders",
                                   "A cancel request for every open order of an instrument.");
+  bind_struct<m::ReconciliationDiff>(mod, "ReconciliationDiff",
+                                     "A difference reconciliation found (the venue's value wins).");
+  bind_struct<m::ReconcileOutcome>(mod, "ReconcileOutcome", "The end of one reconciliation.");
 }
 
 nb::object output_to_py(const m::Output& output) {
@@ -322,6 +391,18 @@ nb::object event_to_py(const m::Event& event) {
           out.instrument_id = e.instrument_id;
           out.deltas.assign(e.deltas.begin(), e.deltas.end());
           return nb::cast(std::move(out));
+        } else if constexpr (std::is_same_v<T, m::VenueSnapshot>) {
+          PyVenueSnapshot out;
+          out.base = e;
+          out.base.balances = {};
+          out.base.orders = {};
+          out.base.fills = {};
+          out.base.positions = {};
+          out.balances.assign(e.balances.begin(), e.balances.end());
+          out.orders.assign(e.orders.begin(), e.orders.end());
+          out.fills.assign(e.fills.begin(), e.fills.end());
+          out.positions.assign(e.positions.begin(), e.positions.end());
+          return nb::cast(std::move(out));
         } else if constexpr (std::is_same_v<T, m::AccountState>) {
           PyAccountState out;
           out.base = e;
@@ -355,6 +436,12 @@ bool event_from_py_impl(nb::handle object, nb::object& holder, m::Event& out) {
       if (nb::isinstance<PyAccountState>(object)) {
         holder = nb::borrow(object);
         out = nb::cast<const PyAccountState&>(object).view();
+        return true;
+      }
+    } else if constexpr (std::is_same_v<T, m::VenueSnapshot>) {
+      if (nb::isinstance<PyVenueSnapshot>(object)) {
+        holder = nb::borrow(object);
+        out = nb::cast<const PyVenueSnapshot&>(object).view();
         return true;
       }
     } else if (nb::isinstance<T>(object)) {

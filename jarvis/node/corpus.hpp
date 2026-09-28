@@ -44,6 +44,9 @@ private:
   std::array<model::OrderBookDelta, 16> deltas_{};
   std::array<model::AccountBalance, 2> balances_{};
   std::array<model::MarginBalance, 2> margins_{};
+  std::array<model::OrderStatusReport, 2> order_reports_{};
+  std::array<model::FillReport, 2> fill_reports_{};
+  std::array<model::PositionStatusReport, 1> position_reports_{};
 };
 
 } // namespace jarvis::node

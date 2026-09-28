@@ -267,6 +267,36 @@ template <typename F> constexpr void fields(RateLimitFeedback& e, F&& f) {
       f("ts_init", e.ts_init);
 }
 
+template <typename F> constexpr void fields(ConnectionStatus& e, F&& f) {
+  f("venue", e.venue), f("kind", e.kind), f("up", e.up), f("ts_init", e.ts_init);
+}
+
+// ---- venue reports (VenueSnapshot has no descriptor: its lists are written like
+// AccountState's) --------------------------------------------------------------------------------
+
+template <typename F> constexpr void fields(OrderStatusReport& e, F&& f) {
+  f("account_id", e.account_id), f("instrument_id", e.instrument_id),
+      f("client_order_id", e.client_order_id), f("venue_order_id", e.venue_order_id),
+      f("order_side", e.order_side), f("order_type", e.order_type),
+      f("time_in_force", e.time_in_force), f("order_status", e.order_status),
+      f("quantity", e.quantity), f("filled_qty", e.filled_qty), f("price", e.price),
+      f("post_only", e.post_only), f("reduce_only", e.reduce_only), f("report_id", e.report_id),
+      f("ts_accepted", e.ts_accepted), f("ts_last", e.ts_last), f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(FillReport& e, F&& f) {
+  f("account_id", e.account_id), f("instrument_id", e.instrument_id),
+      f("venue_order_id", e.venue_order_id), f("trade_id", e.trade_id),
+      f("order_side", e.order_side), f("last_qty", e.last_qty), f("last_px", e.last_px),
+      f("commission", e.commission), f("liquidity_side", e.liquidity_side),
+      f("client_order_id", e.client_order_id), f("report_id", e.report_id),
+      f("ts_event", e.ts_event), f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(PositionStatusReport& e, F&& f) {
+  f("account_id", e.account_id), f("instrument_id", e.instrument_id),
+      f("position_side", e.position_side), f("quantity", e.quantity), f("report_id", e.report_id),
+      f("ts_last", e.ts_last), f("ts_init", e.ts_init);
+}
+
 // ---- kernel outputs ------------------------------------------------------------------------
 
 template <typename F> constexpr void fields(FeatureUpdate& e, F&& f) {
@@ -297,6 +327,16 @@ template <typename F> constexpr void fields(CancelOrder& e, F&& f) {
 template <typename F> constexpr void fields(CancelAllOrders& e, F&& f) {
   f("strategy_index", e.strategy_index), f("instrument_id", e.instrument_id),
       f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(ReconciliationDiff& e, F&& f) {
+  f("account_id", e.account_id), f("kind", e.kind), f("instrument_id", e.instrument_id),
+      f("client_order_id", e.client_order_id), f("currency", e.currency),
+      f("local_raw", e.local_raw), f("venue_raw", e.venue_raw), f("ts_init", e.ts_init);
+}
+template <typename F> constexpr void fields(ReconcileOutcome& e, F&& f) {
+  f("account_id", e.account_id), f("ts_snapshot", e.ts_snapshot), f("orders", e.orders),
+      f("fills", e.fills), f("closed", e.closed), f("lost", e.lost), f("external", e.external),
+      f("diffs", e.diffs), f("buffered", e.buffered), f("ts_init", e.ts_init);
 }
 
 // NOLINTEND(readability-function-cognitive-complexity)

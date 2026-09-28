@@ -170,6 +170,41 @@ void append_account(std::string& out, const m::AccountState& e) {
   value(out, e.ts_init);
 }
 
+// A list of described items, each as " [<tag> field=value ...]".
+template <typename T>
+void append_list(std::string& out, std::string_view tag, std::span<const T> items) {
+  for (const T& item : items) {
+    out += " [";
+    out += tag;
+    T copy = item;
+    m::fields(copy, FieldPrinter{&out});
+    out += ']';
+  }
+}
+
+void append_snapshot(std::string& out, const m::VenueSnapshot& e) {
+  out += " account_id=";
+  value(out, e.account_id);
+  out += " ts_snapshot=";
+  value(out, e.ts_snapshot);
+  for (const m::AccountBalance& b : e.balances) {
+    out += " [balance total=";
+    value(out, b.total);
+    out += " locked=";
+    value(out, b.locked);
+    out += " free=";
+    value(out, b.free);
+    out += ']';
+  }
+  append_list(out, "order", e.orders);
+  append_list(out, "fill", e.fills);
+  append_list(out, "position", e.positions);
+  out += " event_id=";
+  value(out, e.event_id);
+  out += " ts_init=";
+  value(out, e.ts_init);
+}
+
 void digest_hex(std::string& out, const wire::Digest& digest) {
   constexpr std::string_view kHex = "0123456789abcdef";
   for (const std::uint8_t b : digest) {
@@ -189,6 +224,8 @@ void append_event_text(std::string& out, const m::Event& event) {
           append_deltas(out, e);
         } else if constexpr (std::is_same_v<T, m::AccountState>) {
           append_account(out, e);
+        } else if constexpr (std::is_same_v<T, m::VenueSnapshot>) {
+          append_snapshot(out, e);
         } else {
           T copy = e;
           m::fields(copy, FieldPrinter{&out});

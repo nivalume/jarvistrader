@@ -1,5 +1,5 @@
 # The deterministic corpus (seed 42) written to an event log and read back. 500 events cover all
-# 36 record kinds. The fingerprint of a longer run must not depend on how the log is split into
+# 39 record kinds. The fingerprint of a longer run must not depend on how the log is split into
 # segments, so the rolled and unrolled logs are compared with the same expectation.
 commands = [
   ["{bin}/bin/jarvis", "corpus", "--seed", "42", "--events", "500", "--out", "{out}/small"],

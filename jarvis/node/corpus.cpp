@@ -557,6 +557,79 @@ struct CorpusMakers {
     return Status::Ok;
   }
 
+  static Status connection(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
+    const auto kind = static_cast<m::ConnectionKind>(g.draw(80) % 3U);
+    event = m::ConnectionStatus{make_id<m::Venue>("BINANCE"), kind, g.draw(81) % 2 == 0, g.ts_};
+    return Status::Ok;
+  }
+
+  // A reconciliation snapshot: one balance, two order reports (the second closed), a fill and
+  // the position.
+  static Status venue_snapshot(CorpusGenerator& g, const Perp& inst, m::Event& event) {
+    const m::Currency usdt = ccy("USDT");
+    m::Money total;
+    static_cast<void>(m::Money::from_raw(
+        static_cast<std::int64_t>(g.draw(82) % 1'000'000U) * 1'000'000'000, usdt, total));
+    m::Money zero;
+    static_cast<void>(m::Money::from_raw(0, usdt, zero));
+    static_cast<void>(m::AccountBalance::create(total, zero, total, g.balances_[0]));
+    for (std::size_t i = 0; i < g.order_reports_.size(); ++i) {
+      m::OrderStatusReport& r = g.order_reports_[i];
+      r.account_id = account();
+      r.instrument_id = inst.common.id;
+      r.client_order_id = g.order_header(inst).client_order_id;
+      r.venue_order_id =
+          make_id<m::VenueOrderId>(std::to_string(7'000'000'000ULL + g.seq_ * 2 + i));
+      r.order_side = side(g, static_cast<std::uint32_t>(83 + i));
+      r.order_type = m::OrderType::Limit;
+      r.time_in_force = m::TimeInForce::Gtc;
+      r.order_status = i == 0 ? m::OrderStatus::PartiallyFilled : m::OrderStatus::Canceled;
+      r.quantity = g.size_of(inst, 85);
+      static_cast<void>(m::Quantity::from_raw(i == 0 ? r.quantity.raw() / 2 : 0,
+                                              r.quantity.precision(), r.filled_qty));
+      r.price = g.price_near(inst, 86);
+      r.post_only = i == 0;
+      r.report_id = m::Uuid4::derive(g.rng_, g.seq_, static_cast<std::uint32_t>(87 + i));
+      r.ts_accepted = g.ts_;
+      r.ts_last = g.ts_;
+      r.ts_init = g.ts_;
+    }
+    m::FillReport& f = g.fill_reports_[0];
+    f.account_id = account();
+    f.instrument_id = inst.common.id;
+    f.venue_order_id = g.order_reports_[0].venue_order_id;
+    f.trade_id = make_id<m::TradeId>(std::to_string(4'000'000'000ULL + g.seq_));
+    f.order_side = g.order_reports_[0].order_side;
+    f.last_qty = g.order_reports_[0].filled_qty;
+    f.last_px = g.order_reports_[0].price.value_or(g.price_near(inst, 88));
+    static_cast<void>(m::Money::from_raw(10'000'000, usdt, f.commission));
+    f.liquidity_side = m::LiquiditySide::Maker;
+    f.client_order_id = g.order_reports_[0].client_order_id;
+    f.report_id = m::Uuid4::derive(g.rng_, g.seq_, 89);
+    f.ts_event = g.ts_;
+    f.ts_init = g.ts_;
+    m::PositionStatusReport& p = g.position_reports_[0];
+    p.account_id = account();
+    p.instrument_id = inst.common.id;
+    p.position_side =
+        f.order_side == m::OrderSide::Buy ? m::PositionSide::Long : m::PositionSide::Short;
+    p.quantity = f.last_qty;
+    p.report_id = m::Uuid4::derive(g.rng_, g.seq_, 90);
+    p.ts_last = g.ts_;
+    p.ts_init = g.ts_;
+    m::VenueSnapshot snapshot;
+    snapshot.account_id = account();
+    snapshot.ts_snapshot = g.ts_;
+    snapshot.balances = std::span<const m::AccountBalance>{g.balances_.data(), 1};
+    snapshot.orders = g.order_reports_;
+    snapshot.fills = std::span<const m::FillReport>{g.fill_reports_.data(), 1};
+    snapshot.positions = g.position_reports_;
+    snapshot.event_id = m::Uuid4::derive(g.rng_, g.seq_, 91);
+    snapshot.ts_init = g.ts_;
+    event = snapshot;
+    return Status::Ok;
+  }
+
   // Instrument definitions: the drawn perpetual re-stamped, a spot pair and a dated future.
   static Status perpetual_def(CorpusGenerator& g, const Perp& inst, m::Event& event) {
     m::CryptoPerpetual p = inst;
@@ -601,8 +674,8 @@ struct CorpusMakers {
 
   // A market-data-heavy mix in which every kind has at least 0.9%, so a few hundred events cover
   // all of them. Same order as model::Event.
-  static constexpr std::array<Weighted, 37> kMix = {{
-      {198, &trade},         {193, &quote},         {70, &deltas},          {35, &bar},
+  static constexpr std::array<Weighted, 39> kMix = {{
+      {189, &trade},         {184, &quote},         {70, &deltas},          {35, &bar},
       {43, &mark},           {26, &index},          {17, &funding},         {9, &status},
       {10, &close},          {9, &liquidation},     {34, &initialized},     {10, &denied},
       {10, &emulated},       {10, &released},       {10, &submitted},       {17, &accepted},
@@ -611,7 +684,7 @@ struct CorpusMakers {
       {10, &updated},        {52, &filled},         {10, &fill_voided},     {26, &account_state},
       {26, &timer},          {17, &batch_end},      {9, &lifecycle},        {9, &strategy_error},
       {10, &shutdown},       {9, &pair_def},        {9, &perpetual_def},    {9, &future_def},
-      {9, &rate_limit},
+      {9, &rate_limit},      {9, &connection},      {9, &venue_snapshot},
   }};
 };
 
