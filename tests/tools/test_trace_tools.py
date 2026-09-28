@@ -28,6 +28,9 @@ def test_values_of_every_kind() -> None:
     assert tla_values.parse_value('{ "A",\n  "B" }') == frozenset({"A", "B"})
     assert tla_values.parse_value("[a |-> 1, b |-> {}]") == {"a": 1, "b": frozenset()}
     assert tla_values.parse_value("(t1 :> 2 @@ t2 :> 0)") == {MV("t1"): 2, MV("t2"): 0}
+    # Records and functions can be set members (Reconciliation's channel is a set of messages).
+    messages = tla_values.parse_value('{[o |-> 1, st |-> "open"], [o |-> 1, st |-> "open"]}')
+    assert messages == frozenset({tla_values.Mapping({"o": 1, "st": "open"})})
     with pytest.raises(tla_values.ParseError):
         tla_values.parse_value("<<1, 2")
     with pytest.raises(tla_values.ParseError):

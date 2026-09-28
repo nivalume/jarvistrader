@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,6 +14,8 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
+#include "jarvis/engine/sync_gate.hpp"
+#include "jarvis/execution/reconciliation.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
@@ -524,5 +527,73 @@ TEST_SUITE("unit") {
     CHECK(summary.timers == 5); // 1500, 2500, 3500, 4500, 5500
     CHECK(summary.data_events == 3);
     CHECK(summary.state == md::NodeState::Stopped);
+  }
+
+  TEST_CASE("awaiting sync, the node runs once reconciled and degrades while the stream is down") {
+    const auto stream = [](std::uint64_t ts, bool up) {
+      md::ConnectionStatus c;
+      c.kind = md::ConnectionKind::UserStream;
+      c.up = up;
+      c.ts_init = UnixNanos{ts};
+      return md::Event{c};
+    };
+    const auto snapshot = [](std::uint64_t ts) {
+      md::VenueSnapshot v;
+      v.ts_snapshot = UnixNanos{ts - 1};
+      v.ts_init = UnixNanos{ts};
+      return md::Event{v};
+    };
+    const std::vector<Keyed> arrivals = {
+        {key(1000, 1, 1), trade(1000, 1000)},   {key(2000, 2, 2), stream(2000, true)},
+        {key(3000, 2, 3), snapshot(3000)},      {key(4000, 1, 4), trade(4000, 1001)},
+        {key(5000, 2, 5), stream(5000, false)}, {key(6000, 2, 6), stream(6000, true)},
+        {key(7000, 2, 7), snapshot(7000)},      {key(8000, 1, 8), trade(8000, 1002)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    LivePushSource source;
+    MemoryRecorder recorder;
+    bt::DriverOptions options;
+    options.await_sync = true;
+    bt::Driver driver{engine, source, recorder, options};
+    StepPump pump{arrivals, source, 500, 8500};
+    bt::RunSummary summary;
+    REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+
+    std::vector<std::string> moves;
+    for (const Keyed& k : recorder.inputs) {
+      if (const auto* lc = std::get_if<md::NodeLifecycle>(&k.event)) {
+        moves.push_back(std::string{md::to_string(lc->to)} + "@" +
+                        std::to_string(k.key.ts.value()));
+      }
+    }
+    CHECK(moves == std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500",
+                                            "RUNNING@3000", "DEGRADED@5000", "SYNCING@6000",
+                                            "RUNNING@7000", "STOPPING@8500", "STOPPED@8500"});
+    // The trade before the sync reaches nobody: strategies start when the node runs.
+    CHECK(calls == std::vector<std::string>{"start@3000", "trade@4000", "trade@8000", "stop@8500"});
+    CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
+  }
+
+  TEST_CASE("the sync gate follows the account's phase") {
+    using jarvis::engine::sync_move;
+    using ex = jarvis::execution::SyncPhase;
+    using md::LifecycleReason;
+    using md::NodeState;
+    CHECK(sync_move(NodeState::Syncing, ex::Local, false) == LifecycleReason::Synced);
+    CHECK(sync_move(NodeState::Syncing, ex::Local, true) == std::nullopt);
+    CHECK(sync_move(NodeState::Syncing, ex::Buffering, true) == std::nullopt);
+    CHECK(sync_move(NodeState::Syncing, ex::Synced, true) == LifecycleReason::Synced);
+    CHECK(sync_move(NodeState::Syncing, ex::Disconnected, true) == LifecycleReason::HealthLost);
+    CHECK(sync_move(NodeState::Running, ex::Local, false) == std::nullopt);
+    CHECK(sync_move(NodeState::Running, ex::Synced, true) == std::nullopt);
+    CHECK(sync_move(NodeState::Running, ex::Disconnected, true) == LifecycleReason::HealthLost);
+    CHECK(sync_move(NodeState::Running, ex::Buffering, false) == LifecycleReason::HealthLost);
+    CHECK(sync_move(NodeState::Degraded, ex::Disconnected, true) == std::nullopt);
+    CHECK(sync_move(NodeState::Degraded, ex::Buffering, true) == LifecycleReason::HealthRestored);
+    CHECK(sync_move(NodeState::Degraded, ex::Synced, true) == LifecycleReason::HealthRestored);
+    CHECK(sync_move(NodeState::Stopping, ex::Disconnected, true) == std::nullopt);
   }
 }

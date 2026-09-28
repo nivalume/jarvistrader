@@ -10,8 +10,10 @@
 (* The client subscribes first and buffers, then asks for the snapshot, sets its state from   *)
 (* it, applies the buffered messages newer than T_s, and only then trades. In Synced it       *)
 (* applies messages as they come: a trade is counted once (by id), a status only when newer   *)
-(* than the last one applied to that order. The local position is kept as a counter, so a     *)
-(* double count would show. A disconnect sends it back to the start.                          *)
+(* than the last one applied to that order. A trade moves the status only through the count, *)
+(* as the kernel's OMS does: the order is done once every unit is counted, and open when it   *)
+(* was not known. The local position is kept as a counter, so a double count would show. A   *)
+(* disconnect sends it back to the start.                                                    *)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS Orders, MaxFill
@@ -69,13 +71,19 @@ Disconnect ==
 
 \* ---- the client ---------------------------------------------------------------------------
 
-\* A message applied to the local state: a trade once, a status only when newer.
+\* A message applied to the local state: a trade once, a status only when newer. A trade's
+\* status follows from the count (done at MaxFill, open when the order was not known yet).
 ApplyMsg(m, s) ==
   LET fresh == m.n > 0 /\ <<m.o, m.n>> \notin s.seen
       newer == m.t > s.lts[m.o]
-  IN [lst |-> IF newer THEN [s.lst EXCEPT ![m.o] = m.st] ELSE s.lst,
+      count == IF fresh THEN s.lf[m.o] + 1 ELSE s.lf[m.o]
+      st == CASE fresh /\ count = MaxFill -> "done"
+              [] fresh /\ s.lst[m.o] = "none" -> "open"
+              [] m.n = 0 /\ newer -> m.st
+              [] OTHER -> s.lst[m.o]
+  IN [lst |-> [s.lst EXCEPT ![m.o] = st],
       lts |-> IF newer THEN [s.lts EXCEPT ![m.o] = m.t] ELSE s.lts,
-      lf |-> IF fresh THEN [s.lf EXCEPT ![m.o] = @ + 1] ELSE s.lf,
+      lf |-> [s.lf EXCEPT ![m.o] = count],
       lpos |-> IF fresh THEN s.lpos + 1 ELSE s.lpos,
       seen |-> IF fresh THEN s.seen \cup {<<m.o, m.n>>} ELSE s.seen]
 

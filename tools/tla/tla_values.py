@@ -6,7 +6,8 @@ writes each behaviour as a module of STATE_n definitions, each a conjunction of
 `/\\ variable = value`. These parse into Python values:
 
     string -> str      integer -> int       boolean -> bool     model value -> ModelValue
-    tuple  -> tuple    set -> frozenset     record, function -> dict
+    tuple  -> tuple    set -> frozenset     record, function -> Mapping (a hashable dict, as a
+                                                                 set may hold records)
 """
 
 from __future__ import annotations
@@ -22,6 +23,13 @@ class ModelValue:
 
     def __str__(self) -> str:
         return self.name
+
+
+class Mapping(dict):
+    """A record or function. Hashable (TLC prints sets of records); never mutated after parsing."""
+
+    def __hash__(self) -> int:  # type: ignore[override]
+        return hash(frozenset(self.items()))
 
 
 Value = str | int | bool | ModelValue | tuple | frozenset | dict
@@ -112,7 +120,7 @@ class _Parser:
         if text == "{":
             return frozenset(self.items("}"))
         if text == "[":
-            record: dict[Value, Value] = {}
+            record = Mapping()
             if self.at("]"):
                 self.take("]")
                 return record
@@ -126,7 +134,7 @@ class _Parser:
                 self.take("]")
                 return record
         if text == "(":
-            function: dict[Value, Value] = {}
+            function = Mapping()
             while True:
                 key = self.value()
                 self.take(":>")

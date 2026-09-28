@@ -311,6 +311,7 @@ public:
 | `Stopping` | 写最终快照与报告 | 默认 `cancel_all_then_exit`：撤单、确认、排空出站环、关闭连接 | core 线程，依据 EOF 或 `Shutdown` 事件 |
 | `Faulted` | 保留日志，非零退出 | KillSwitch（尽力撤全单），非零退出 | core 线程，依据 `step` 返回错误、容量耗尽、日志写失败、Python 致命错误 |
 
+- 同步闸门（`jarvis/engine/sync_gate.hpp`，M5-B3）：driver 在每个输入之后按账户的对账阶段推动生命周期，直到不再需要转移为止，每次转移都记录下来。规则：`Syncing` 在账户已同步时进入 `Running`；`Syncing` 或 `Running` 在用户流断开时进入 `Degraded`（`Running` 在用户流重连、重新缓冲时也是）；`Degraded` 在用户流恢复后回到 `Syncing`。`DriverOptions::await_sync`（实盘）让节点在前导事件之后停在 `Syncing`，直到收到用户流并完成对账；backtest 与 sandbox 没有用户流，照旧立即进入 `Running`，闸门不会移动它们。回放不需要闸门，因为转移已经记录在日志中。行情与 WS API 的健康状态尚未接入闸门（随 `LiveWiring`）。
 - 转移表位于 `jarvis/engine/lifecycle.hpp`，是纯函数 `next_state(from, reason)`。原因码：`Configured`（Init → Wired）、`RunRequested`（Wired → Starting）、`Started`（Starting → Syncing）、`Synced`（Syncing → Running）、`HealthLost`（Syncing 或 Running → Degraded）、`HealthRestored`（Degraded → Syncing）、`EndOfData`（Running → Stopping）、`ShutdownRequested`（Wired 到 Degraded 之间任一状态 → Stopping；Stopping 中重复请求保持原状态）、`Drained`（Stopping → Stopped）、`Fault`（任一非终态 → Faulted）。表外的组合返回 `InvalidTransition`。
 - 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它；回放时每条记录都必须与转移表给出的结果一致，否则报 `InvalidTransition`。
 - 只有 core 线程推动状态。IO、admin、信号处理只入队事件。
@@ -1295,7 +1296,7 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 - `Local`：从未收到用户流的 `ConnectionStatus`（backtest、sandbox），venue 事件直接应用。
 - `Disconnected`：用户流断开。当步立即施加 TradingState 的同步保持（`SyncStarted`，`Halted`），丢弃已暂存的事件，与网络丢失在途消息一致。
 - `Buffering`：用户流连上。venue 订单事件与 `AccountState` 暂存、不应用。规约的 `Snapshotting` 与 `Reconciling` 属于适配器（发请求、组装快照），内核在 `VenueSnapshot` 到达前一直是 `Buffering`，处理它的那一步完成对账。
-- `Synced`：对账完成。同步保持在 Node 进入 `Running` 时解除，由 driver 在对账完成后推动（M5-B3），因此 `HaltedUntilSynced` 在内核层面成立。
+- `Synced`：对账完成。同步保持在 Node 进入 `Running` 时解除，由 driver 的同步闸门在对账完成后推动（第 4.4 节），因此 `HaltedUntilSynced` 在内核层面成立；断线时闸门把节点送入 `Degraded`，用户流恢复后回到 `Syncing`。
 
 暂存容量 `ReconcileConfig::held`（默认 4096），超出时 `step` 返回 `CapacityExceeded`。适配器应在快照迟迟不到时主动重连，而不是让暂存溢出。`Synced` 时到达的快照计数后忽略，第 15.3 节的轻量对账另行实现。
 
@@ -1561,16 +1562,18 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | 规约 | 对象 | 主要不变量与性质 | 验证方式 |
 | --- | --- | --- | --- |
 | `OrderLifecycle` | 订单状态机（第 8 节） | 状态转移属于允许集合；`filled_qty ≤ quantity`；`leaves_qty = quantity − filled_qty`；同一 `trade_id` 不重复计入；`Pending*` 期间的成交保留 `previous_status` | TLC 模型检查；正向与反向 trace validation |
-| `Reconciliation` | 对账协议（第 15 节） | 交易所被建模为会重排、重复、延迟用户流消息，并可在任意时刻给出快照的进程；进入 `Synced` 时本地订单与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏；`Synced` 之前 TradingState 为 `Halted` | TLC 模型检查；正向与反向 trace validation |
+| `Reconciliation` | 对账协议（第 15 节） | 交易所被建模为会重排、重复、延迟用户流消息，并可在任意时刻给出快照的进程；进入 `Synced` 时本地订单与仓位等于交易所在 `T_s` 的状态加上之后被应用的事件；没有成交被记两次；没有未完成订单被遗漏；`Synced` 之前 TradingState 为 `Halted` | TLC 模型检查；正向 trace validation（内核的 `Reconciler`、engine 与 driver 的同步闸门）；反向 trace validation 待实盘日志 |
 | `TradingState` | 风控状态与限速窗口（第 10.2、10.4 节） | 只有 admin 命令能放松 base，监控只收紧；`Halted` 下除撤单外没有命令通过；同步期间一律 `Halted`，降级期间从不 `Active`；任一窗口内通过的订单与改单数不超过上限（撤单不计） | TLC 模型检查；正向 trace validation（`RiskEngine`，含规约不允许的命令必须被拒绝） |
 | `Matching` | 模拟撮合的排队位置成交模型（第 12.3 节），单个买单 | 成交量不超过订单数量；post-only 从不吃单；在自身价位只有前方排队量耗尽后才成交；前方排队量不超过该价位总量且只减不增。多订单的价格—时间优先与成交守恒由 `test_matching` 的性质测试覆盖 | TLC 模型检查；正向 trace validation（`SimulatedExchange` 的 `QueuePosition` 模型） |
 | `DepthSync` | 订单簿同步（第 14.3 节）。交易所簿抽象为价格到数量的函数，带编号的更新累积后作为事件 `[U, u, pu, ch]` 发布；网络会丢事件、连接会断；快照可能取自任意较早的更新号（滞后的副本） | 只有在事件链连续时才应用；`Synced` 状态下本地簿等于交易所在最后应用更新号时的簿；`Validating` 时本地簿等于快照；内核看到簿当且仅当处于 `Synced`，且看到的就是本地簿 | TLC 模型检查（去掉 `pu` 检查或 `U ≤ L` 检查的变体都会违反不变量）；正向 trace validation（`adapter::binance::DepthSync`，内核视图由其发出的 `OrderBookDeltas` 重建） |
 
-`Reconciliation`（`specs/tla/Reconciliation.tla`，M5）：交易所的订单依次开立、逐单位成交（成交号 `<<o, n>>`）、结束（成交完或撤单），每次变化取交易所的下一个时间并发出携带变化后状态与成交数的用户流消息；连接在线时网络会重排、重复消息，断线时在途与断线期间发出的消息全部丢失；快照可在任意时刻取得，反映交易所在其时间 `T_s` 的状态。客户端先订阅并缓冲，再取快照、以快照置位、应用缓冲中晚于 `T_s` 的消息，之后才恢复交易；`Synced` 中成交按成交号只计一次，状态只在比该订单上次应用的更新更新时才采纳；本地仓位作为计数器维护，重复计入会被发现。不变量：`Synced` 之前 TradingState 为 `Halted`；仓位计数等于不同成交号的个数；本地从不领先交易所；`Synced` 且消息全部送达时本地状态等于交易所状态。两个订单、每单最多两笔成交的模型有约 200 万个状态，TLC 约 50 秒检查完；去掉缓冲应用、去掉成交去重、去掉状态新旧判断的三个变体分别违反 `Converged`、`CountedOnce`、`Converged`。
+`Reconciliation`（`specs/tla/Reconciliation.tla`，M5）：交易所的订单依次开立、逐单位成交（成交号 `<<o, n>>`）、结束（成交完或撤单），每次变化取交易所的下一个时间并发出携带变化后状态与成交数的用户流消息；连接在线时网络会重排、重复消息，断线时在途与断线期间发出的消息全部丢失；快照可在任意时刻取得，反映交易所在其时间 `T_s` 的状态。客户端先订阅并缓冲，再取快照、以快照置位、应用缓冲中晚于 `T_s` 的消息，之后才恢复交易；`Synced` 中成交按成交号只计一次，状态只在比该订单上次应用的更新更新时才采纳；成交只通过计数改变状态（计满为终态，订单尚未为本地所知时为开立），与内核 OMS 相同，所以迟到的部分成交消息不会让本地提前把订单视为终态（M5-B3 修订，正向验证需要）；本地仓位作为计数器维护，重复计入会被发现。不变量：`Synced` 之前 TradingState 为 `Halted`；仓位计数等于不同成交号的个数；本地从不领先交易所；`Synced` 且消息全部送达时本地状态等于交易所状态。两个订单、每单最多两笔成交的模型有约 200 万个状态，TLC 约 40 秒检查完；去掉缓冲应用、去掉成交去重、去掉状态新旧判断的三个变体分别违反 `Converged`、`CountedOnce`、`Converged`（修订后重新确认）。
+
+正向验证（M5-B3）：`specs/map/reconciliation_actions.hpp` 把交易所的动作变为 driver 自己的交易所副本（用来回答快照），`Deliver` 变为交易所时间为 `t` 的 venue 订单事件，`Connect` / `Disconnect` 变为用户流的 `ConnectionStatus`，`SnapshotTaken` 由副本组装 `VenueSnapshot`（并与规约的快照核对），`Reconcile` 把它交给内核；每个输入之后施加同步闸门。比较的投影是：会话阶段（规约的 `Snapshotting` 属于适配器，内核仍是 `Buffering`）、节点是否 `Running`、TradingState、每个订单的状态与成交数、策略与 venue 的仓位，以及策略实际收到的成交号集合。变异检验：闸门不推动 `Running`、断线不停止交易、只应用第一条成交报告，都会在第一处偏差报告。
 
 ### 18.2 正向与反向验证
 
-- **正向**：`specs/tla/<Spec>Behaviours.tla` 在规约之上加变量 `action`，记录每一步的动作及其参数；`OrderLifecycle` 与 `TradingState` 还记录上一状态中规约允许的事件或命令。`tools/tla/behaviours.py` 以 TLC 模拟模式（`-simulate file=...`）生成行为，写成每行一个状态的文本文件（`step <动作> <参数> | <变量>=<值> ...`）。`tests/trace/trace_driver` 经 `specs/map/<spec>_actions.hpp` 把动作映射为实现的输入：OMS 的订单事件、`RiskEngine` 的触发与命令、`SimulatedExchange` 的行情与下单。每一步比较实现状态在规约变量上的投影，并检查规约不允许的事件或命令被实现拒绝。第一处偏差即失败，报告行为编号、步号与动作；规约的某个动作在整个文件中从未出现也算失败。`MAP.toml` 中规约的 `trace_vars` 限定行为文件只写 trace driver 比较的变量（`DepthSync` 的交易所与网络变量很大，只保留客户端变量）。`tests/trace/behaviours/` 中提交的小行为集由 ctest 回放（标签 `trace`）；CI 的 formal job 先用 `behaviours.py --check` 确认它与规约同步，再以运行编号为种子生成 2000 条新行为回放；nightly 每个规约回放 20000 条。
+- **正向**：`specs/tla/<Spec>Behaviours.tla` 在规约之上加变量 `action`，记录每一步的动作及其参数；`OrderLifecycle` 与 `TradingState` 还记录上一状态中规约允许的事件或命令。`tools/tla/behaviours.py` 以 TLC 模拟模式（`-simulate file=...`）生成行为，写成每行一个状态的文本文件（`step <动作> <参数> | <变量>=<值> ...`）。`tests/trace/trace_driver` 经 `specs/map/<spec>_actions.hpp` 把动作映射为实现的输入：OMS 的订单事件、`RiskEngine` 的触发与命令、`SimulatedExchange` 的行情与下单、`DepthSync` 的增量与快照、对账的用户流连接、消息与快照（经 engine 与同步闸门）。每一步比较实现状态在规约变量上的投影，并检查规约不允许的事件或命令被实现拒绝。第一处偏差即失败，报告行为编号、步号与动作；规约的某个动作在整个文件中从未出现也算失败。`MAP.toml` 中规约的 `trace_vars` 限定行为文件只写 trace driver 比较的变量（`DepthSync` 的交易所与网络变量很大，只保留客户端变量）。`tests/trace/behaviours/` 中提交的小行为集由 ctest 回放（标签 `trace`）；CI 的 formal job 先用 `behaviours.py --check` 确认它与规约同步，再以运行编号为种子生成 2000 条新行为回放；nightly 每个规约回放 20000 条。
 - **反向**：`jarvis trace-export <log> --spec OrderLifecycle --out <dir>` 把日志中每个订单的事件按日志顺序投影为规约动作。venue 的订单事件来自输入；内核自己施加的事件由命令输出恢复：`SubmitOrder` 为创建与 `SUBMITTED`，`OrderDenied` 为 `DENIED`，`ModifyOrder` 为 `PENDING_UPDATE`，`CancelOrder` 为 `PENDING_CANCEL`。一个新的 OMS 用内核自己的代码施加这些事件；被拒绝的事件记为 refused 步，规约也必须不允许它。每一步还记录实现施加后的订单状态，规约到达的状态必须与之相同。数量以该订单全部数量的最大公约数为单位，保证落在 TLC 的整数范围内。生成的 `OrderLifecycleTrace.tla` 由 TLC 检查（`tools/tla/check_trace.py`）：无法继续的一步表现为死锁，脚本报告订单、日志 `seq`、动作与实现的状态。golden 用例 `replay_orders` 固定一份导出的 trace，formal job 对它运行 TLC；nightly 对最近一次 soak 日志运行（M4 起）。
 
 ### 18.3 规约与代码的同步规则

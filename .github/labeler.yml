@@ -11,6 +11,7 @@ core:
           - 'jarvis/core/priority_queue.hpp'
           - 'jarvis/data/book/**'
           - 'jarvis/engine/**'
+          - 'jarvis/engine/sync_gate.hpp'
           - 'jarvis/execution/**'
           - 'jarvis/execution/execution_engine.hpp'
           - 'jarvis/execution/oms.hpp'

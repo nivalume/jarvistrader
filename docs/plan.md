@@ -157,12 +157,12 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 
 ## M5 实盘、对账、运维、内置执行算法与纯 C++ 节点，规约 b（发布 v1.0）
 
-- [ ] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）：规约与 TLC 检查已完成（`specs/tla/Reconciliation.tla`，三个协议变体都被不变量抓到）；映射头与正向 trace validation 随对账实现
+- [x] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）：规约与 TLC 检查（三个协议变体都被不变量抓到）；成交只通过计数改变状态（与 OMS 一致）；映射头 `specs/map/reconciliation_actions.hpp` 与正向 trace validation（`MAP.toml` 中 `forward = true`）
 - [ ] task: execution — 对账协议：先订阅后快照、逐单比对、`userTrades` 合成漏成交、遗留与外部订单处理、置位与 `ReconciliationDiff`（§15.2）：内核一侧已完成（`jarvis/execution/reconciliation.hpp`：会话阶段、暂存、按快照置位、合成事件、差异与结果、`on_reconciled`、过期状态事件；单元与性质测试）；适配器用 REST 组装 `VenueSnapshot` 随 `LiveWiring`
-- [ ] task: execution — 断线重连对账与每 60 秒轻量对账（§15.3）
+- [ ] task: execution — 断线重连对账与每 60 秒轻量对账（§15.3）：断线重连已完成（内核会话阶段与 driver 同步闸门：`Running → Degraded → Syncing → Running`）；每 60 秒轻量对账待做
 - [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）
 - [ ] task: live — core 线程绑核与 busy-poll，IO 线程的 NUMA 亲和
-- [ ] task: node — Node 生命周期的 `Syncing`、`Degraded`、`Stopping`、`Faulted` 实盘路径
+- [ ] task: node — Node 生命周期的 `Syncing`、`Degraded`、`Stopping`、`Faulted` 实盘路径：`Syncing` 与 `Degraded` 由同步闸门驱动（`engine/sync_gate.hpp`，`DriverOptions::await_sync`）；行情与 WS API 健康接入、`Stopping`（`SIGTERM` 撤单流程）与 `Faulted` 待做
 - [ ] task: risk — `countdownCancelAll`：进入 `Synced` 时武装，每 30 秒续期，关停确认后解除（§10.3）
 - [ ] task: persist — WAL 三种模式（`none`、`async`、`barrier`）、`EngineState` 快照与日志截断、崩溃恢复（§16.2、§16.3）
 - [ ] task: ops — 遥测：`LogRecord` 格式化为 JSON lines，按 §19.2 暴露 Prometheus 指标
@@ -174,7 +174,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点
 - [ ] task: python — `node.add_native_strategy()`：Python 启动的混合节点承载注册的 C++ 策略
 - [ ] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）
-- [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI
+- [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI：正向已进入 ctest（`trace.Reconciliation`）、CI formal job 与 nightly；反向待实盘日志
 - [ ] task: harness — 混沌测试：由规约 b 的行为生成断线、重复、乱序、丢消息场景，在 sandbox 与 testnet 执行
 - [ ] task: harness — 延迟基准：tick 到命令、命令到 socket 的 p50 与 p99 归档，并据实测设定延迟目标
 - [ ] task: harness — nightly：1 小时 sandbox soak，以及对最近一次 soak 日志的反向验证

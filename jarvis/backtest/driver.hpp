@@ -13,6 +13,7 @@
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/engine/sync_gate.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 
@@ -25,6 +26,11 @@
 //   - batches: a batch is a maximal run of inputs with the same ts, closed by BatchEnd;
 //   - strategy failures: each one the engine reports becomes a StrategyError input right after
 //     the step that caused it. A failure inside on_error itself is not converted again.
+//
+// After every input the driver applies the sync gate (engine/sync_gate.hpp): the account's
+// reconciliation phase moves the node between Syncing, Running and Degraded. With
+// DriverOptions::await_sync (live) the node stays Syncing after the preamble until the account
+// is synced; otherwise it enters Running at once, as it always has.
 //
 // With a venue loop as the source (VenueLoop, section 12.2), the driver also runs the simulated
 // venue: it always processes the earliest of the next venue-side event (market data the venue
@@ -81,6 +87,8 @@ struct DriverOptions {
   // Inputs stepped while the node is Syncing (instrument definitions, the account snapshot):
   // what reconciliation provides in live, before strategies start.
   std::span<const model::Event> preamble;
+  // Live: Running waits until the account is reconciled with the venue (section 15.1).
+  bool await_sync = false;
 };
 
 struct RunSummary {
@@ -269,7 +277,24 @@ private:
         return s;
       }
     }
-    return transition(model::LifecycleReason::Synced, ts0);
+    gating_ = true;
+    return options_.await_sync ? gate(ts0) : transition(model::LifecycleReason::Synced, ts0);
+  }
+
+  // Applies the sync gate until it calls for nothing more.
+  core::Status gate(core::UnixNanos ts) {
+    gate_active_ = true;
+    core::Status s = core::Status::Ok;
+    while (core::ok(s)) {
+      const std::optional<model::LifecycleReason> move = engine::sync_move(
+          lifecycle_.state(), engine_->kernel().trading.reconciler.phase(), options_.await_sync);
+      if (!move) {
+        break;
+      }
+      s = transition(*move, ts);
+    }
+    gate_active_ = false;
+    return s;
   }
 
   core::Status run_plain() {
@@ -411,7 +436,11 @@ private:
     }
     batch_open_ = true;
     batch_ts_ = key.ts;
-    return step_input(key, event);
+    const core::Status s = step_input(key, event);
+    if (!core::ok(s) || !gating_ || gate_active_) {
+      return s;
+    }
+    return gate(key.ts);
   }
 
   core::Status close_batch() {
@@ -478,6 +507,8 @@ private:
   core::FixedVector<strategy::StrategyFailure> failures_;
   RunSummary summary_;
   std::uint64_t seq_ = 0;
+  bool gating_ = false;      // after start: every input may move the lifecycle
+  bool gate_active_ = false; // the gate's own transitions do not re-enter it
   bool batch_open_ = false;
   core::UnixNanos batch_ts_;
   core::UnixNanos last_ts_;

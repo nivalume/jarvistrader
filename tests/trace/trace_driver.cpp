@@ -27,12 +27,17 @@
 #include "jarvis/adapter/binance/depth_sync.hpp"
 #include "jarvis/adapter/codec.hpp"
 #include "jarvis/backtest/matching/sim_exchange.hpp"
+#include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
+#include "jarvis/engine/engine.hpp"
+#include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/engine/sync_gate.hpp"
 #include "jarvis/execution/execution_engine.hpp"
 #include "jarvis/execution/oms.hpp"
 #include "jarvis/execution/order.hpp"
 #include "jarvis/execution/order_fsm.hpp"
+#include "jarvis/execution/reconciliation.hpp"
 #include "jarvis/model/data.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/fixed_point.hpp"
@@ -41,11 +46,15 @@
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/model/reports.hpp"
 #include "jarvis/risk/gates.hpp"
 #include "jarvis/risk/trading_state.hpp"
+#include "jarvis/strategy/context.hpp"
+#include "jarvis/strategy/strategy_set.hpp"
 #include "specs/map/depth_sync_actions.hpp"
 #include "specs/map/matching_actions.hpp"
 #include "specs/map/order_lifecycle_actions.hpp"
+#include "specs/map/reconciliation_actions.hpp"
 #include "specs/map/trading_state_actions.hpp"
 
 namespace {
@@ -54,6 +63,7 @@ namespace bt = jarvis::backtest;
 namespace ex = jarvis::execution;
 namespace m = jarvis::model;
 namespace r = jarvis::risk;
+namespace st = jarvis::strategy;
 using jarvis::core::Status;
 using jarvis::core::UnixNanos;
 using jarvis::trace::BehaviourFile;
@@ -699,6 +709,359 @@ private:
   std::uint64_t ts_ = 0;
 };
 
+// ---- Reconciliation ----------------------------------------------------------------------------
+
+// A rendered function over the spec's orders ("<a,b>" or "{1:a,2:b}") as text values by key.
+std::map<long long, std::string> to_text_map(std::string_view text) {
+  std::map<long long, std::string> out;
+  const bool sequence = text.size() >= 2 && text.front() == '<' && text.back() == '>';
+  if (!sequence && (text.size() < 2 || text.front() != '{' || text.back() != '}')) {
+    throw std::runtime_error("not a function: " + std::string{text});
+  }
+  std::string_view body = text.substr(1, text.size() - 2);
+  long long index = 1;
+  while (!body.empty()) {
+    const std::size_t comma = body.find(',');
+    std::string_view item = body.substr(0, comma);
+    if (sequence) {
+      out[index++] = std::string{item};
+    } else {
+      const std::size_t colon = item.find(':');
+      out[std::stoll(std::string{item.substr(0, colon)})] = std::string{item.substr(colon + 1)};
+    }
+    body = comma == std::string_view::npos ? std::string_view{} : body.substr(comma + 1);
+  }
+  return out;
+}
+
+// Submits one order of `max_fill` units per spec order when it starts; records, as the spec's
+// `seen` renders them, the trades it receives. Writes through pointers to the replayer's state.
+// NOLINTBEGIN(readability-make-member-function-const)
+struct ReconciliationTrader {
+  std::size_t orders = 0;
+  std::uint64_t max_fill = 0;
+  std::vector<m::ClientOrderId>* ids = nullptr;
+  std::set<std::string>* seen = nullptr;
+
+  Status on_start(st::Context& ctx) {
+    for (std::size_t i = 0; i < orders; ++i) {
+      m::ClientOrderId id;
+      const Status s =
+          ctx.submit(ctx.limit(instrument_id(), m::OrderSide::Buy, quantity(max_fill * kScale, 0),
+                               price(100 * static_cast<std::int64_t>(kScale), 1)),
+                     id);
+      if (!jarvis::core::ok(s)) {
+        return s;
+      }
+      ids->push_back(id);
+    }
+    return Status::Ok;
+  }
+  Status on_order_event(st::Context& /*ctx*/, const m::OrderEvent& e) {
+    if (const auto* f = std::get_if<m::OrderFilled>(&e)) {
+      std::string trade{f->trade_id.view()};
+      trade[trade.find('-')] = ',';
+      seen->insert("<" + trade + ">");
+    }
+    return Status::Ok;
+  }
+};
+// NOLINTEND(readability-make-member-function-const)
+
+class ReconciliationReplayer {
+public:
+  static constexpr const auto& kActions = jarvis::specmap::reconciliation::kActions;
+
+  explicit ReconciliationReplayer(const BehaviourFile& file)
+      : max_fill_{static_cast<std::uint64_t>(file.constant("MaxFill"))},
+        orders_{jarvis::trace::to_set(file.constants.at("Orders")).size()},
+        set_{ReconciliationTrader{orders_, max_fill_, &ids_, &seen_}}, engine_{config(), set_},
+        venue_(orders_ + 1) {}
+
+  // The spec's Init: the node ran, its strategy submitted the orders, and the user stream is
+  // down (Disconnected, halted).
+  std::string start(const Step& init) {
+    input(m::Event{perpetual(0)});
+    for (const auto reason : {m::LifecycleReason::Configured, m::LifecycleReason::RunRequested,
+                              m::LifecycleReason::Started, m::LifecycleReason::Synced}) {
+      transition(reason);
+    }
+    if (ids_.size() != orders_) {
+      throw std::runtime_error("the strategy did not submit every order");
+    }
+    input(stream(false));
+    gate();
+    return compare(init);
+  }
+
+  std::string step(const Step& s) {
+    const std::string& a = s.action;
+    if (a == "Open" || a == "Fill" || a == "Cancel") {
+      venue_change(a, static_cast<std::size_t>(s.arg(0)));
+    } else if (a == "Disconnect" || a == "Connect") {
+      input(stream(a == "Connect"));
+    } else if (a == "Deliver") {
+      input(message(s));
+    } else if (a == "SnapshotTaken") {
+      const std::string diff = take_snapshot(s);
+      if (!diff.empty()) {
+        return diff;
+      }
+    } else if (a == "Reconcile") {
+      input(snapshot_event());
+    } else if (a != "RequestSnapshot") {
+      throw std::runtime_error("unknown Reconciliation action " + a);
+    }
+    gate();
+    return compare(s);
+  }
+
+private:
+  // The venue as the driver saw it change (the spec's xst and xf, with the times).
+  struct VenueOrder {
+    std::string st = "none";
+    std::uint64_t fills = 0;
+    std::uint64_t ts_open = 0;
+    std::uint64_t ts_last = 0;
+    std::vector<std::uint64_t> fill_ts;
+  };
+
+  static st::KernelConfig config() {
+    st::KernelConfig c;
+    c.instruments = 4;
+    c.strategies = 1;
+    c.timers = 4;
+    c.features = 1;
+    c.bar_types = 1;
+    c.buffers = 4;
+    c.book_window_levels = 64;
+    c.book_overflow_levels = 16;
+    c.trading.orders = 16;
+    c.trading.trades = 64;
+    c.trading.risk.orders_per_10s = 0;
+    c.trading.risk.orders_per_minute = 0;
+    c.trading.reconcile.lost_grace = jarvis::core::DurationNanos{~0ULL / 4}; // venue "none"
+    return c;
+  }
+
+  static m::Event stream(bool up) {
+    m::ConnectionStatus c;
+    c.kind = m::ConnectionKind::UserStream;
+    c.up = up;
+    return m::Event{c};
+  }
+
+  static m::VenueOrderId venue_id(std::size_t o) {
+    m::VenueOrderId id;
+    require(m::VenueOrderId::from("v" + std::to_string(o), id), "venue order id");
+    return id;
+  }
+
+  void input(m::Event event) {
+    const UnixNanos now{++now_};
+    std::visit(
+        [now](auto& e) {
+          if constexpr (requires { e.ts_init; }) {
+            e.ts_init = now;
+          } else if constexpr (requires { e.header.ts_init; }) {
+            e.header.ts_init = now;
+          }
+        },
+        event);
+    require(engine_.step(jarvis::core::EventKey{now, 0, now_}, event), "Engine::step");
+    engine_.clear_outputs();
+  }
+
+  void transition(m::LifecycleReason reason) {
+    m::NodeLifecycle event;
+    require(lifecycle_.apply(reason, UnixNanos{now_ + 1}, event), "Lifecycle::apply");
+    input(m::Event{event});
+  }
+
+  // The driver's sync gate, as backtest::Driver applies it with await_sync.
+  void gate() {
+    while (const std::optional<m::LifecycleReason> move = jarvis::engine::sync_move(
+               lifecycle_.state(), engine_.kernel().trading.reconciler.phase(), true)) {
+      transition(*move);
+    }
+  }
+
+  void venue_change(const std::string& action, std::size_t o) {
+    VenueOrder& v = venue_.at(o);
+    ++xtime_;
+    v.ts_last = xtime_;
+    if (action == "Open") {
+      v.st = "open";
+      v.ts_open = xtime_;
+    } else if (action == "Fill") {
+      ++v.fills;
+      v.fill_ts.push_back(xtime_);
+      v.st = v.fills == max_fill_ ? "done" : "open";
+    } else {
+      v.st = "done";
+    }
+  }
+
+  [[nodiscard]] m::OrderEventHeader header(std::size_t o, std::uint64_t ts_event) const {
+    m::OrderEventHeader h;
+    h.instrument_id = instrument_id();
+    h.client_order_id = ids_.at(o - 1);
+    h.ts_event = UnixNanos{ts_event};
+    return h;
+  }
+
+  [[nodiscard]] m::Event message(const Step& s) const {
+    const auto o = static_cast<std::size_t>(s.arg(0));
+    const long long n = s.arg(1);
+    const auto t = static_cast<std::uint64_t>(s.arg(4));
+    if (n > 0) {
+      m::OrderFilled e;
+      e.header = header(o, t);
+      e.venue_order_id = venue_id(o);
+      require(m::TradeId::from(std::to_string(o) + "-" + std::to_string(n), e.trade_id),
+              "trade id");
+      e.order_side = m::OrderSide::Buy;
+      e.order_type = m::OrderType::Limit;
+      e.last_qty = quantity(kScale, 0);
+      e.last_px = price(100 * static_cast<std::int64_t>(kScale), 1);
+      e.liquidity_side = m::LiquiditySide::Maker;
+      return m::Event{e};
+    }
+    if (s.args.at(2) == "open") {
+      m::OrderAccepted e;
+      e.header = header(o, t);
+      e.venue_order_id = venue_id(o);
+      return m::Event{e};
+    }
+    m::OrderCanceled e;
+    e.header = header(o, t);
+    e.venue_order_id = venue_id(o);
+    return m::Event{e};
+  }
+
+  // The venue at its time T_s, as the adapter would report it; checked against the spec's.
+  std::string take_snapshot(const Step& s) {
+    Diff diff;
+    diff.expect("snapshot T_s", s.arg(0), static_cast<long long>(xtime_));
+    const std::map<long long, std::string> st = to_text_map(s.args.at(1));
+    const std::map<long long, long long> f = jarvis::trace::to_int_map(s.args.at(2));
+    orders_reports_.clear();
+    fill_reports_.clear();
+    position_reports_.clear();
+    std::uint64_t total = 0;
+    for (std::size_t o = 1; o <= orders_; ++o) {
+      const VenueOrder& v = venue_.at(o);
+      diff.expect("snapshot st[" + std::to_string(o) + "]", st.at(static_cast<long long>(o)), v.st);
+      diff.expect("snapshot f[" + std::to_string(o) + "]", f.at(static_cast<long long>(o)),
+                  static_cast<long long>(v.fills));
+      total += v.fills;
+      if (v.st == "none") {
+        continue;
+      }
+      m::OrderStatusReport r;
+      r.instrument_id = instrument_id();
+      r.client_order_id = ids_.at(o - 1);
+      r.venue_order_id = venue_id(o);
+      r.order_status = m::OrderStatus::Accepted;
+      if (v.st == "open" && v.fills > 0) {
+        r.order_status = m::OrderStatus::PartiallyFilled;
+      } else if (v.st == "done") {
+        r.order_status = v.fills == max_fill_ ? m::OrderStatus::Filled : m::OrderStatus::Canceled;
+      }
+      r.quantity = quantity(max_fill_ * kScale, 0);
+      r.filled_qty = quantity(v.fills * kScale, 0);
+      r.price = price(100 * static_cast<std::int64_t>(kScale), 1);
+      r.ts_accepted = UnixNanos{v.ts_open};
+      r.ts_last = UnixNanos{v.ts_last};
+      orders_reports_.push_back(r);
+      for (std::uint64_t n = 1; n <= v.fills; ++n) {
+        m::FillReport fr;
+        fr.instrument_id = instrument_id();
+        fr.venue_order_id = venue_id(o);
+        require(m::TradeId::from(std::to_string(o) + "-" + std::to_string(n), fr.trade_id),
+                "trade id");
+        fr.last_qty = quantity(kScale, 0);
+        fr.last_px = price(100 * static_cast<std::int64_t>(kScale), 1);
+        require(m::Money::from_raw(0, perpetual(0).common.quote_currency, fr.commission),
+                "commission");
+        fr.liquidity_side = m::LiquiditySide::Maker;
+        fr.client_order_id = ids_.at(o - 1);
+        fr.ts_event = UnixNanos{v.fill_ts.at(n - 1)};
+        fill_reports_.push_back(fr);
+      }
+    }
+    if (total > 0) {
+      m::PositionStatusReport p;
+      p.instrument_id = instrument_id();
+      p.position_side = m::PositionSide::Long;
+      p.quantity = quantity(total * kScale, 0);
+      p.avg_px_open = price(100 * static_cast<std::int64_t>(kScale), 1);
+      position_reports_.push_back(p);
+    }
+    snapshot_ts_ = xtime_;
+    return diff.text();
+  }
+
+  [[nodiscard]] m::Event snapshot_event() const {
+    m::VenueSnapshot v;
+    v.ts_snapshot = UnixNanos{snapshot_ts_};
+    v.orders = orders_reports_;
+    v.fills = fill_reports_;
+    v.positions = position_reports_;
+    return m::Event{v};
+  }
+
+  [[nodiscard]] std::string compare(const Step& s) const {
+    namespace map = jarvis::specmap::reconciliation;
+    Diff diff;
+    const st::Trading& t = engine_.kernel().trading;
+    const std::string_view phase = map::kernel_phase(s.var("phase"));
+    diff.expect("phase", phase, map::phase_name(t.reconciler.phase()));
+    diff.expect("node Running", phase == "Synced", lifecycle_.state() == m::NodeState::Running);
+    const m::TradingState trading = t.risk.trading_state();
+    diff.expect("trading", s.var("trading"),
+                std::string{trading == m::TradingState::Active ? "Active" : "Halted"});
+    diff.expect("trading (not REDUCING)", true, trading != m::TradingState::Reducing);
+    const std::map<long long, std::string> lst = to_text_map(s.var("lst"));
+    const std::map<long long, long long> lf = jarvis::trace::to_int_map(s.var("lf"));
+    for (std::size_t o = 1; o <= orders_; ++o) {
+      const ex::OrderRecord& r = t.oms.at(t.oms.find(ids_.at(o - 1)));
+      const std::string key = "[" + std::to_string(o) + "]";
+      diff.expect("lst" + key, lst.at(static_cast<long long>(o)),
+                  std::string{map::status_name(r.state.status())});
+      diff.expect("lf" + key, lf.at(static_cast<long long>(o)),
+                  static_cast<long long>(r.state.filled().raw() / kScale));
+    }
+    diff.expect("lpos (strategy)", s.integer("lpos"),
+                static_cast<long long>(t.portfolio.position(0, 0).signed_raw()) /
+                    static_cast<long long>(kScale));
+    diff.expect("lpos (venue)", s.integer("lpos"),
+                static_cast<long long>(t.portfolio.venue(0).signed_raw()) /
+                    static_cast<long long>(kScale));
+    std::string seen;
+    for (const std::string& trade : seen_) {
+      seen += (seen.empty() ? "" : ",") + trade;
+    }
+    diff.expect("seen", s.var("seen"), "{" + seen + "}");
+    return diff.text();
+  }
+
+  std::uint64_t max_fill_;
+  std::size_t orders_;
+  std::vector<m::ClientOrderId> ids_;
+  std::set<std::string> seen_;
+  st::StaticStrategySet<ReconciliationTrader> set_;
+  jarvis::engine::Engine<st::StaticStrategySet<ReconciliationTrader>> engine_;
+  jarvis::engine::Lifecycle lifecycle_;
+  std::vector<VenueOrder> venue_; // by spec order, from 1
+  std::uint64_t xtime_ = 0;
+  std::uint64_t now_ = 0;
+  std::uint64_t snapshot_ts_ = 0;
+  std::vector<m::OrderStatusReport> orders_reports_;
+  std::vector<m::FillReport> fill_reports_;
+  std::vector<m::PositionStatusReport> position_reports_;
+};
+
 // ---- driver ------------------------------------------------------------------------------------
 
 std::string describe(const Step& s) {
@@ -758,6 +1121,9 @@ bool run(const std::string& path) {
   }
   if (file.spec == "DepthSync") {
     return replay<DepthSyncReplayer>(file, path);
+  }
+  if (file.spec == "Reconciliation") {
+    return replay<ReconciliationReplayer>(file, path);
   }
   std::cerr << path << ": no trace driver for spec " << file.spec << "\n";
   return false;
