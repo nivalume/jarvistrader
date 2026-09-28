@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -13,10 +14,11 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
 
-// The core thread's end of the market data hand-off (docs/architecture.md sections 4.1 and
-// 7.1): records the IO threads wrote to their rings are decoded here, stamped with the core
-// clock, and served to the driver in arrival order. Nothing yet is WouldBlock, never the end.
-// An event's book deltas live in the source until the driver asks for the event after it.
+// The core thread's end of the IO threads' hand-off (docs/architecture.md sections 4.1 and 7.1):
+// records the IO threads wrote to their rings are decoded here, stamped with the core clock,
+// and served to the driver in arrival order. Nothing yet is WouldBlock, never the end. An
+// event's lists (book deltas; an account state's balances; a venue snapshot's reports) live in
+// the source until the driver asks for the event after it.
 
 namespace jarvis::live {
 
@@ -43,8 +45,16 @@ public:
     if (auto* d = std::get_if<model::OrderBookDeltas>(&e.event)) {
       e.deltas = spare();
       e.deltas.assign(d->deltas.begin(), d->deltas.end());
-    } else if (std::holds_alternative<model::AccountState>(e.event)) {
-      return core::Status::UnsupportedMessage; // not market data
+    } else if (const auto* a = std::get_if<model::AccountState>(&e.event)) {
+      e.lists = std::make_unique<Lists>();
+      e.lists->balances.assign(a->balances.begin(), a->balances.end());
+      e.lists->margins.assign(a->margins.begin(), a->margins.end());
+    } else if (const auto* v = std::get_if<model::VenueSnapshot>(&e.event)) {
+      e.lists = std::make_unique<Lists>();
+      e.lists->balances.assign(v->balances.begin(), v->balances.end());
+      e.lists->orders.assign(v->orders.begin(), v->orders.end());
+      e.lists->fills.assign(v->fills.begin(), v->fills.end());
+      e.lists->positions.assign(v->positions.begin(), v->positions.end());
     }
     e.key = core::EventKey{ts, source_id, ++pushed_};
     queue_.push_back(std::move(e));
@@ -62,6 +72,14 @@ public:
     queue_.pop_front();
     if (auto* d = std::get_if<model::OrderBookDeltas>(&current_.event)) {
       d->deltas = std::span<const model::OrderBookDelta>{current_.deltas};
+    } else if (auto* a = std::get_if<model::AccountState>(&current_.event)) {
+      a->balances = current_.lists->balances;
+      a->margins = current_.lists->margins;
+    } else if (auto* v = std::get_if<model::VenueSnapshot>(&current_.event)) {
+      v->balances = current_.lists->balances;
+      v->orders = current_.lists->orders;
+      v->fills = current_.lists->fills;
+      v->positions = current_.lists->positions;
     }
     key = current_.key;
     event = current_.event;
@@ -72,10 +90,20 @@ public:
   [[nodiscard]] std::uint64_t pushed() const noexcept { return pushed_; }
 
 private:
+  // The lists of the rare account records (allocated per record; market data never is).
+  struct Lists {
+    std::vector<model::AccountBalance> balances;
+    std::vector<model::MarginBalance> margins;
+    std::vector<model::OrderStatusReport> orders;
+    std::vector<model::FillReport> fills;
+    std::vector<model::PositionStatusReport> positions;
+  };
+
   struct Entry {
     core::EventKey key;
     model::Event event;
     std::vector<model::OrderBookDelta> deltas;
+    std::unique_ptr<Lists> lists;
   };
 
   std::vector<model::OrderBookDelta> spare() {

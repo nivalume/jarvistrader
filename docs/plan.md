@@ -160,7 +160,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [x] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）：规约与 TLC 检查（三个协议变体都被不变量抓到）；成交只通过计数改变状态（与 OMS 一致）；映射头 `specs/map/reconciliation_actions.hpp` 与正向 trace validation（`MAP.toml` 中 `forward = true`）
 - [ ] task: execution — 对账协议：先订阅后快照、逐单比对、`userTrades` 合成漏成交、遗留与外部订单处理、置位与 `ReconciliationDiff`（§15.2）：内核一侧已完成（`jarvis/execution/reconciliation.hpp`：会话阶段、暂存、按快照置位、合成事件、差异与结果、`on_reconciled`、过期状态事件；单元与性质测试）；适配器用 REST 组装 `VenueSnapshot`（一致读）已完成（`jarvis/adapter/binance/snapshot.hpp`），接入 venue-io 线程随 `LiveWiring`
 - [ ] task: execution — 断线重连对账与每 60 秒轻量对账（§15.3）：断线重连已完成（内核会话阶段与 driver 同步闸门：`Running → Degraded → Syncing → Running`）；每 60 秒轻量对账待做
-- [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）
+- [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）：实盘节点已接线（`jarvis/live/live_node.hpp`：凭证、启动检查、epoch、`MarketFeed` 与 `VenueIo`、账户环先于行情环、`CommandRouter`、`await_sync`；C++ `live_node_main` 与 Python `Node.run`；脚本化交易所端到端测试与回放一致）；admin 通道随 ops
 - [ ] task: live — core 线程绑核与 busy-poll，IO 线程的 NUMA 亲和
 - [ ] task: node — Node 生命周期的 `Syncing`、`Degraded`、`Stopping`、`Faulted` 实盘路径：`Syncing` 与 `Degraded` 由同步闸门驱动（`engine/sync_gate.hpp`，`DriverOptions::await_sync`）；行情与 WS API 健康接入、`Stopping`（`SIGTERM` 撤单流程）与 `Faulted` 待做
 - [ ] task: risk — `countdownCancelAll`：进入 `Synced` 时武装，每 30 秒续期，关停确认后解除（§10.3）
@@ -168,7 +168,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: ops — 遥测：`LogRecord` 格式化为 JSON lines，按 §19.2 暴露 Prometheus 指标
 - [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）
 - [ ] task: ops — `SIGTERM` 优雅关停流程（§19.4）
-- [ ] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）
+- [ ] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查待做
 - [ ] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）
 - [ ] task: execution — 内置执行算法 `PassiveThenAggressive`
 - [ ] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点

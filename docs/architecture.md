@@ -192,6 +192,16 @@ sandbox 的实现（M4-E，`jarvis/live/sandbox_node.hpp`）：
 - instrument 取自 `exchangeInfo`（REST），或 `venues[].exchange_info` 指定的保存文件；预备输入（instrument 定义与模拟账户）以启动时刻打时间戳。
 - 结束于 SIGINT、SIGTERM 或 `--run-for`，以 `ShutdownRequested` 与 `Drained` 收尾。C++ 节点用 `jarvis::live_node_main<S...>`（`jarvis/live/live_main.hpp`），Python 节点在带 live shell 的构建中（`just install-live`）用同一个 `jarvis.main`。
 
+live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
+
+- 启动顺序：解析 `venues[0].credentials`；运行启动检查（时钟偏移、instrument、持仓模式、多资产模式、保证金模式与杠杆、key 权限），任一失败即不启动；取下一个 `ClientOrderId` epoch 并先写入磁盘（默认 `persistence.dir` 中本节点各次运行所在目录下的 `epoch` 文件），再允许任何订单带上它。
+- 两个 IO 线程：行情的 `MarketFeed` 与账户的 `VenueIo`（第 7.1 节）。core 线程的泵先排空账户环，再排空行情环，都进入同一个 `LiveSource`，`AccountState` 与 `VenueSnapshot` 在其中保有自己的列表。
+- `Driver` 以 `await_sync` 运行：前导事件（instrument 定义）之后停在 `Syncing`，直到账户对账完成才进入 `Running`（第 4.4 节的同步闸门）；用户流断开时经 `Degraded` 回到 `Syncing`。
+- 引擎每产出一条 `SubmitOrder`、`ModifyOrder`、`CancelOrder` 都立即交给 venue-io 的命令环（`CommandRouter`，环满时等待，从不丢弃）；退出时最多等 2 秒让命令离开环。
+- 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
+- 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
+- 尚未实现：REST 下单兜底、`countdownCancelAll`、`SIGTERM` 撤单流程、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
+
 ### 4.2 NodeConfig
 
 配置是类型化 TOML，解析为 C++ 结构体（`jarvis/node/config.hpp`）。未知键直接报错。命令行的 `--env` 与 `--set a.b=c` 覆盖之后的最终配置被规范化并计算 hash，hash 写入事件日志头，回放时据此确认配置一致。
@@ -1600,6 +1610,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 - `NodeConfig` 的 hash 写入日志头。testnet 与 prod 是不同的 endpoint 配置值，不存在默认指向 prod 的布尔开关。
 - 密钥只以引用形式出现在配置中（`env:` 或权限为 0600 的文件路径）。签名经 `Signer` 接口实现，Ed25519 使用 OpenSSL 3。启动时校验 key 的权限（有交易权限、无提现权限）与 IP 白名单。
+- 实现（M5-C3，`jarvis/node/credentials.hpp`）：`env:PREFIX` 读取 `PREFIX_API_KEY`，以及 `PREFIX_API_SECRET` 或 `PREFIX_PRIVATE_KEY_FILE`；`file:PATH` 读取 TOML 文件中的 `api_key`，以及 `secret` 或 `private_key_file`（相对于该文件）。secret 是 HMAC secret 或 PEM 格式的 Ed25519 私钥，由 `Signer::from_secret` 识别。错误只说明缺什么，从不包含 secret。文件权限检查尚未实现。
 
 ### 19.2 可观测性
 

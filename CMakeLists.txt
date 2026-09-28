@@ -162,6 +162,7 @@ add_library(
   jarvis/node/fingerprint.cpp
   jarvis/node/model_text.cpp
   jarvis/node/config.cpp
+  jarvis/node/credentials.cpp
   jarvis/node/epoch_store.cpp
   jarvis/node/toml_impl.cpp
   jarvis/node/strategy_registry.cpp
@@ -237,7 +238,7 @@ if(JARVIS_BUILD_LIVE)
   # Live runtime pieces (docs/architecture.md sections 7 and 13.4).
   add_library(jarvis_live STATIC jarvis/live/raw_frames.cpp jarvis/live/market_feed.cpp
                           jarvis/live/redecode.cpp jarvis/live/sandbox_node.cpp
-                          jarvis/live/venue_io.cpp)
+                          jarvis/live/venue_io.cpp jarvis/live/live_node.cpp)
   add_library(jarvis::live ALIAS jarvis_live)
   target_link_libraries(jarvis_live PUBLIC jarvis::kernel jarvis::shell jarvis::network jarvis::adapter)
 

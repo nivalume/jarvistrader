@@ -53,6 +53,7 @@
 #if defined(JARVIS_PY_LIVE)
 #include <atomic>
 
+#include "jarvis/live/live_node.hpp"
 #include "jarvis/live/sandbox_node.hpp"
 #endif
 
@@ -857,28 +858,18 @@ private:
   bool frozen_ = false;
 };
 
-nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
-                          const std::optional<std::string>& out, std::optional<double> run_for_s) {
-  live::SandboxRequest request;
-  request.config = &setup.config;
-  request.manifest = setup.manifest;
-  request.out = out.value_or("");
-  request.extras = header_extras();
-  if (run_for_s) {
-    request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
-  }
-  live::SandboxResult result;
-  std::string error;
+// Runs `run(stop, hook)` with the GIL released, SIGINT and SIGTERM as the stop request, and the
+// sandbox hook; hands back to the collector what gc.freeze() froze.
+template <typename Run> Status run_realtime(const NodeSetup& setup, Assembly& assembly, Run&& run) {
   Status s = Status::Ok;
   bool hook_frozen = false;
   {
     nb::gil_scoped_release release;
     std::atomic<bool> stop{false};
     const live::ShutdownSignals signals{stop};
-    request.stop = &stop;
     SandboxHook hook{assembly, setup.config.python.idle_hook_ms};
     try {
-      s = live::run_sandbox(request, *assembly.set, result, error, hook);
+      s = run(stop, hook);
     } catch (...) {
       assembly.gil.release();
       throw;
@@ -893,22 +884,93 @@ nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
   if (PyErr_Occurred() != nullptr) {
     throw nb::python_error();
   }
+  return s;
+}
+
+nb::dict feed_dict(const live::MarketFeedStats& f) {
+  nb::dict feed;
+  feed["messages"] = f.messages;
+  feed["events"] = f.events;
+  feed["decode_errors"] = f.decode_errors;
+  feed["unsupported"] = f.unsupported;
+  feed["ring_waits"] = f.ring_waits;
+  feed["connects"] = f.connects;
+  feed["snapshots"] = f.snapshots;
+  feed["snapshot_failures"] = f.snapshot_failures;
+  feed["book_syncs"] = f.book_syncs;
+  return feed;
+}
+
+nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
+                          const std::optional<std::string>& out, std::optional<double> run_for_s) {
+  live::SandboxRequest request;
+  request.config = &setup.config;
+  request.manifest = setup.manifest;
+  request.out = out.value_or("");
+  request.extras = header_extras();
+  if (run_for_s) {
+    request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
+  }
+  live::SandboxResult result;
+  std::string error;
+  const Status s =
+      run_realtime(setup, assembly, [&](const std::atomic<bool>& stop, SandboxHook& hook) {
+        request.stop = &stop;
+        const Status ran = live::run_sandbox(request, *assembly.set, result, error, hook);
+        request.stop = nullptr; // `stop` ends with this call
+        return ran;
+      });
   check(s, error);
   node::BacktestResult summary;
   summary.directory = result.directory;
   summary.summary = result.summary;
   nb::dict d = summary_dict(summary);
-  nb::dict feed;
-  feed["messages"] = result.feed.messages;
-  feed["events"] = result.feed.events;
-  feed["decode_errors"] = result.feed.decode_errors;
-  feed["unsupported"] = result.feed.unsupported;
-  feed["ring_waits"] = result.feed.ring_waits;
-  feed["connects"] = result.feed.connects;
-  feed["snapshots"] = result.feed.snapshots;
-  feed["snapshot_failures"] = result.feed.snapshot_failures;
-  feed["book_syncs"] = result.feed.book_syncs;
-  d["feed"] = feed;
+  d["feed"] = feed_dict(result.feed);
+  d["strategies"] = assembly.stats();
+  return d;
+}
+
+nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
+                       const std::optional<std::string>& out, std::optional<double> run_for_s) {
+  live::LiveRequest request;
+  request.config = &setup.config;
+  request.manifest = setup.manifest;
+  request.out = out.value_or("");
+  request.extras = header_extras();
+  if (run_for_s) {
+    request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
+  }
+  live::LiveResult result;
+  std::string error;
+  const Status s =
+      run_realtime(setup, assembly, [&](const std::atomic<bool>& stop, SandboxHook& hook) {
+        request.stop = &stop;
+        const Status ran = live::run_live(request, *assembly.set, result, error, hook);
+        request.stop = nullptr; // `stop` ends with this call
+        return ran;
+      });
+  check(s, error);
+  node::BacktestResult summary;
+  summary.directory = result.directory;
+  summary.summary = result.summary;
+  nb::dict d = summary_dict(summary);
+  d["feed"] = feed_dict(result.feed);
+  nb::dict venue;
+  venue["events"] = result.venue.events;
+  venue["commands"] = result.venue.commands;
+  venue["refused_locally"] = result.venue.refused_locally;
+  venue["unknown_outcomes"] = result.venue.unknown_outcomes;
+  venue["frames"] = result.venue.frames;
+  venue["decode_errors"] = result.venue.decode_errors;
+  venue["snapshots"] = result.venue.snapshots;
+  venue["snapshot_failures"] = result.venue.snapshot_failures;
+  d["venue"] = venue;
+  d["epoch"] = result.epoch;
+  nb::list warnings;
+  for (const std::string& w : result.startup.warnings) {
+    warnings.append(w);
+  }
+  d["warnings"] = warnings;
   d["strategies"] = assembly.stats();
   return d;
 }
@@ -918,13 +980,15 @@ nb::dict run_node(const NodeSetup& setup, const nb::list& strategies,
                   const std::optional<std::string>& out, std::optional<double> run_for_s) {
   Assembly assembly;
   assembly.build(strategies, setup.config, false);
-  if (setup.config.node.env == node::Env::Sandbox) {
+  if (setup.config.node.env == node::Env::Sandbox || setup.config.node.env == node::Env::Live) {
 #if defined(JARVIS_PY_LIVE)
-    return run_sandbox_node(setup, assembly, out, run_for_s);
+    return setup.config.node.env == node::Env::Live
+               ? run_live_node(setup, assembly, out, run_for_s)
+               : run_sandbox_node(setup, assembly, out, run_for_s);
 #else
     static_cast<void>(run_for_s);
-    throw nb::value_error("node.env = \"sandbox\" needs the live shell, which this build of "
-                          "jarvis leaves out (build it with -DJARVIS_BUILD_LIVE=ON, e.g. "
+    throw nb::value_error("node.env = \"sandbox\" or \"live\" needs the live shell, which this "
+                          "build of jarvis leaves out (build it with -DJARVIS_BUILD_LIVE=ON, e.g. "
                           "`just install-live`)");
 #endif
   }

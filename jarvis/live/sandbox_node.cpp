@@ -69,9 +69,10 @@ Status exchange_info_json(const SandboxRequest& request, const node::VenueConfig
   return s;
 }
 
-// The venue symbols [data.streams] names, and their full stream names.
-Status collect_streams(const node::NodeConfig& config, std::vector<std::string>& symbols,
-                       std::vector<std::string>& streams, std::string& error) {
+} // namespace
+
+Status feed_streams(const node::NodeConfig& config, std::vector<std::string>& symbols,
+                    std::vector<std::string>& streams, std::string& error) {
   for (const node::DataStream& group : config.data.streams) {
     for (const model::InstrumentId& id : group.instruments) {
       std::string symbol;
@@ -95,7 +96,19 @@ Status collect_streams(const node::NodeConfig& config, std::vector<std::string>&
   return Status::Ok;
 }
 
-} // namespace
+Status feed_instruments(std::span<const binance::PerpetualDefinition> instruments,
+                        MarketFeedConfig& feed, node::Preamble& preamble, std::string& error) {
+  for (const binance::PerpetualDefinition& d : instruments) {
+    const Status s = feed.symbols.add(d.instrument.common);
+    if (!core::ok(s)) {
+      error = "duplicate instrument in exchangeInfo";
+      return s;
+    }
+    feed.names.emplace_back(d.instrument.common.raw_symbol.view());
+    preamble.events.emplace_back(d.instrument);
+  }
+  return Status::Ok;
+}
 
 struct ShutdownSignals::Saved {
   struct sigaction interrupt {};
@@ -134,7 +147,7 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
   const node::VenueConfig& venue = config.venues.front();
   out = SandboxPlan{};
   std::vector<std::string> symbols;
-  Status s = collect_streams(config, symbols, out.feed.streams, error);
+  Status s = feed_streams(config, symbols, out.feed.streams, error);
   if (!core::ok(s)) {
     return s;
   }
@@ -148,14 +161,9 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
     error = "exchangeInfo: " + error;
     return s;
   }
-  for (const binance::PerpetualDefinition& d : out.instruments) {
-    s = out.feed.symbols.add(d.instrument.common);
-    if (!core::ok(s)) {
-      error = "duplicate instrument in exchangeInfo";
-      return s;
-    }
-    out.feed.names.emplace_back(d.instrument.common.raw_symbol.view());
-    out.preamble.events.emplace_back(d.instrument);
+  s = feed_instruments(out.instruments, out.feed, out.preamble, error);
+  if (!core::ok(s)) {
+    return s;
   }
   if (venue.sim && !venue.sim->balances.empty()) {
     s = node::account_preamble(config, *venue.sim, now, out.preamble, error);

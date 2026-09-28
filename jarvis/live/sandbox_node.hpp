@@ -60,6 +60,15 @@ struct SandboxPlan {
 [[nodiscard]] core::Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now,
                                         SandboxPlan& out, std::string& error);
 
+// Shared with the live node: the venue symbols [data.streams] names (USDⓈ-M perpetuals) and
+// their full stream names; the instruments into the feed's symbol table and the preamble.
+[[nodiscard]] core::Status feed_streams(const node::NodeConfig& config,
+                                        std::vector<std::string>& symbols,
+                                        std::vector<std::string>& streams, std::string& error);
+[[nodiscard]] core::Status
+feed_instruments(std::span<const adapter::binance::PerpetualDefinition> instruments,
+                 MarketFeedConfig& feed, node::Preamble& preamble, std::string& error);
+
 // While alive, SIGINT and SIGTERM set `flag` (the handlers only store to the atomic); the
 // previous handlers (Python's, in a Python process) come back when it goes.
 class ShutdownSignals {

@@ -404,6 +404,25 @@ def test_a_sandbox_run_needs_the_live_shell(tmp_path: Path) -> None:
         node.run()
 
 
+LIVE_CONFIG = SANDBOX_CONFIG.replace('env = "sandbox"', 'env = "live"').replace(
+    'kind = "binance_usdm"', 'kind = "binance_usdm"\ncredentials = "env:JARVIS_TEST_NO_SUCH_KEY"'
+)
+
+
+def test_a_live_run_resolves_its_credentials_first(tmp_path: Path, monkeypatch) -> None:
+    from jarvis._core import node as native
+
+    monkeypatch.delenv("JARVIS_TEST_NO_SUCH_KEY_API_KEY", raising=False)
+    config = tmp_path / "live.toml"
+    config.write_text(LIVE_CONFIG)
+    node = Node(config)
+    assert node.env == "live"
+    node.add_strategy(Strategy(id="idle-001"))
+    expected = "JARVIS_TEST_NO_SUCH_KEY_API_KEY is not set" if native.has_live else "live shell"
+    with pytest.raises((ValueError, RuntimeError), match=expected):
+        node.run()
+
+
 def test_run_for_is_a_node_argument() -> None:
     from jarvis._core import node as native
 

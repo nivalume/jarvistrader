@@ -62,7 +62,10 @@ class RunResult:
     first_ts: int
     last_ts: int
     strategies: tuple[StrategyStats, ...]
-    feed: Mapping[str, int] | None = None  # sandbox: the market data feed's counters
+    feed: Mapping[str, int] | None = None  # sandbox and live: the market data feed's counters
+    venue: Mapping[str, int] | None = None  # live: the account and order entry's counters
+    epoch: int | None = None  # live: the ClientOrderId epoch this run took
+    warnings: tuple[str, ...] = ()  # live: what the startup checks warned about
 
     @property
     def fingerprint(self) -> str:
@@ -90,6 +93,11 @@ class RunResult:
             lines.append(f"fingerprint: {digest} records={records}")
         if self.feed is not None:
             lines.append("feed: " + ", ".join(f"{k} {v}" for k, v in self.feed.items()))
+        if self.venue is not None:
+            lines.append("venue: " + ", ".join(f"{k} {v}" for k, v in self.venue.items()))
+        if self.epoch is not None:
+            lines.append(f"epoch: {self.epoch}")
+        lines.extend(f"warning: {w}" for w in self.warnings)
         for s in self.strategies:
             mean = s.total_ns / s.calls / 1000 if s.calls else 0.0
             lines.append(
@@ -198,12 +206,14 @@ class Node:
 
     def run(self, *, run_for: float | None = None) -> RunResult:
         """Runs the node and writes the run directory: a backtest over its [data], or a sandbox
-        session until SIGINT, SIGTERM or `run_for` seconds."""
+        or live session until SIGINT, SIGTERM or `run_for` seconds."""
         if not self._strategies:
             raise ValueError("the node has no strategies; add_strategy() first")
         with self._guard():
             summary = self._setup.run(self._strategies, self._out, run_for)
         stats = tuple(StrategyStats(**s) for s in summary.pop("strategies"))
+        if "warnings" in summary:
+            summary["warnings"] = tuple(summary["warnings"])
         result = RunResult(strategies=stats, **summary)
         self._run_directory = result.directory or None
         return result
