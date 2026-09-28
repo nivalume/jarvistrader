@@ -228,6 +228,49 @@ def test_a_passthrough_parent_order(tmp_path: Path) -> None:
     assert _BadAlgo.message and "unknown execution algorithm" in _BadAlgo.message
 
 
+class RestThenTake(Strategy):
+    """Buys 0.010 with passive_then_aggressive: rests 300 ms at the bid, then takes."""
+
+    def __init__(self, params: Any = None, **kwargs: Any) -> None:
+        super().__init__(params, **kwargs)
+        self.parent: Any = None
+        self.children: list[tuple[str, str, bool, str]] = []
+        self.fills: list[str] = []
+
+    def on_start(self, ctx: jarvis.Context) -> None:
+        ctx.subscribe_quotes(IID, Cadence.EVERY)
+
+    def on_quote(self, ctx: jarvis.Context, quote: m.QuoteTick) -> None:
+        if self.parent is None:
+            intent = ctx.market(IID, m.OrderSide.BUY, "0.010")
+            self.parent = ctx.submit_parent(intent, algo="passive_then_aggressive",
+                                            params=[300 * MS])
+
+    def on_order_event(self, ctx: jarvis.Context, event: Any) -> None:
+        if isinstance(event, m.OrderSubmitted):
+            order = ctx.order(event.client_order_id)
+            self.children.append(
+                (str(order.price), str(order.quantity), order.post_only, str(order.time_in_force))
+            )
+        if isinstance(event, m.OrderFilled):
+            self.fills.append(str(event.last_px))
+
+
+def test_passive_then_aggressive_rests_then_takes(tmp_path: Path) -> None:
+    node = Node(_config(tmp_path, SIM), out=tmp_path / "run")
+    strategy = RestThenTake(id="taker-001")
+    result = node.add_strategy(strategy).run()
+    assert result.strategy_errors == 0
+    assert strategy.children == [
+        ("65000.0", "0.010", True, "TimeInForce.GTC"),  # rests at the bid
+        ("65000.1", "0.010", False, "TimeInForce.IOC"),  # then takes at the ask
+    ]
+    assert strategy.fills == ["65000.1"]
+    replay = Node.from_run(result.directory).add_strategy(RestThenTake(id="taker-001")).replay()
+    assert replay.divergence is None, str(replay)
+    assert replay.outputs == result.outputs
+
+
 class _BadAlgo(Strategy):
     message = ""
 

@@ -169,8 +169,8 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）：admin socket（0600）、记录的 `AdminCommand` 输入（`halt`、`reduce`、`resume`、`cancel_all`、`shutdown`）、`status`（ready 与 alive）、`jarvis admin` 已完成（M5-G，sandbox 端到端测试含回放一致）；`set_param` 与 `snapshot` 待做
 - [ ] task: ops — `SIGTERM` 优雅关停流程（§19.4）：已完成（M5-D2，`[node] shutdown` 与 `shutdown_timeout_ms`：记录的 `Shutdown` 输入、`Halted` 与 KillSwitch、`Stopping` 中等待确认或超时、`on_stop` 后不再回调、`Stopped` 时解除 `countdownCancelAll`、`RunSummary::left_open`；引擎、driver 与脚本化交易所端到端测试）；最终快照随 WAL
 - [x] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查已完成（M5-D4：保存 secret 的文件须为 0600 或 0400）
-- [ ] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）
-- [ ] task: execution — 内置执行算法 `PassiveThenAggressive`
+- [ ] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）：已实现（M5-H：同方向最优价或中间价加偏移、post-only 且不越过对手价、改价跟随、限速余额保留、被拒或被撤后重挂）；按队列位置估计在改单与撤单重下之间选择待做
+- [x] task: execution — 内置执行算法 `PassiveThenAggressive`：已实现（M5-H：post-only 挂单、超时或偏离后撤单并以 IOC 吃单、吃单份额上限；引擎测试与 Python 模拟交易所回测含回放一致）
 - [ ] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点
 - [ ] task: python — `node.add_native_strategy()`：Python 启动的混合节点承载注册的 C++ 策略
 - [ ] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）

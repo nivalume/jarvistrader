@@ -4,10 +4,14 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <variant>
 
 #include "jarvis/core/fixed_vector.hpp"
+#include "jarvis/core/int_math.hpp"
 #include "jarvis/core/status.hpp"
+#include "jarvis/core/time.hpp"
 #include "jarvis/data/subscription.hpp"
 #include "jarvis/execution/oms.hpp"
 #include "jarvis/execution/order_intent.hpp"
@@ -39,16 +43,27 @@ namespace jarvis::strategy {
 using data::StrategyIndex;
 
 enum class AlgoKind : std::uint8_t {
-  Passthrough = 0, // the parent goes out as one child on the same terms
+  Passthrough = 0,           // the parent goes out as one child on the same terms
+  PassiveThenAggressive = 1, // rest passively, then take what is left
+  PeggedQuote = 2,           // one resting order kept at an offset from a reference price
 };
-inline constexpr std::size_t kAlgoKindCount = 1;
+inline constexpr std::size_t kAlgoKindCount = 3;
 
 [[nodiscard]] constexpr std::string_view to_string(AlgoKind k) noexcept {
   switch (k) {
   case AlgoKind::Passthrough:
     return "passthrough";
+  case AlgoKind::PassiveThenAggressive:
+    return "passive_then_aggressive";
+  case AlgoKind::PeggedQuote:
+    return "pegged_quote";
   }
   return "";
+}
+
+// Whether the algorithm hears of its instrument's quotes (AlgoQuote).
+[[nodiscard]] constexpr bool wants_quotes(AlgoKind k) noexcept {
+  return k == AlgoKind::PassiveThenAggressive || k == AlgoKind::PeggedQuote;
 }
 
 [[nodiscard]] constexpr bool parse_algo(std::string_view text, AlgoKind& out) noexcept {
@@ -89,6 +104,7 @@ struct AlgoState {
   std::array<AlgoChild, kAlgoChildren> children{};
   std::uint8_t child_count = 0;
   std::array<std::int64_t, kAlgoScratch> scratch{};
+  std::uint64_t wake_ns = 0; // the algorithm's timer (AlgoTimer); 0: none
   bool active = false;
   bool canceling = false;
   bool finished = false;
@@ -120,6 +136,11 @@ public:
     }
   }
 
+  // Active parents on `slot` whose algorithm hears quotes (the kernel skips the rest).
+  [[nodiscard]] std::uint32_t quoting(std::uint32_t slot) const noexcept {
+    return slot < reserved_.size() ? reserved_[slot].quoting : 0;
+  }
+
   // Stores a new active parent in a free slot; CapacityExceeded when every slot is active.
   [[nodiscard]] core::Status open(const AlgoState& parent, std::uint32_t& index) noexcept {
     for (std::uint32_t i = 0; i < parents_.size(); ++i) {
@@ -130,6 +151,9 @@ public:
         parents_[i].child_count = 0;
         index = i;
         refresh(i);
+        if (wants_quotes(parent.kind) && parent.slot < reserved_.size()) {
+          ++reserved_[parent.slot].quoting;
+        }
         return core::Status::Ok;
       }
     }
@@ -208,7 +232,11 @@ public:
       return false;
     }
     p.active = false;
+    p.wake_ns = 0;
     refresh(i);
+    if (wants_quotes(p.kind) && p.slot < reserved_.size() && reserved_[p.slot].quoting > 0) {
+      --reserved_[p.slot].quoting;
+    }
     return true;
   }
 
@@ -224,6 +252,7 @@ private:
   struct Reserve {
     std::uint64_t buy_raw = 0;
     std::uint64_t sell_raw = 0;
+    std::uint32_t quoting = 0; // active parents that hear quotes
   };
 
   // Recomputes parent i's reserved quantity and moves the instrument totals by the difference.
@@ -261,9 +290,21 @@ struct ParentView {
   bool canceling = false;
 };
 
-// What an algorithm hears about once its parent started: its children's order events (quotes
-// and timers join with the quoting algorithms, plan.md M5).
-using AlgoEvent = model::OrderEvent;
+// The best bid and ask of the parent's instrument (quotes, or the L2 book's best levels).
+struct AlgoTop {
+  model::Price bid;
+  model::Price ask;
+};
+
+struct AlgoQuote { // the top moved (algorithms for which wants_quotes)
+  AlgoTop top;
+};
+struct AlgoTimer { // the time the algorithm asked for with ctx.wake_at came
+  core::UnixNanos deadline;
+};
+
+// What an algorithm hears about once its parent started.
+using AlgoEvent = std::variant<model::OrderEvent, AlgoQuote, AlgoTimer>;
 
 template <typename A, typename Ctx>
 concept ExecAlgorithm = requires(const A a, AlgoState& st, Ctx& ctx, const AlgoEvent& e) {
@@ -292,6 +333,256 @@ struct Passthrough {
   }
   template <typename Ctx> [[nodiscard]] core::Status on_cancel(AlgoState& /*st*/, Ctx& ctx) const {
     return ctx.cancel_children();
+  }
+};
+
+namespace algo_detail {
+
+// `raw` rounded down to a multiple of `step` (a positive raw increment).
+[[nodiscard]] constexpr std::int64_t floor_to(std::int64_t raw, std::int64_t step) noexcept {
+  if (step <= 0) {
+    return raw;
+  }
+  const std::int64_t r = raw % step;
+  return r >= 0 ? raw - r : raw - r - step;
+}
+
+// A limit (or, without a price, market) child for `quantity_raw` on the parent's terms.
+[[nodiscard]] inline execution::OrderIntent
+child_of(const AlgoState& st, std::uint64_t quantity_raw, std::optional<model::Price> price,
+         bool post_only, model::TimeInForce tif) noexcept {
+  execution::OrderIntent c = st.intent;
+  static_cast<void>(
+      model::Quantity::from_raw(quantity_raw, st.intent.quantity.precision(), c.quantity));
+  c.type = price ? model::OrderType::Limit : model::OrderType::Market;
+  c.price = price;
+  c.post_only = post_only;
+  c.time_in_force = tif;
+  return c;
+}
+
+[[nodiscard]] inline std::optional<model::Price> price_of(std::int64_t raw,
+                                                          std::uint8_t precision) noexcept {
+  model::Price p;
+  if (raw <= 0 || !core::ok(model::Price::from_raw(raw, precision, p))) {
+    return std::nullopt;
+  }
+  return p;
+}
+
+} // namespace algo_detail
+
+// Rests the parent passively, then takes what is left (section 11.4).
+//
+//   params[0]  how long to rest, in nanoseconds (0: 5 s)
+//   params[1]  how far the market may move away from the resting price, in ticks, before the
+//              algorithm takes at once (0: no limit)
+//   params[2]  the share of the parent's quantity that may be taken, per mille (0: all of it)
+//
+// The resting child is post-only at the parent's price when it has one, else at the same-side
+// best. Taking cancels it and, once it is gone, sends an IOC limit at the opposite best (a
+// market IOC without quotes) for what is left, within the share; after that the algorithm is
+// done. A resting child the venue refuses (post-only that would cross) or that closes unfilled
+// is taken at once too.
+struct PassiveThenAggressive {
+  static constexpr std::int64_t kDefaultRestNs = 5'000'000'000;
+  enum Phase : std::uint8_t { kResting = 0, kSwitching = 1, kTaking = 2 };
+
+  template <typename Ctx> [[nodiscard]] core::Status on_parent(AlgoState& st, Ctx& ctx) const {
+    std::optional<model::Price> px =
+        st.intent.type == model::OrderType::Limit ? st.intent.price : std::nullopt;
+    if (!px) {
+      if (const std::optional<AlgoTop> top = ctx.top()) {
+        px = st.intent.side == model::OrderSide::Buy ? top->bid : top->ask;
+      }
+    }
+    if (!px) {
+      return take(st, ctx); // nothing to rest at
+    }
+    st.scratch[1] = px->raw();
+    model::ClientOrderId child;
+    bool denied = false;
+    const core::Status s =
+        ctx.submit(algo_detail::child_of(st, st.reserved_raw, px, true, model::TimeInForce::Gtc),
+                   child, denied);
+    if (!core::ok(s) || denied) {
+      ctx.finish();
+      return s;
+    }
+    const std::int64_t rest = st.params.values[0] > 0 ? st.params.values[0] : kDefaultRestNs;
+    ctx.wake_at(core::UnixNanos{ctx.now().value() + static_cast<std::uint64_t>(rest)});
+    return core::Status::Ok;
+  }
+
+  template <typename Ctx>
+  [[nodiscard]] core::Status on_event(AlgoState& st, Ctx& ctx, const AlgoEvent& e) const {
+    if (const auto* q = std::get_if<AlgoQuote>(&e)) {
+      return st.scratch[0] == kResting && moved_away(st, ctx, q->top) ? switch_to_take(st, ctx)
+                                                                      : core::Status::Ok;
+    }
+    if (std::holds_alternative<AlgoTimer>(e)) {
+      return st.scratch[0] == kResting ? switch_to_take(st, ctx) : core::Status::Ok;
+    }
+    if (st.child_count != 0) {
+      return core::Status::Ok;
+    }
+    if (st.scratch[0] == kTaking) {
+      ctx.finish();
+      return core::Status::Ok;
+    }
+    return take(st, ctx); // resting child gone (refused, canceled, expired) or switching done
+  }
+
+  template <typename Ctx> [[nodiscard]] core::Status on_cancel(AlgoState& /*st*/, Ctx& ctx) const {
+    ctx.sleep();
+    return ctx.cancel_children();
+  }
+
+private:
+  template <typename Ctx>
+  [[nodiscard]] static bool moved_away(const AlgoState& st, Ctx& ctx, const AlgoTop& top) {
+    const std::optional<model::Price> tick = ctx.tick();
+    if (st.params.values[1] <= 0 || !tick) {
+      return false;
+    }
+    const std::int64_t limit = st.params.values[1] * tick->raw();
+    return st.intent.side == model::OrderSide::Buy ? top.bid.raw() - st.scratch[1] > limit
+                                                   : st.scratch[1] - top.ask.raw() > limit;
+  }
+
+  template <typename Ctx>
+  [[nodiscard]] static core::Status switch_to_take(AlgoState& st, Ctx& ctx) {
+    st.scratch[0] = kSwitching;
+    ctx.sleep();
+    return st.child_count == 0 ? take(st, ctx) : ctx.cancel_children();
+  }
+
+  template <typename Ctx> [[nodiscard]] static core::Status take(AlgoState& st, Ctx& ctx) {
+    st.scratch[0] = kTaking;
+    ctx.sleep();
+    const std::uint64_t q = st.intent.quantity.raw();
+    const std::int64_t share =
+        st.params.values[2] > 0 && st.params.values[2] < 1000 ? st.params.values[2] : 1000;
+    std::uint64_t allowed = static_cast<std::uint64_t>(
+        (static_cast<core::u128>(q) * static_cast<std::uint64_t>(share)) / 1000U);
+    if (const std::optional<model::Quantity> lot = ctx.lot()) {
+      allowed = static_cast<std::uint64_t>(algo_detail::floor_to(
+          static_cast<std::int64_t>(allowed), static_cast<std::int64_t>(lot->raw())));
+    }
+    const std::uint64_t taken = static_cast<std::uint64_t>(st.scratch[2]);
+    std::uint64_t quantity = allowed > taken ? allowed - taken : 0;
+    quantity = quantity < st.reserved_raw ? quantity : st.reserved_raw;
+    if (quantity == 0) {
+      ctx.finish();
+      return core::Status::Ok;
+    }
+    std::optional<model::Price> px;
+    if (const std::optional<AlgoTop> top = ctx.top()) {
+      px = st.intent.side == model::OrderSide::Buy ? top->ask : top->bid;
+    }
+    model::ClientOrderId child;
+    bool denied = false;
+    const core::Status s = ctx.submit(
+        algo_detail::child_of(st, quantity, px, false, model::TimeInForce::Ioc), child, denied);
+    if (!core::ok(s) || denied) {
+      ctx.finish();
+      return s;
+    }
+    st.scratch[2] = static_cast<std::int64_t>(taken + quantity);
+    return core::Status::Ok;
+  }
+};
+
+// One resting order kept at an offset from a reference price (section 11.4), until the parent
+// is filled or canceled.
+//
+//   params[0]  the offset, in ticks, away from the market (0: at the reference)
+//   params[1]  the reference: 0 the same-side best, 1 the mid
+//   params[2]  how far the target must move before the order follows, in ticks (0: 1)
+//   params[3]  orders of rate budget to keep: the order follows only while more remain (0: 2)
+//
+// The order is post-only and never priced through the other side. It follows the reference by
+// modifying its price; while a modify is pending, or the budget is short, it waits for the
+// next quote. If the venue refuses or cancels it, a new one goes out at the next quote.
+struct PeggedQuote {
+  template <typename Ctx> [[nodiscard]] core::Status on_parent(AlgoState& st, Ctx& ctx) const {
+    const std::optional<AlgoTop> top = ctx.top();
+    return top ? quote(st, ctx, *top) : core::Status::Ok; // else at the first quote
+  }
+
+  template <typename Ctx>
+  [[nodiscard]] core::Status on_event(AlgoState& st, Ctx& ctx, const AlgoEvent& e) const {
+    if (const auto* q = std::get_if<AlgoQuote>(&e)) {
+      return quote(st, ctx, q->top);
+    }
+    return core::Status::Ok; // children's events: the parent's fill accounting does the rest
+  }
+
+  template <typename Ctx> [[nodiscard]] core::Status on_cancel(AlgoState& /*st*/, Ctx& ctx) const {
+    return ctx.cancel_children();
+  }
+
+private:
+  [[nodiscard]] static std::optional<model::Price> target(const AlgoState& st, model::Price tick,
+                                                          const AlgoTop& top) {
+    if (top.bid.raw() <= 0 || top.ask.raw() <= top.bid.raw()) {
+      return std::nullopt;
+    }
+    const std::int64_t t = tick.raw();
+    const bool buy = st.intent.side == model::OrderSide::Buy;
+    std::int64_t ref = buy ? top.bid.raw() : top.ask.raw();
+    if (st.params.values[1] == 1) {
+      const std::int64_t mid = top.bid.raw() + (top.ask.raw() - top.bid.raw()) / 2;
+      ref = buy ? algo_detail::floor_to(mid, t) : algo_detail::floor_to(mid + t - 1, t);
+    }
+    const std::int64_t offset = (st.params.values[0] > 0 ? st.params.values[0] : 0) * t;
+    std::int64_t px = buy ? ref - offset : ref + offset;
+    if (buy && px > top.ask.raw() - t) {
+      px = top.ask.raw() - t; // post-only: never at or through the ask
+    } else if (!buy && px < top.bid.raw() + t) {
+      px = top.bid.raw() + t;
+    }
+    return algo_detail::price_of(px, tick.precision());
+  }
+
+  template <typename Ctx>
+  [[nodiscard]] static core::Status quote(AlgoState& st, Ctx& ctx, const AlgoTop& top) {
+    const std::optional<model::Price> tick = ctx.tick();
+    if (st.canceling || st.finished || !tick) {
+      return core::Status::Ok;
+    }
+    const std::optional<model::Price> px = target(st, *tick, top);
+    if (!px) {
+      return core::Status::Ok;
+    }
+    if (st.child_count == 0) {
+      if (st.reserved_raw == 0) {
+        return core::Status::Ok;
+      }
+      model::ClientOrderId child;
+      bool denied = false;
+      const core::Status s =
+          ctx.submit(algo_detail::child_of(st, st.reserved_raw, px, true, model::TimeInForce::Gtc),
+                     child, denied);
+      if (core::ok(s) && !denied) {
+        st.scratch[0] = px->raw();
+      }
+      return s;
+    }
+    const std::int64_t threshold =
+        (st.params.values[2] > 0 ? st.params.values[2] : 1) * tick->raw();
+    const std::int64_t reserve = st.params.values[3] > 0 ? st.params.values[3] : 2;
+    const std::int64_t move = px->raw() - st.scratch[0];
+    if ((move < 0 ? -move : move) < threshold || ctx.pending(st.children[0].id) ||
+        static_cast<std::int64_t>(ctx.rate_budget()) <= reserve) {
+      return core::Status::Ok;
+    }
+    const core::Status s = ctx.modify(st.children[0].id, std::nullopt, px);
+    if (core::ok(s)) {
+      st.scratch[0] = px->raw();
+      return s;
+    }
+    return s == core::Status::InvalidState ? core::Status::Ok : s; // closing meanwhile
   }
 };
 

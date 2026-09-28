@@ -70,6 +70,13 @@ struct StrategyFailure {
 // use this owner.
 inline constexpr std::uint32_t kKernelTimerOwner = 0xFFFFFFFFU;
 inline constexpr std::uint32_t kCountdownTimerId = 0xFFFFFFFFU;
+inline constexpr std::uint32_t kAlgoTimerId = 0xFFFFFFFEU; // the execution algorithms' wake-ups
+
+struct AlgoTimerState {
+  bool armed = false;
+  std::uint64_t deadline = 0;
+  core::TimerHandle timer;
+};
 
 // The venue-side dead man's switch (RiskConfig::countdown_cancel_ms, section 10.3).
 struct CountdownState {
@@ -488,6 +495,7 @@ public:
   std::optional<model::ShutdownMode> shutdown; // the Shutdown input, once stepped
   execution::ConnectionHealth health;          // market data and order entry
   CountdownState countdown;
+  AlgoTimerState algo_timer;
   Trading trading;
 
 private:

@@ -1073,6 +1073,196 @@ TEST_SUITE("unit") {
     CHECK(engine.failures().empty());
   }
 
+  TEST_CASE("passive_then_aggressive rests at the best, then takes what is left") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    std::vector<std::int64_t> params;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        st::AlgoParams p;
+        std::copy(params.begin(), params.end(), p.values.begin());
+        REQUIRE(ctx.submit_parent(st::AlgoKind::PassiveThenAggressive,
+                                  ctx.market(btc, md::OrderSide::Buy, quantity("1.000")), parent,
+                                  p) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    const auto submits = [](const auto& engine) {
+      std::vector<md::SubmitOrder> out;
+      for (const md::Output& o : engine.outputs()) {
+        if (const auto* s = std::get_if<md::SubmitOrder>(&o)) {
+          out.push_back(*s);
+        }
+      }
+      return out;
+    };
+    constexpr std::uint64_t kSecond = 1'000'000'000;
+
+    SUBCASE("at the timeout") {
+      params = {static_cast<std::int64_t>(kSecond), 0, 0};
+      st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+      jarvis::engine::Engine engine{small_config(), set};
+      std::uint64_t seq = 0;
+      REQUIRE(drive(engine, {perpetual_definition(1), quote_at(2, "99.0", "99.5"), running(3)},
+                    seq) == Status::Ok);
+      auto sent = submits(engine);
+      REQUIRE(sent.size() == 1);
+      CHECK(sent[0].order_type == md::OrderType::Limit);
+      CHECK(sent[0].price == price("99.0")); // the same-side best
+      CHECK(sent[0].post_only);
+      const md::ClientOrderId resting = sent[0].client_order_id;
+      REQUIRE(drive(engine, {accepted(4, resting, "v1"), filled(5, resting, "t1", "0.400", "99.0")},
+                    seq) == Status::Ok);
+      CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 0);
+      // The rest time passes: the resting child is canceled, then the rest taken at the ask.
+      REQUIRE(drive(engine, {quote_at(2 * kSecond, "99.0", "99.5")}, seq) == Status::Ok);
+      CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 1);
+      REQUIRE(drive(engine, {canceled(2 * kSecond + 1, resting)}, seq) == Status::Ok);
+      sent = submits(engine);
+      REQUIRE(sent.size() == 2);
+      CHECK(sent[1].time_in_force == md::TimeInForce::Ioc);
+      CHECK(sent[1].price == price("99.5"));
+      CHECK(sent[1].quantity == quantity("0.600"));
+      REQUIRE(drive(engine,
+                    {accepted(2 * kSecond + 2, sent[1].client_order_id, "v2"),
+                     filled(2 * kSecond + 3, sent[1].client_order_id, "t2", "0.600", "99.5")},
+                    seq) == Status::Ok);
+      st::ParentView pv;
+      CHECK_FALSE(engine.kernel().trading.parent(0, parent, pv)); // filled: closed
+    }
+    SUBCASE("when the market runs away, and only its share") {
+      params = {static_cast<std::int64_t>(60 * kSecond), 2, 500}; // 2 ticks, half the parent
+      st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+      jarvis::engine::Engine engine{small_config(), set};
+      std::uint64_t seq = 0;
+      REQUIRE(drive(engine, {perpetual_definition(1), quote_at(2, "99.0", "99.5"), running(3)},
+                    seq) == Status::Ok);
+      const md::ClientOrderId resting = submits(engine)[0].client_order_id;
+      REQUIRE(drive(engine,
+                    {accepted(4, resting, "v1"), filled(5, resting, "t1", "0.100", "99.0"),
+                     quote_at(6, "99.2", "99.6")},
+                    seq) == Status::Ok);
+      CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 0); // two ticks: not yet
+      REQUIRE(drive(engine, {quote_at(7, "99.3", "99.7")}, seq) == Status::Ok);
+      CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 1);
+      REQUIRE(drive(engine, {canceled(8, resting)}, seq) == Status::Ok);
+      const auto sent = submits(engine);
+      REQUIRE(sent.size() == 2);
+      CHECK(sent[1].price == price("99.7"));
+      CHECK(sent[1].quantity == quantity("0.500")); // the share, not the 0.900 left
+      REQUIRE(drive(engine, {canceled(9, sent[1].client_order_id)}, seq) == Status::Ok);
+      st::ParentView pv;
+      CHECK_FALSE(engine.kernel().trading.parent(0, parent, pv)); // done: closed unfilled
+      jarvis::core::FiredTimer none;
+      CHECK_FALSE(engine.next_timer(none)); // the rest timer went with the switch
+    }
+  }
+
+  TEST_CASE("pegged_quote keeps one post-only order an offset behind the best") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    std::vector<std::int64_t> params = {1, 0, 1, 0}; // one tick behind the same-side best
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        st::AlgoParams p;
+        std::copy(params.begin(), params.end(), p.values.begin());
+        REQUIRE(ctx.submit_parent(st::AlgoKind::PeggedQuote,
+                                  ctx.market(btc, md::OrderSide::Buy, quantity("1.000")), parent,
+                                  p) == Status::Ok);
+      } else if (step == 1) {
+        REQUIRE(ctx.cancel(parent) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2)}, seq) == Status::Ok);
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 0); // no quote yet
+    REQUIRE(drive(engine, {quote_at(3, "99.0", "99.5")}, seq) == Status::Ok);
+    std::optional<md::SubmitOrder> first;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* s = std::get_if<md::SubmitOrder>(&o)) {
+        first = *s;
+      }
+    }
+    REQUIRE(first.has_value());
+    const md::SubmitOrder placed = first.value_or(md::SubmitOrder{});
+    CHECK(placed.price == price("98.9"));
+    CHECK(placed.post_only);
+    const md::ClientOrderId child = placed.client_order_id;
+    REQUIRE(drive(engine, {accepted(4, child, "v1"), quote_at(5, "99.2", "99.6")}, seq) ==
+            Status::Ok);
+    std::optional<md::ModifyOrder> modify;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* m = std::get_if<md::ModifyOrder>(&o)) {
+        modify = *m;
+      }
+    }
+    REQUIRE(modify.has_value());
+    CHECK(modify.value_or(md::ModifyOrder{}).price == price("99.1"));
+    // A pending modify, then a move under the threshold: nothing more is sent.
+    REQUIRE(drive(engine, {quote_at(6, "99.3", "99.6")}, seq) == Status::Ok);
+    CHECK(count_outputs<md::ModifyOrder>(engine.outputs()) == 1);
+    REQUIRE(drive(engine, {updated(7, child, "1.000", "99.1"), quote_at(8, "99.2", "99.6")}, seq) ==
+            Status::Ok);
+    CHECK(count_outputs<md::ModifyOrder>(engine.outputs()) == 1);
+    // The venue cancels it: a new one at the next quote.
+    REQUIRE(drive(engine, {canceled(9, child), quote_at(10, "99.4", "99.6")}, seq) == Status::Ok);
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 2);
+    // The strategy cancels the parent (on its first trade): the child is canceled.
+    REQUIRE(drive(engine, {trade_at(11, "99.5")}, seq) == Status::Ok);
+    CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 1);
+  }
+
+  TEST_CASE("pegged_quote at the mid never crosses the other side") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        st::AlgoParams p;
+        p.values = {0, 1, 1, 0}; // at the mid
+        REQUIRE(ctx.submit_parent(st::AlgoKind::PeggedQuote,
+                                  ctx.market(btc, md::OrderSide::Sell, quantity("1.000")), parent,
+                                  p) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), quote_at(2, "99.0", "99.6"), running(3)},
+                  seq) == Status::Ok);
+    std::vector<md::Price> prices;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* s = std::get_if<md::SubmitOrder>(&o)) {
+        prices.push_back(s->price.value_or(md::Price{}));
+      }
+    }
+    REQUIRE(prices.size() == 1);
+    CHECK(prices[0] == price("99.3")); // the mid, rounded up for a sell
+    // A one-tick spread: a sell may not rest below the ask... nor at the bid.
+    md::ClientOrderId child;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* s = std::get_if<md::SubmitOrder>(&o)) {
+        child = s->client_order_id;
+      }
+    }
+    REQUIRE(drive(engine, {accepted(4, child, "v1"), quote_at(5, "99.4", "99.5")}, seq) ==
+            Status::Ok);
+    std::optional<md::ModifyOrder> m;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* x = std::get_if<md::ModifyOrder>(&o)) {
+        m = *x;
+      }
+    }
+    REQUIRE(m.has_value());
+    CHECK(m.value_or(md::ModifyOrder{}).price == price("99.5"));
+  }
+
   TEST_CASE(
       "a child the rate limit denies ends its passthrough parent; cancel_all reaches parents") {
     const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");

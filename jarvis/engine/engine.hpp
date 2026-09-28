@@ -101,6 +101,7 @@ public:
     const core::Status s = std::visit([this](const auto& e) { return this->dispatch(e); }, event);
     deliver_order_events();
     cover_submits(first_output);
+    arm_algo_timer();
     return s;
   }
 
@@ -296,6 +297,10 @@ private:
     if (!slot_of(q.instrument_id, slot)) {
       return core::Status::Ok;
     }
+    const bool top = q.bid_price.raw() > 0 && q.ask_price.raw() > q.bid_price.raw();
+    if (top) {
+      k_.trading.set_top(slot, strategy::AlgoTop{q.bid_price, q.ask_price});
+    }
     data::OrderBook* book = k_.book_for_update(slot, q.bid_price, q.bid_size.precision());
     const bool l1 = book != nullptr && book->type() == model::BookType::L1_MBP;
     if (l1) {
@@ -323,6 +328,12 @@ private:
         deliver_feature(static_cast<model::FeatureId>(f), value, q.ts_event, q.ts_init);
       }
     }
+    if (top) {
+      const core::Status s = k_.trading.on_top(k_.current, slot, k_.outputs);
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
     return feed_aggregators(slot, q);
   }
 
@@ -334,17 +345,24 @@ private:
     const model::OrderBookDelta& first = d.deltas.front();
     data::OrderBook* book =
         k_.book_for_update(slot, first.order.price, first.order.size.precision());
+    bool top = false;
     if (book != nullptr && book->type() == model::BookType::L2_MBP) {
       const core::Status s = book->apply(d);
       if (!core::ok(s)) {
         return s;
+      }
+      data::BookLevel bid;
+      data::BookLevel ask;
+      top = book->best_bid(bid) && book->best_ask(ask) && ask.price.raw() > bid.price.raw();
+      if (top) {
+        k_.trading.set_top(slot, strategy::AlgoTop{bid.price, ask.price});
       }
     }
     deliver(slot, data::DataKind::BookDeltas, d, d.ts_init);
     if (book != nullptr) {
       deliver(slot, data::DataKind::Book, data::BookView{d.instrument_id, book}, d.ts_init);
     }
-    return core::Status::Ok;
+    return top ? k_.trading.on_top(k_.current, slot, k_.outputs) : core::Status::Ok;
   }
 
   template <typename T> core::Status feed_aggregators(std::uint32_t slot, const T& update) {
@@ -816,6 +834,11 @@ private:
         !(fired.deadline == e.deadline)) {
       return core::Status::InvalidState; // the recorded timer is not the one due: divergence
     }
+    if (e.key.owner == strategy::kKernelTimerOwner && e.key.id == strategy::kAlgoTimerId) {
+      k_.algo_timer.armed = false;
+      k_.trading.algo_wake_changed = true;
+      return k_.trading.on_algo_timer(k_.current, e.deadline, k_.outputs);
+    }
     if (e.key.owner == strategy::kKernelTimerOwner && e.key.id == strategy::kCountdownTimerId) {
       k_.countdown.armed = false;
       if (k_.countdown.running) {
@@ -852,6 +875,29 @@ private:
       }
     }
     return core::Status::Ok;
+  }
+
+  // ---- the execution algorithms' timer ------------------------------------------------------
+  // One kernel timer at the earliest time an algorithm asked for (ctx.wake_at), re-armed after
+  // every step that changed one.
+
+  void arm_algo_timer() {
+    if (!k_.trading.algo_wake_changed) {
+      return;
+    }
+    k_.trading.algo_wake_changed = false;
+    const std::optional<core::UnixNanos> next = k_.trading.next_algo_wake();
+    strategy::AlgoTimerState& t = k_.algo_timer;
+    if (t.armed && (!next || next->value() != t.deadline)) {
+      static_cast<void>(k_.timers.cancel(t.timer));
+      t.armed = false;
+    }
+    if (next && !t.armed) {
+      t.armed = core::ok(k_.timers.schedule(
+          *next, core::DurationNanos{},
+          core::TimerKey{strategy::kKernelTimerOwner, strategy::kAlgoTimerId}, t.timer));
+      t.deadline = next->value();
+    }
   }
 
   // ---- the venue-side dead man's switch (section 10.3) ---------------------------------------

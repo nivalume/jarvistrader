@@ -189,9 +189,11 @@ public:
         strategy_ids{strategies}, events{c.order_events},
         portfolio{portfolio::PortfolioConfig{instruments, strategies, c.currencies, c.margin}},
         risk{c.risk, instruments, strategies}, algos{c.parents, instruments},
-        reconciler{c.reconcile, c.orders, c.currencies}, event_rng_{seed ^ detail::kEventIdSalt} {
+        reconciler{c.reconcile, c.orders, c.currencies}, tops{instruments},
+        event_rng_{seed ^ detail::kEventIdSalt} {
     for (std::uint32_t i = 0; i < instruments; ++i) {
       static_cast<void>(definitions.push_back(std::nullopt));
+      static_cast<void>(tops.push_back(std::nullopt));
     }
     for (std::uint32_t i = 0; i < strategies; ++i) {
       static_cast<void>(strategy_ids.push_back(detail::default_strategy_id(i)));
@@ -335,6 +337,39 @@ public:
     }
     // The algorithm has nothing more to do: the parent closes once no child works.
     void finish() noexcept { t_.algos.finish(parent_); }
+
+    // Whether a modify or cancel of `child` is still unanswered.
+    [[nodiscard]] bool pending(const model::ClientOrderId& child) const noexcept {
+      const std::uint32_t index = t_.oms.find(child);
+      if (index == execution::kNoIndex) {
+        return false;
+      }
+      const model::OrderStatus s = t_.oms.at(index).state.status();
+      return s == model::OrderStatus::PendingUpdate || s == model::OrderStatus::PendingCancel;
+    }
+    // The instrument's best bid and ask, once known (quotes or the L2 book).
+    [[nodiscard]] std::optional<AlgoTop> top() const noexcept {
+      const std::uint32_t slot = parent().slot;
+      return slot < t_.tops.size() ? t_.tops[slot] : std::nullopt;
+    }
+    // The instrument's price and size increments.
+    [[nodiscard]] std::optional<model::Price> tick() const noexcept {
+      const model::Instrument* def = t_.definition(parent().slot);
+      return def != nullptr ? std::optional{model::common(*def).price_increment} : std::nullopt;
+    }
+    [[nodiscard]] std::optional<model::Quantity> lot() const noexcept {
+      const model::Instrument* def = t_.definition(parent().slot);
+      return def != nullptr ? std::optional{model::common(*def).size_increment} : std::nullopt;
+    }
+    // An AlgoTimer at `deadline` (one per parent; a later call replaces it), or none.
+    void wake_at(core::UnixNanos deadline) noexcept {
+      t_.algos.at(parent_).wake_ns = deadline.value();
+      t_.algo_wake_changed = true;
+    }
+    void sleep() noexcept {
+      t_.algos.at(parent_).wake_ns = 0;
+      t_.algo_wake_changed = true;
+    }
 
   private:
     Trading& t_;
@@ -629,9 +664,83 @@ public:
     AlgoState& p = algos.at(parent);
     AlgoContext ctx{*this, now, outputs, parent};
     const core::Status st =
-        dispatch(p.kind, [&](const auto& algo) { return algo.on_event(p, ctx, event); });
+        dispatch(p.kind, [&](const auto& algo) { return algo.on_event(p, ctx, AlgoEvent{event}); });
     static_cast<void>(algos.settle(parent));
     return st;
+  }
+
+  // The top of `slot`'s book moved: kept for AlgoContext::top before strategies hear of the
+  // update (a parent they submit then starts from it), and told to the algorithms after
+  // (on_top).
+  void set_top(std::uint32_t slot, AlgoTop top) noexcept {
+    if (slot < tops.size()) {
+      tops[slot] = top;
+    }
+  }
+
+  // Tells the active parents on `slot` whose algorithm hears quotes that the top moved.
+  [[nodiscard]] core::Status on_top(const core::EventKey& now, std::uint32_t slot,
+                                    Outputs& outputs) {
+    if (slot >= tops.size()) {
+      return core::Status::Ok;
+    }
+    const std::optional<AlgoTop>& stored = tops[slot];
+    if (!stored) {
+      return core::Status::Ok;
+    }
+    const AlgoTop top = *stored;
+    if (algos.quoting(slot) == 0) {
+      return core::Status::Ok;
+    }
+    for (std::uint32_t i = 0; i < algos.size(); ++i) {
+      AlgoState& p = algos.at(i);
+      if (!p.active || p.slot != slot || !wants_quotes(p.kind)) {
+        continue;
+      }
+      AlgoContext ctx{*this, now, outputs, i};
+      const core::Status st = dispatch(p.kind, [&](const auto& algo) {
+        return algo.on_event(p, ctx, AlgoEvent{AlgoQuote{top}});
+      });
+      static_cast<void>(algos.settle(i));
+      if (!core::ok(st)) {
+        return st;
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  // The algorithms' timers due at `deadline`, earliest parent first by slot.
+  [[nodiscard]] core::Status on_algo_timer(const core::EventKey& now, core::UnixNanos deadline,
+                                           Outputs& outputs) {
+    for (std::uint32_t i = 0; i < algos.size(); ++i) {
+      AlgoState& p = algos.at(i);
+      if (!p.active || p.wake_ns == 0 || p.wake_ns > deadline.value()) {
+        continue;
+      }
+      p.wake_ns = 0;
+      algo_wake_changed = true;
+      AlgoContext ctx{*this, now, outputs, i};
+      const core::Status st = dispatch(p.kind, [&](const auto& algo) {
+        return algo.on_event(p, ctx, AlgoEvent{AlgoTimer{deadline}});
+      });
+      static_cast<void>(algos.settle(i));
+      if (!core::ok(st)) {
+        return st;
+      }
+    }
+    return core::Status::Ok;
+  }
+
+  // The earliest algorithm timer, if any.
+  [[nodiscard]] std::optional<core::UnixNanos> next_algo_wake() const noexcept {
+    std::uint64_t next = 0;
+    for (std::uint32_t i = 0; i < algos.size(); ++i) {
+      const AlgoState& p = algos.at(i);
+      if (p.active && p.wake_ns != 0 && (next == 0 || p.wake_ns < next)) {
+        next = p.wake_ns;
+      }
+    }
+    return next == 0 ? std::nullopt : std::optional{core::UnixNanos{next}};
   }
 
   // The header of an event the kernel synthesizes for order `index` at venue time `ts_event`
@@ -882,6 +991,8 @@ public:
   risk::RiskEngine risk;
   AlgoBook algos;
   execution::Reconciler reconciler;
+  core::FixedVector<std::optional<AlgoTop>> tops; // by instrument slot, for the algorithms
+  bool algo_wake_changed = false;                 // the engine re-arms its algorithm timer
   TradingStats stats;
 
 private:
@@ -890,6 +1001,10 @@ private:
     switch (kind) {
     case AlgoKind::Passthrough:
       return std::forward<F>(f)(Passthrough{});
+    case AlgoKind::PassiveThenAggressive:
+      return std::forward<F>(f)(PassiveThenAggressive{});
+    case AlgoKind::PeggedQuote:
+      return std::forward<F>(f)(PeggedQuote{});
     }
     return core::Status::InvalidArgument;
   }

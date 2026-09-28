@@ -1165,6 +1165,22 @@ void bind_data_types(nb::module_& mod) {
       .def("__len__", [](const PyQuoteBatch& b) { return b.size; });
 }
 
+// submit_parent's algorithm name and parameters; ValueError for an unknown name or more than four.
+st::AlgoKind algo_of(std::string_view algo, const std::vector<std::int64_t>& params,
+                     st::AlgoParams& out) {
+  st::AlgoKind kind = st::AlgoKind::Passthrough;
+  if (!st::parse_algo(algo, kind)) {
+    throw nb::value_error(("unknown execution algorithm \"" + std::string{algo} +
+                           "\" (known: passthrough, passive_then_aggressive, pegged_quote)")
+                              .c_str());
+  }
+  if (params.size() > st::kAlgoParams) {
+    throw nb::value_error("an execution algorithm takes at most 4 parameters");
+  }
+  std::copy(params.begin(), params.end(), out.values.begin());
+  return kind;
+}
+
 // Orders, the portfolio and the risk state (docs/architecture.md section 9.4).
 void bind_context_trading(nb::class_<PyContext>& cls);
 void bind_context_portfolio(nb::class_<PyContext>& cls);
@@ -1330,22 +1346,21 @@ void bind_context_trading(nb::class_<PyContext>& cls) {
           "OrderDenied arrives in on_order_event after this callback returns.")
       .def(
           "submit_parent",
-          [](const PyContext& c, const st::OrderIntent& intent, std::string_view algo) {
-            st::AlgoKind kind = st::AlgoKind::Passthrough;
-            if (!st::parse_algo(algo, kind)) {
-              throw nb::value_error(
-                  ("unknown execution algorithm \"" + std::string{algo} + "\" (known: passthrough)")
-                      .c_str());
-            }
+          [](const PyContext& c, const st::OrderIntent& intent, std::string_view algo,
+             const std::vector<std::int64_t>& params) {
+            st::AlgoParams p;
+            const st::AlgoKind kind = algo_of(algo, params, p);
             m::ClientOrderId id;
-            check(c.get().submit_parent(kind, intent, id), "submit_parent");
+            check(c.get().submit_parent(kind, intent, id, p), "submit_parent");
             return id;
           },
           nb::arg("intent"), nb::arg("algo") = "passthrough",
+          nb::arg("params") = std::vector<std::int64_t>{},
           "Submits a parent order worked by an execution algorithm and returns the parent's id, "
           "which cancel and parent accept. The parent passes the intent checks; its child orders "
           "are this strategy's orders (OrderView.parent_id names the parent). A denied parent "
-          "is not an error: OrderDenied names it in on_order_event.")
+          "is not an error: OrderDenied names it in on_order_event. params: up to four integers "
+          "whose meaning the algorithm defines (docs/architecture.md section 11.4).")
       .def(
           "parent",
           [](const PyContext& c, nb::handle cid) -> nb::object {

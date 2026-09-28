@@ -1048,6 +1048,15 @@ concept ExecAlgorithm = requires(const A a, AlgoState& st, Ctx& ctx, const AlgoE
 
 Binance 的 `priceMatch` 参数（交易所侧按对手价或队列价定价）可以减少追价延迟，作为 `PeggedQuote` 的可选模式在 v1.x 评估。
 
+实现（M5-H，`jarvis/strategy/exec_algo.hpp`）：
+
+- `AlgoEvent` 是子单订单事件、`AlgoQuote`（所在 instrument 的最优买卖价变化）与 `AlgoTimer`（算法用 `ctx.wake_at` 要求的时间到了）三者之一。最优价来自 `QuoteTick`，或 L2 簿更新后的最优档；内核在策略收到这次更新之前记下它（所以策略此时提交的父单从它开始），在策略之后把 `AlgoQuote` 交给算法。只有需要行情的算法（`PassiveThenAggressive`、`PeggedQuote`）才收到 `AlgoQuote`，内核按 instrument 计数，没有这类父单时不遍历。
+- 定时器：每个父单最多一个唤醒时间，内核只保持一个内核定时器（`TimerKey{kKernelTimerOwner, kAlgoTimerId}`）在最早的唤醒时间，每一步之后按需重排。它与其他定时器一样成为记录的 `TimerFired` 输入。
+- `AlgoContext` 增加 `top()`、`tick()`、`lot()`、`pending(child)`、`wake_at(t)`、`sleep()`。
+- 参数是父单的四个整数（`AlgoParams`；Python 的 `ctx.submit_parent(intent, algo=..., params=[...])`）：
+  - `passive_then_aggressive`：`[0]` 挂单时长（纳秒，0 为 5 秒），`[1]` 市场偏离挂单价多少个最小价位后立即吃单（0 为不限），`[2]` 允许吃单的份额（千分比，0 为全部）。挂单是 post-only，价格为父单的限价，没有限价时为同方向最优价；吃单先撤挂单，撤单确认后以对手最优价发 IOC 限价单（没有行情时为市价 IOC），数量不超过份额中尚未吃掉的部分，之后算法结束。挂单被拒（post-only 会成交）或未成交就关闭时立即吃单。
+  - `pegged_quote`：`[0]` 远离市场方向的偏移（最小价位数），`[1]` 参考价（0 同方向最优价，1 中间价），`[2]` 目标价移动多少个最小价位才跟随（0 为 1），`[3]` 保留的限速余额（余额不多于它时不跟随，0 为 2）。订单是 post-only，价格不会越过对手方最优价；以改价跟随参考价，改单未答复或余额不足时等下一次行情；被拒或被撤后在下一次行情重新挂出。父单撤销或全部成交前一直工作。按队列位置估计选择改单或撤单重下尚未实现，目前总是改单。
+
 ---
 
 ## 12. 回测撮合器与 sandbox
