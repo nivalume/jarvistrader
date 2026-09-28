@@ -39,6 +39,8 @@ struct Counters {
   std::atomic<std::uint64_t> snapshot_failures{0};
   std::atomic<std::uint64_t> stale_snapshots{0};
   std::atomic<std::uint64_t> key_failures{0};
+  std::atomic<std::uint64_t> countdowns{0};
+  std::atomic<std::uint64_t> countdown_failures{0};
 
   static void add(std::atomic<std::uint64_t>& c) { c.fetch_add(1, std::memory_order_relaxed); }
 };
@@ -73,26 +75,28 @@ public:
       thread_.join();
     }
   }
-  void post(Job job) {
+  // A job posted with `keep` still runs when the thread is stopped before it; others are dropped.
+  void post(Job job, bool keep = false) {
     {
       const std::lock_guard lock{mutex_};
-      jobs_.push_back(std::move(job));
+      jobs_.push_back(Entry{std::move(job), keep});
     }
     wake_.notify_all();
   }
   binance::RestClient& client() noexcept { return rest_; } // before start only
 
 private:
+  struct Entry {
+    Job job;
+    bool keep = false;
+  };
+
   void run() {
     std::unique_lock lock{mutex_};
     while (!stopping_) {
       wake_.wait_for(lock, tick_, [this] { return stopping_ || !jobs_.empty(); });
       while (!stopping_ && !jobs_.empty()) {
-        Job job = std::move(jobs_.front());
-        jobs_.pop_front();
-        lock.unlock();
-        job(rest_);
-        lock.lock();
+        run_front(lock);
       }
       if (!stopping_) {
         lock.unlock();
@@ -100,6 +104,21 @@ private:
         lock.lock();
       }
     }
+    while (!jobs_.empty()) {
+      if (jobs_.front().keep) {
+        run_front(lock);
+      } else {
+        jobs_.pop_front();
+      }
+    }
+  }
+
+  void run_front(std::unique_lock<std::mutex>& lock) {
+    Job job = std::move(jobs_.front().job);
+    jobs_.pop_front();
+    lock.unlock();
+    job(rest_);
+    lock.lock();
   }
 
   binance::RestClient rest_;
@@ -107,7 +126,7 @@ private:
   std::function<void(binance::RestClient&)> on_tick_;
   std::mutex mutex_;
   std::condition_variable wake_;
-  std::deque<Job> jobs_;
+  std::deque<Entry> jobs_;
   bool stopping_ = false;
   std::thread thread_;
 };
@@ -373,6 +392,28 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     }
   }
 
+  // The dead man's switch goes over REST (the WebSocket API has no such method).
+  void send(const model::CountdownCancelAll& c) {
+    const std::optional<std::string> symbol = symbol_of(c.instrument_id);
+    if (!symbol) {
+      Counters::add(counters.countdown_failures);
+      set_error("countdownCancelAll: unknown instrument " +
+                std::string{c.instrument_id.text().view()});
+      return;
+    }
+    rest.post(
+        [this, symbol = *symbol, ms = c.countdown_ms](binance::RestClient& client) {
+          std::string e;
+          if (core::ok(client.countdown_cancel_all(symbol, ms, e))) {
+            Counters::add(counters.countdowns);
+          } else {
+            Counters::add(counters.countdown_failures);
+            set_error("countdownCancelAll " + symbol + ": " + e);
+          }
+        },
+        /*keep=*/true);
+  }
+
   void on_outcome(const binance::OrderOutcome& o) {
     const core::UnixNanos at = utc(o.recv_ns);
     switch (o.kind) {
@@ -456,7 +497,8 @@ struct VenueIo::Impl final : adapter::EventEmitter {
       }
       io.restart();
     }
-    io.run_for(std::chrono::milliseconds{200}); // let the closes go out
+    drain();                                    // the commands the core sent before stopping
+    io.run_for(std::chrono::milliseconds{200}); // let them and the closes go out
   }
 
   void close_all() const {
@@ -495,10 +537,12 @@ void VenueIo::stop() {
   if (!v.thread.joinable()) {
     return;
   }
-  v.rest.stop();
+  // The IO thread first: its last commands may hand the REST thread a countdownCancelAll, which
+  // the REST thread still sends when it stops.
   v.io.post([&v] { v.close_all(); });
   v.stopping.store(true);
   v.thread.join();
+  v.rest.stop();
   if (v.recording) {
     static_cast<void>(v.raw.close());
     v.recording = false;
@@ -519,10 +563,19 @@ VenueIoStats VenueIo::stats() const noexcept {
   const auto v = [](const std::atomic<std::uint64_t>& a) {
     return a.load(std::memory_order_relaxed);
   };
-  return VenueIoStats{v(c.events),          v(c.ring_waits),       v(c.commands),
-                      v(c.refused_locally), v(c.unknown_outcomes), v(c.frames),
-                      v(c.decode_errors),   v(c.snapshots),        v(c.snapshot_failures),
-                      v(c.stale_snapshots), v(c.key_failures)};
+  return VenueIoStats{v(c.events),
+                      v(c.ring_waits),
+                      v(c.commands),
+                      v(c.refused_locally),
+                      v(c.unknown_outcomes),
+                      v(c.frames),
+                      v(c.decode_errors),
+                      v(c.snapshots),
+                      v(c.snapshot_failures),
+                      v(c.stale_snapshots),
+                      v(c.key_failures),
+                      v(c.countdowns),
+                      v(c.countdown_failures)};
 }
 
 } // namespace jarvis::live

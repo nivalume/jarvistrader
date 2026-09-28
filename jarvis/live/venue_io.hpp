@@ -28,7 +28,9 @@
 // RateLimitFeedback and VenueSnapshot records.
 //
 // A second thread does what blocks: the listenKey (created at start, kept alive, renewed when the
-// venue says it expired) and the reconciliation snapshot over REST (adapter/binance/snapshot.hpp).
+// venue says it expired), the reconciliation snapshot over REST (adapter/binance/snapshot.hpp)
+// and the countdownCancelAll calls of the dead man's switch (a failure is counted and reported in
+// last_error; the countdown still armed at the venue keeps running).
 // When the user stream is live the IO thread records ConnectionStatus(up) and asks the REST thread
 // for a snapshot; the answer is recorded only while the stream is still live on that connection
 // (a drop in between makes it stale), and a failed snapshot is asked for again. A dropped stream
@@ -53,7 +55,8 @@ struct VenueEndpoints {
 };
 
 // A command from the core for the venue.
-using VenueCommand = std::variant<model::SubmitOrder, model::ModifyOrder, model::CancelOrder>;
+using VenueCommand = std::variant<model::SubmitOrder, model::ModifyOrder, model::CancelOrder,
+                                  model::CountdownCancelAll>;
 
 struct VenueIoConfig {
   VenueEndpoints endpoints;
@@ -89,6 +92,8 @@ struct VenueIoStats {
   std::uint64_t snapshot_failures = 0; // asked for again
   std::uint64_t stale_snapshots = 0;   // the stream dropped before the answer
   std::uint64_t key_failures = 0;      // listenKey calls that failed
+  std::uint64_t countdowns = 0;        // countdownCancelAll calls the venue took
+  std::uint64_t countdown_failures = 0;
 };
 
 class VenueIo {

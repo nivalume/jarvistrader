@@ -126,7 +126,7 @@ struct RiskSection {
   std::uint32_t orders_per_minute = 1000;            // 0: off
   std::uint32_t margin_ratio_bps = 8000;             // Reducing at this maintenance/equity; 0: off
   bool check_margin = true;
-  std::uint64_t countdown_cancel_all_ms = 120'000;
+  std::uint32_t countdown_cancel_all_ms = 120'000; // env = "live"; 0: off, else >= 10000
   OnStrategyError on_strategy_error = OnStrategyError::HaltStrategy;
 };
 

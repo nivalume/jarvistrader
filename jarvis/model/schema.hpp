@@ -334,6 +334,9 @@ template <typename F> constexpr void fields(ReconciliationDiff& e, F&& f) {
       f("client_order_id", e.client_order_id), f("currency", e.currency),
       f("local_raw", e.local_raw), f("venue_raw", e.venue_raw), f("ts_init", e.ts_init);
 }
+template <typename F> constexpr void fields(CountdownCancelAll& e, F&& f) {
+  f("instrument_id", e.instrument_id), f("countdown_ms", e.countdown_ms), f("ts_init", e.ts_init);
+}
 template <typename F> constexpr void fields(ReconcileOutcome& e, F&& f) {
   f("account_id", e.account_id), f("ts_snapshot", e.ts_snapshot), f("orders", e.orders),
       f("fills", e.fills), f("closed", e.closed), f("lost", e.lost), f("external", e.external),

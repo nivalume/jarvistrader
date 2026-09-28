@@ -66,8 +66,18 @@ struct StrategyFailure {
   std::uint64_t message_hash = 0;
 };
 
-// Timers owned by the kernel itself (time-bar closes) use this owner.
+// Timers owned by the kernel itself (time-bar closes, by aggregator index; the countdown renewal)
+// use this owner.
 inline constexpr std::uint32_t kKernelTimerOwner = 0xFFFFFFFFU;
+inline constexpr std::uint32_t kCountdownTimerId = 0xFFFFFFFFU;
+
+// The venue-side dead man's switch (RiskConfig::countdown_cancel_ms, section 10.3).
+struct CountdownState {
+  bool running = false; // the node is Running: the timer renews
+  bool armed = false;   // the renewal timer is scheduled
+  core::TimerHandle timer;
+  core::FixedVector<std::uint8_t> live{0}; // by slot: renewed at the last renewal or since
+};
 
 struct BookMark {
   std::uint32_t slot = 0;
@@ -130,6 +140,10 @@ public:
     }
     for (std::uint32_t i = 0; i < config.strategies; ++i) {
       static_cast<void>(disabled.push_back(0));
+    }
+    countdown.live = core::FixedVector<std::uint8_t>{config.instruments};
+    for (std::uint32_t i = 0; i < config.instruments; ++i) {
+      static_cast<void>(countdown.live.push_back(0));
     }
   }
 
@@ -467,6 +481,7 @@ public:
   core::FixedVector<StrategyFailure> failures;
   core::FixedVector<std::uint8_t> disabled; // 1 once a strategy is halted
   bool halt_requested = false;
+  CountdownState countdown;
   Trading trading;
 
 private:

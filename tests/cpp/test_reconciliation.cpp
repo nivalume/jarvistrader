@@ -11,6 +11,7 @@
 
 #include <doctest/doctest.h>
 
+#include "jarvis/core/clock.hpp"
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
@@ -934,6 +935,68 @@ void run_history(Gen& g, std::size_t orders, std::uint64_t max_fill, int steps) 
 } // namespace
 
 TEST_SUITE("property") {
+  TEST_CASE("the countdown is renewed for instruments with open orders while running") {
+    constexpr std::uint64_t kSecond = 1'000'000'000;
+    const auto fire_next = [](Harness& h) {
+      jarvis::core::FiredTimer t;
+      REQUIRE(h.engine().next_timer(t));
+      CHECK(t.key == jarvis::core::TimerKey{st::kKernelTimerOwner, st::kCountdownTimerId});
+      h.outputs.clear();
+      h.run({md::Event{md::TimerFired{t.key, t.deadline, t.deadline}}});
+      return t.deadline.value();
+    };
+    const auto countdowns = [](const Harness& h) {
+      std::vector<std::uint64_t> out;
+      for (const md::CountdownCancelAll& c : h.outputs_of<md::CountdownCancelAll>()) {
+        CHECK(c.instrument_id == iid(kBtc));
+        CHECK(c.countdown_ms == 120'000);
+        out.push_back(c.ts_init.value());
+      }
+      return out;
+    };
+
+    st::KernelConfig c = config();
+    c.trading.risk.countdown_cancel_ms = 120'000;
+    Harness h{1, "1.000", c};
+    start(h, 1);
+    // No open orders when Running began; the order the strategy submitted then is covered in
+    // the same step, after its SubmitOrder.
+    CHECK(countdowns(h) == std::vector<std::uint64_t>{2});
+    REQUIRE(h.outputs.size() >= 2);
+    CHECK(std::holds_alternative<md::SubmitOrder>(h.outputs[h.outputs.size() - 2]));
+
+    // Renewed a quarter of the countdown apart while the order is open.
+    CHECK(fire_next(h) == 2 + 30 * kSecond);
+    CHECK(countdowns(h) == std::vector<std::uint64_t>{2 + 30 * kSecond});
+
+    // Out of Running the renewals stop: the venue cancels if the node stays out.
+    h.run({lifecycle(NodeState::Running, NodeState::Degraded, 40 * kSecond)});
+    CHECK(fire_next(h) == 2 + 60 * kSecond);
+    CHECK(countdowns(h).empty());
+    jarvis::core::FiredTimer none;
+    CHECK_FALSE(h.engine().next_timer(none));
+
+    // Back in Running: renewed at once, then on the timer again.
+    h.outputs.clear();
+    h.run(
+        {lifecycle(NodeState::Degraded, NodeState::Syncing, 69 * kSecond), running(70 * kSecond)});
+    CHECK(countdowns(h) == std::vector<std::uint64_t>{70 * kSecond});
+
+    // Without open orders the renewal sends nothing but keeps the timer.
+    h.run({md::Event{venue_event<md::OrderCanceled>(80 * kSecond, 80 * kSecond, h.ids[0])}});
+    CHECK(fire_next(h) == 100 * kSecond);
+    CHECK(countdowns(h).empty());
+    CHECK(h.engine().next_timer(none));
+  }
+
+  TEST_CASE("without a countdown the kernel sends none and arms no timer") {
+    Harness h{1};
+    start(h, 1);
+    CHECK(h.outputs_of<md::CountdownCancelAll>().empty());
+    jarvis::core::FiredTimer none;
+    CHECK_FALSE(h.engine().next_timer(none));
+  }
+
   TEST_CASE("random venue histories: halted until synced, counted once, no phantom, converged") {
     jarvis::testkit::for_all([](Gen& g) {
       const auto orders = static_cast<std::size_t>(g.range_u(1, 3));

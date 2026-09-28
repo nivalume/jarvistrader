@@ -72,6 +72,9 @@ struct RiskConfig {
   std::uint32_t orders_per_minute = 1000;            // Binance USD-M allows 1200; 0: off
   std::uint32_t margin_ratio_bps = 8000;             // soft at 80% maintenance / equity; 0: off
   bool check_margin = true;
+  // The venue-side dead man's switch (section 10.3): the countdown the kernel keeps renewing, a
+  // quarter of it apart, for the instruments with open orders while the node is Running; 0: off.
+  std::uint32_t countdown_cancel_ms = 0;
 };
 
 // One order as the gates see it, with a snapshot of the state it would change. Built by the

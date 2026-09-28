@@ -549,6 +549,9 @@ void read_strategy(const toml::table& t, const std::string& path, Errors& errors
   }
 }
 
+// A shorter countdown would be renewed more often than its request weight allows for long.
+constexpr std::uint32_t kMinCountdownMs = 10'000;
+
 void read_risk(TableReader& root, RiskSection& risk) {
   const toml::table* t = root.table("risk");
   if (t == nullptr) {
@@ -568,6 +571,11 @@ void read_risk(TableReader& root, RiskSection& risk) {
   r.unsigned_int("margin_ratio_bps", risk.margin_ratio_bps);
   r.boolean("check_margin", risk.check_margin);
   r.unsigned_int("countdown_cancel_all_ms", risk.countdown_cancel_all_ms);
+  if (risk.countdown_cancel_all_ms != 0 && risk.countdown_cancel_all_ms < kMinCountdownMs) {
+    root.errors().add("risk.countdown_cancel_all_ms", t->get("countdown_cancel_all_ms"),
+                      "must be 0 (off) or at least " + std::to_string(kMinCountdownMs) +
+                          " (it is renewed every quarter of it)");
+  }
   r.enumeration("on_strategy_error", risk.on_strategy_error, kOnErrorNames);
   r.finish();
 }

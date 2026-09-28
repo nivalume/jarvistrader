@@ -256,6 +256,15 @@ Status RestClient::close_listen_key(std::string& error) {
   return json_call("DELETE", "/fapi/v1/listenKey", {}, Security::ApiKey, r, error);
 }
 
+Status RestClient::countdown_cancel_all(std::string_view symbol, std::uint32_t countdown_ms,
+                                        std::string& error) {
+  RestResponse r;
+  return json_call(
+      "POST", "/fapi/v1/countdownCancelAll",
+      {{"symbol", std::string{symbol}}, {"countdownTime", std::to_string(countdown_ms)}},
+      Security::Signed, r, error);
+}
+
 Status RestClient::exchange_info(std::string& body, std::string& error) {
   RestResponse r;
   const Status s = json_call("GET", "/fapi/v1/exchangeInfo", {}, Security::None, r, error);

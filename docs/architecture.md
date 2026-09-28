@@ -197,10 +197,11 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - 启动顺序：解析 `venues[0].credentials`；运行启动检查（时钟偏移、instrument、持仓模式、多资产模式、保证金模式与杠杆、key 权限），任一失败即不启动；取下一个 `ClientOrderId` epoch 并先写入磁盘（默认 `persistence.dir` 中本节点各次运行所在目录下的 `epoch` 文件），再允许任何订单带上它。
 - 两个 IO 线程：行情的 `MarketFeed` 与账户的 `VenueIo`（第 7.1 节）。core 线程的泵先排空账户环，再排空行情环，都进入同一个 `LiveSource`，`AccountState` 与 `VenueSnapshot` 在其中保有自己的列表。
 - `Driver` 以 `await_sync` 运行：前导事件（instrument 定义）之后停在 `Syncing`，直到账户对账完成才进入 `Running`（第 4.4 节的同步闸门）；用户流断开时经 `Degraded` 回到 `Syncing`。
-- 引擎每产出一条 `SubmitOrder`、`ModifyOrder`、`CancelOrder` 都立即交给 venue-io 的命令环（`CommandRouter`，环满时等待，从不丢弃）；退出时最多等 2 秒让命令离开环。
+- 引擎每产出一条 `SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CountdownCancelAll` 都立即交给 venue-io 的命令环（`CommandRouter`，环满时等待，从不丢弃）；退出时最多等 2 秒让命令离开环。
+- venue 侧死人开关 `countdownCancelAll`（第 10.3 节）只在 `env = "live"` 时打开。
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
-- 尚未实现：REST 下单兜底、`countdownCancelAll`、`SIGTERM` 撤单流程、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
+- 尚未实现：REST 下单兜底、`SIGTERM` 撤单流程（包括解除 `countdownCancelAll`）、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
 
 ### 4.2 NodeConfig
 
@@ -265,7 +266,7 @@ orders_per_10s = 250              # 0 关闭
 orders_per_minute = 1000
 margin_ratio_bps = 8000           # 维持保证金 / 权益达到 80% → Reducing
 check_margin = true
-countdown_cancel_all_ms = 120000
+countdown_cancel_all_ms = 120000  # 仅 env = "live"；0 关闭，否则至少 10000
 on_strategy_error = "halt_strategy"    # halt_strategy | halt_node | ignore
 
 [python]
@@ -412,7 +413,7 @@ int main(int argc, char** argv) { return jarvis::node_main<MyMM>(argc, argv); } 
 | 参考数据 | instrument 定义（`CurrencyPair`、`CryptoPerpetual`、`CryptoFuture`） | exchangeInfo、目录中的 instrument 文件 |
 | 时间 | `TimerFired`、`BatchEnd` | timer 线程、core 线程 |
 | 控制 | `AdminCommand`、`Shutdown`、`ParamUpdate`、`TargetPosition`（控制面）、`Health*` | admin 线程、控制面通道 |
-| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、venue 命令（`SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CancelAllOrders`）、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志；仓位事件只交给策略，不写入日志 |
+| 内核自产 | `NodeLifecycle`、`StrategyError`、`OrderDenied`、`FeatureUpdate`、venue 命令（`SubmitOrder`、`ModifyOrder`、`CancelOrder`、`CancelAllOrders`、`CountdownCancelAll`）、仓位事件、`ReconciliationDiff`、`ReconcileOutcome` | `step` 的输出；其中影响后续状态且无法由输入重算的（`NodeLifecycle`、`StrategyError`）同样写入日志；仓位事件只交给策略，不写入日志 |
 
 ### 5.2 全序键
 
@@ -626,7 +627,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
-- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll`。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。REST 下单兜底尚未接入。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
 
 ### 7.2 路由
@@ -925,9 +926,14 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 ### 10.3 KillSwitch 与 venue 侧死人开关
 
 - KillSwitch = 把 TradingState 置为 `Halted` + 撤销全部未完成订单 + 等待终态确认。触发者是监控、admin 命令或 `Faulted`。
-- Binance USDⓈ-M 没有"断线即撤单"。jarvis 在进入 `Synced` 后对每个有挂单的 symbol 调用 `POST /fapi/v1/countdownCancelAll`，`countdownTime = 120000` 毫秒，每 30 秒续期一次（这是交易所文档给出的推荐节奏，权重 10，交易所约每 10 毫秒检查一次）。节点失联超过两分钟，交易所会自行撤单。
-- 续期由内核定时器驱动，续期命令经 order-sender 发出，续期失败作为健康事件处理。
-- 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时。
+- Binance USDⓈ-M 没有"断线即撤单"。jarvis 对有挂单的 symbol 调用 `POST /fapi/v1/countdownCancelAll`，`countdownTime = 120000` 毫秒（`[risk] countdown_cancel_all_ms`），每 30 秒续期一次（这是交易所文档给出的推荐节奏，权重 10，交易所约每 10 毫秒检查一次）。节点失联超过两分钟，交易所会自行撤单。
+- 续期由内核决定，所以是记录的输出（`CountdownCancelAll`），回放可以复算（M5-D1）：
+  - 节点进入 `Running` 时立即续期一次，并以内核定时器（`TimerKey{kKernelTimerOwner, kCountdownTimerId}`）每隔倒计时的四分之一再续期；每次续期覆盖当时有未完成订单的 instrument。
+  - 两次续期之间，某个 instrument 若还未被覆盖就有新单，同一步里紧跟在 `SubmitOrder` 之后产出它的 `CountdownCancelAll`。
+  - 离开 `Running`（`Degraded`、`Syncing`、`Stopping`）后定时器到期不再续期，也不再重排：节点失步超过整个倒计时，由交易所撤单；回到 `Running` 时立即续期。
+  - 只在 `env = "live"` 时打开（`kernel_config`）；设置值为 0 表示关闭，非 0 时至少 10000 毫秒，因为续期间隔是它的四分之一。
+- 命令经 venue-io 的 REST 线程发出（WS API 没有这个方法）。失败计入 `VenueIoStats::countdown_failures` 并写入 `last_error`，交易所上已有的倒计时继续走；接入健康事件随 M5-D3。venue-io 停止时，已交给 REST 线程的倒计时请求仍会发出。
+- 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时（M5-D2）。
 
 ### 10.4 限速窗口与权重反馈
 
@@ -1322,7 +1328,7 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 4. 交易所有、本地没有的订单：若 `ClientOrderId` 可解码为本节点上一 epoch，按遗留订单处理；否则视为外部订单。按配置撤单或只报告。
 5. 仓位与余额以快照**置位**，不做增量推导；与本地计算值的差异写成 `ReconciliationDiff` 事件并进入指标。
 6. 回放缓冲：只应用 `updateTime > T_s` 的事件，成交按 `(symbol, orderId, tradeId)` 去重。
-7. 产出 `ReconcileOutcome`，策略收到 `on_reconciled`，随后 `on_start`（首次启动）；TradingState 恢复为配置初值；为有挂单的 symbol 武装 `countdownCancelAll`。
+7. 产出 `ReconcileOutcome`，策略收到 `on_reconciled`，随后 `on_start`（首次启动）；TradingState 恢复为配置初值；节点进入 `Running`，为有挂单的 symbol 武装 `countdownCancelAll`（第 10.3 节）。
 
 内核一侧（M5-B2）的做法。步骤 2 到 4 的 REST 调用由适配器完成，结果以一条 `VenueSnapshot` 记录；内核按以下顺序处理：
 

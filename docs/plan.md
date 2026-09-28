@@ -163,7 +163,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）：实盘节点已接线（`jarvis/live/live_node.hpp`：凭证、启动检查、epoch、`MarketFeed` 与 `VenueIo`、账户环先于行情环、`CommandRouter`、`await_sync`；C++ `live_node_main` 与 Python `Node.run`；脚本化交易所端到端测试与回放一致）；admin 通道随 ops
 - [ ] task: live — core 线程绑核与 busy-poll，IO 线程的 NUMA 亲和
 - [ ] task: node — Node 生命周期的 `Syncing`、`Degraded`、`Stopping`、`Faulted` 实盘路径：`Syncing` 与 `Degraded` 由同步闸门驱动（`engine/sync_gate.hpp`，`DriverOptions::await_sync`）；行情与 WS API 健康接入、`Stopping`（`SIGTERM` 撤单流程）与 `Faulted` 待做
-- [ ] task: risk — `countdownCancelAll`：进入 `Synced` 时武装，每 30 秒续期，关停确认后解除（§10.3）
+- [ ] task: risk — `countdownCancelAll`：进入 `Synced` 时武装，每 30 秒续期，关停确认后解除（§10.3）：武装与续期已完成（M5-D1：内核输出 `CountdownCancelAll`，进入 `Running` 时与内核定时器每 30 秒覆盖有挂单的 instrument，新单所在 instrument 未被覆盖时同一步补上；只在 `env = "live"` 打开；venue-io 的 REST 线程发出；引擎单元测试与脚本化交易所端到端测试）；关停确认后解除随 `SIGTERM` 流程
 - [ ] task: persist — WAL 三种模式（`none`、`async`、`barrier`）、`EngineState` 快照与日志截断、崩溃恢复（§16.2、§16.3）
 - [ ] task: ops — 遥测：`LogRecord` 格式化为 JSON lines，按 §19.2 暴露 Prometheus 指标
 - [ ] task: ops — readiness 与 liveness，admin Unix socket 与全部命令（§19.3）

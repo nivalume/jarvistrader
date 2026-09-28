@@ -181,7 +181,9 @@ TEST_SUITE("unit") {
             http(R"({"listenKey":"LK1"})"), http("[]"), http("[]"),
             http(
                 R"([{"accountAlias":"a","asset":"USDT","balance":"10000.0","crossWalletBalance":"10000","crossUnPnl":"0","availableBalance":"10000.0","maxWithdrawAmount":"10000","marginAvailable":true,"updateTime":1700000000000}])"),
-            http("[]"), http("[]")},
+            http("[]"), http("[]"),
+            // The dead man's switch for the order the strategy places.
+            http(R"({"symbol":"BTCUSDT","countdownTime":"120000"})")},
         wss.ca_file(), wss.key_file()};
 
     const TempDir dir;
@@ -224,10 +226,16 @@ TEST_SUITE("unit") {
     CHECK(result.startup.passed());
     CHECK(set.get<0>().log == std::vector<std::string>{"reconciled orders=0", "start", "submitted",
                                                        "accepted", "filled"});
-    CHECK(result.venue.commands == 1);
+    CHECK(result.venue.commands == 2); // the order and its countdown
     CHECK(result.venue.refused_locally == 0);
     CHECK(result.venue.snapshots == 1);
     CHECK(result.venue.decode_errors == 0);
+    CHECK(result.venue.countdowns == 1);
+    CHECK(result.venue.countdown_failures == 0);
+    const std::vector<std::string> requests = https.requests();
+    REQUIRE_FALSE(requests.empty());
+    CHECK(requests.back().starts_with("POST /fapi/v1/countdownCancelAll"));
+    CHECK(requests.back().find("symbol=BTCUSDT&countdownTime=120000") != std::string::npos);
     CHECK(result.summary.state == md::NodeState::Stopped);
     REQUIRE_FALSE(result.directory.empty());
 

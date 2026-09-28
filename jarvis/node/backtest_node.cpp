@@ -79,6 +79,9 @@ strategy::KernelConfig kernel_config(const NodeConfig& config) {
   rc.orders_per_minute = r.orders_per_minute;
   rc.margin_ratio_bps = r.margin_ratio_bps;
   rc.check_margin = r.check_margin;
+  if (config.node.env == Env::Live) { // the venue ignores it elsewhere
+    rc.countdown_cancel_ms = r.countdown_cancel_all_ms;
+  }
   return k;
 }
 

@@ -102,6 +102,11 @@ public:
                                          std::int64_t start_ms, int limit, std::string& body,
                                          std::string& error);
 
+  // POST /fapi/v1/countdownCancelAll: the venue cancels every open order of `symbol` unless this
+  // is renewed within `countdown_ms`; 0 disarms it.
+  [[nodiscard]] core::Status countdown_cancel_all(std::string_view symbol,
+                                                  std::uint32_t countdown_ms, std::string& error);
+
   // The order fallback: Ok with the acknowledgement, or Ok with `refused` set and the venue's
   // refusal (an HTTP 4xx with a code); IoError when the outcome is unknown (in flight).
   [[nodiscard]] core::Status place(const Params& order, PlaceAck& ack, RequestError& refusal,

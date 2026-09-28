@@ -97,8 +97,10 @@ public:
   [[nodiscard]] core::Status step(const core::EventKey& key, const model::Event& event) {
     k_.current = key;
     k_.trading.begin_step();
+    const std::size_t first_output = k_.outputs.size();
     const core::Status s = std::visit([this](const auto& e) { return this->dispatch(e); }, event);
     deliver_order_events();
+    cover_submits(first_output);
     return s;
   }
 
@@ -716,6 +718,12 @@ private:
 
   core::Status on_lifecycle(const model::NodeLifecycle& e) {
     k_.trading.on_lifecycle(e.from, e.to);
+    if (countdown_ms() != 0) {
+      k_.countdown.running = e.to == model::NodeState::Running;
+      if (k_.countdown.running && !k_.countdown.armed) {
+        renew_countdown();
+      }
+    }
     if (e.to == model::NodeState::Running && !started_) {
       started_ = true;
       for (std::size_t i = 0; i < ss_->size(); ++i) {
@@ -753,6 +761,13 @@ private:
         !(fired.deadline == e.deadline)) {
       return core::Status::InvalidState; // the recorded timer is not the one due: divergence
     }
+    if (e.key.owner == strategy::kKernelTimerOwner && e.key.id == strategy::kCountdownTimerId) {
+      k_.countdown.armed = false;
+      if (k_.countdown.running) {
+        renew_countdown();
+      }
+      return core::Status::Ok;
+    }
     if (e.key.owner == strategy::kKernelTimerOwner) {
       if (e.key.id >= k_.aggregators.size()) {
         return core::Status::InvalidState;
@@ -782,6 +797,56 @@ private:
       }
     }
     return core::Status::Ok;
+  }
+
+  // ---- the venue-side dead man's switch (section 10.3) ---------------------------------------
+  // While Running, a kernel timer renews the countdown of every instrument with open orders, a
+  // quarter of the countdown apart; out of Running the renewals stop, so a node that stays out of
+  // sync for the whole countdown has its orders canceled by the venue. An order submitted for an
+  // instrument not renewed since the last renewal gets its countdown in the same step.
+
+  [[nodiscard]] std::uint32_t countdown_ms() const noexcept {
+    return k_.trading.risk.config().countdown_cancel_ms;
+  }
+
+  void emit_countdown(std::uint32_t slot) {
+    model::CountdownCancelAll c;
+    c.instrument_id = k_.instruments.id(model::InstrumentSlot{slot});
+    c.countdown_ms = countdown_ms();
+    c.ts_init = k_.current.ts;
+    if (core::ok(k_.outputs.emplace_back(std::in_place_type<model::CountdownCancelAll>, c))) {
+      k_.countdown.live[slot] = 1;
+    }
+  }
+
+  void renew_countdown() {
+    for (std::uint32_t slot = 0; slot < k_.instruments.size() && slot < k_.countdown.live.size();
+         ++slot) {
+      k_.countdown.live[slot] = 0;
+      if (k_.trading.oms.open_quantity(slot).orders > 0) {
+        emit_countdown(slot);
+      }
+    }
+    const std::uint64_t every = std::uint64_t{countdown_ms()} * 1'000'000U / 4U;
+    k_.countdown.armed = core::ok(
+        k_.timers.schedule(core::UnixNanos{k_.current.ts.value() + every}, core::DurationNanos{},
+                           core::TimerKey{strategy::kKernelTimerOwner, strategy::kCountdownTimerId},
+                           k_.countdown.timer));
+  }
+
+  void cover_submits(std::size_t first) {
+    if (countdown_ms() == 0 || !started_) {
+      return;
+    }
+    const std::size_t end = k_.outputs.size();
+    for (std::size_t i = first; i < end; ++i) {
+      const auto* c = std::get_if<model::SubmitOrder>(&k_.outputs[i]);
+      model::InstrumentSlot slot;
+      if (c != nullptr && core::ok(k_.instruments.find(c->instrument_id, slot)) &&
+          slot.value < k_.countdown.live.size() && k_.countdown.live[slot.value] == 0) {
+        emit_countdown(slot.value);
+      }
+    }
   }
 
   core::Status on_strategy_error(const model::StrategyError& e) {

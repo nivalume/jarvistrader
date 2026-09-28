@@ -115,9 +115,19 @@ struct ReconcileOutcome {
   core::UnixNanos ts_init;
 };
 
+// The venue-side dead man's switch (docs/architecture.md section 10.3): the venue cancels every
+// open order of the instrument unless this is renewed within `countdown_ms`; 0 disarms it.
+struct CountdownCancelAll {
+  InstrumentId instrument_id;
+  std::uint32_t countdown_ms = 0;
+  core::UnixNanos ts_init;
+};
+
 // Kernel outputs: features, strategy records, venue commands, the orders the risk gates denied
-// (a decision without a command, still checked by replay), and reconciliation results.
+// (a decision without a command, still checked by replay), reconciliation results, and the
+// dead man's switch.
 using Output = std::variant<FeatureUpdate, StrategyRecord, SubmitOrder, ModifyOrder, CancelOrder,
-                            CancelAllOrders, OrderDenied, ReconciliationDiff, ReconcileOutcome>;
+                            CancelAllOrders, OrderDenied, ReconciliationDiff, ReconcileOutcome,
+                            CountdownCancelAll>;
 
 } // namespace jarvis::model

@@ -101,6 +101,7 @@ enum class RecordKind : std::uint16_t {
   OrderDeniedOutput = 0x8007, // a model::OrderDenied the risk gates produced
   ReconciliationDiff = 0x8008,
   ReconcileOutcome = 0x8009,
+  CountdownCancelAll = 0x800A,
 };
 
 // Same order as the alternatives of model::Event.
@@ -152,10 +153,11 @@ static_assert(kKindByAlternative.size() == std::variant_size_v<Event>);
 }
 
 // Same order as the alternatives of model::Output.
-inline constexpr std::array<RecordKind, 9> kOutputKindByAlternative = {
+inline constexpr std::array<RecordKind, 10> kOutputKindByAlternative = {
     RecordKind::FeatureUpdate,     RecordKind::StrategyRecord,     RecordKind::SubmitOrder,
     RecordKind::ModifyOrder,       RecordKind::CancelOrder,        RecordKind::CancelAllOrders,
-    RecordKind::OrderDeniedOutput, RecordKind::ReconciliationDiff, RecordKind::ReconcileOutcome};
+    RecordKind::OrderDeniedOutput, RecordKind::ReconciliationDiff, RecordKind::ReconcileOutcome,
+    RecordKind::CountdownCancelAll};
 static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
 
 [[nodiscard]] constexpr RecordKind kind_of(const Output& output) noexcept {
@@ -260,6 +262,8 @@ static_assert(kOutputKindByAlternative.size() == std::variant_size_v<Output>);
     return "ReconciliationDiff";
   case RecordKind::ReconcileOutcome:
     return "ReconcileOutcome";
+  case RecordKind::CountdownCancelAll:
+    return "CountdownCancelAll";
   }
   return "";
 }
@@ -959,6 +963,7 @@ template <typename T> void decode_as(Reader& r, DecodeScratch& scratch, Event& o
   case RecordKind::OrderDeniedOutput:
   case RecordKind::ReconciliationDiff:
   case RecordKind::ReconcileOutcome:
+  case RecordKind::CountdownCancelAll:
     return core::Status::UnsupportedMessage; // outputs decode with decode_output
   }
   if (!r.ok()) {

@@ -174,6 +174,9 @@ public:
     if (const auto* c = std::get_if<model::CancelOrder>(&output)) {
       return send(VenueCommand{*c});
     }
+    if (const auto* c = std::get_if<model::CountdownCancelAll>(&output)) {
+      return send(VenueCommand{*c});
+    }
     return core::Status::Ok;
   }
 

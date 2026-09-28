@@ -507,9 +507,18 @@ check_margin = false
     CHECK(k.trading.account_id.view() == "BINANCE_USDM-001");
     CHECK(k.trading.trader_id.view() == "MM01-001");
 
+    CHECK(r.countdown_cancel_ms == 0); // only live nodes arm the venue's dead man's switch
+    c.node.env = node::Env::Live;
+    CHECK(node::kernel_config(c).trading.risk.countdown_cancel_ms == 120'000);
+    c.risk.countdown_cancel_all_ms = 0;
+    CHECK(node::kernel_config(c).trading.risk.countdown_cancel_ms == 0);
+
     node::NodeConfig bad;
-    const auto errors = parse("[node]\nid = \"mm01\"\n[risk]\nprice_band_bps = -1\n", bad);
+    auto errors = parse("[node]\nid = \"mm01\"\n[risk]\nprice_band_bps = -1\n", bad);
     CHECK(has_error(errors, "risk.price_band_bps", ""));
+    errors = parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 5000\n", bad);
+    CHECK(has_error(errors, "risk.countdown_cancel_all_ms", "at least 10000"));
+    CHECK(parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 0\n", bad).empty());
   }
 
   TEST_CASE("the simulated venue's books hold what the kernel's hold") {

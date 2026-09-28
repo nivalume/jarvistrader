@@ -354,6 +354,9 @@ void bind_events(nb::module_& mod) {
   bind_struct<m::ReconciliationDiff>(mod, "ReconciliationDiff",
                                      "A difference reconciliation found (the venue's value wins).");
   bind_struct<m::ReconcileOutcome>(mod, "ReconcileOutcome", "The end of one reconciliation.");
+  bind_struct<m::CountdownCancelAll>(
+      mod, "CountdownCancelAll",
+      "The venue-side dead man's switch for an instrument: renewed, or disarmed with 0.");
 }
 
 nb::object output_to_py(const m::Output& output) {
