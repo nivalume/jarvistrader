@@ -11,6 +11,7 @@ core::Status SymbolTable::add(std::string_view venue_symbol, const SymbolEntry& 
     return core::Status::AlreadyExists;
   }
   entries_.push_back(entry);
+  names_.emplace_back(venue_symbol);
   return core::Status::Ok;
 }
 

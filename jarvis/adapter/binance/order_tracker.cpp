@@ -52,6 +52,72 @@ void OrderTracker::on_submit(const model::SubmitOrder& c) {
   orders_.insert_or_assign(std::string{c.client_order_id.view()}, std::move(o));
 }
 
+std::vector<TrackedOrder> OrderTracker::unclosed() const {
+  std::vector<TrackedOrder> out;
+  for (const auto& [cid, o] : orders_) {
+    if (o.closed) {
+      continue;
+    }
+    std::uint64_t venue = 0;
+    static_cast<void>(std::from_chars(o.venue_order_id.data(),
+                                      o.venue_order_id.data() + o.venue_order_id.size(), venue));
+    out.push_back(TrackedOrder{symbols_->venue_symbol(o.symbol), cid, venue});
+  }
+  std::sort(out.begin(), out.end(), [](const TrackedOrder& a, const TrackedOrder& b) {
+    return a.client_order_id < b.client_order_id;
+  });
+  return out;
+}
+
+std::map<std::string, std::uint64_t> OrderTracker::next_trades() const {
+  std::map<std::string, std::uint64_t> out;
+  for (const auto& [cid, o] : orders_) {
+    if (o.trades.empty()) {
+      continue;
+    }
+    std::uint64_t& next = out[symbols_->venue_symbol(o.symbol)];
+    next = std::max(next, o.trades.rbegin()->first + 1);
+  }
+  return out;
+}
+
+void OrderTracker::absorb(const model::VenueSnapshot& snapshot) {
+  for (const model::OrderStatusReport& r : snapshot.orders) {
+    if (!r.client_order_id) {
+      continue;
+    }
+    const auto it = orders_.find(std::string{r.client_order_id->view()});
+    if (it == orders_.end()) {
+      continue;
+    }
+    Order& o = it->second;
+    if (o.venue_order_id.empty()) {
+      o.venue_order_id.assign(r.venue_order_id.view());
+    }
+    o.accepted = o.accepted || r.order_status != model::OrderStatus::Rejected;
+    const bool open = r.order_status == model::OrderStatus::Accepted ||
+                      r.order_status == model::OrderStatus::PartiallyFilled ||
+                      r.order_status == model::OrderStatus::Triggered;
+    if (!open) {
+      o.closed = true;
+    }
+    o.last_update_ms = std::max(o.last_update_ms, r.ts_last.value() / 1'000'000);
+  }
+  for (const model::FillReport& f : snapshot.fills) {
+    if (!f.client_order_id) {
+      continue;
+    }
+    const auto it = orders_.find(std::string{f.client_order_id->view()});
+    std::uint64_t trade = 0;
+    const std::string_view text = f.trade_id.view();
+    if (it == orders_.end() ||
+        std::from_chars(text.data(), text.data() + text.size(), trade).ec != std::errc{}) {
+      continue;
+    }
+    it->second.trades[trade] = TradeState::Full;
+  }
+}
+
 OrderTracker::Order* OrderTracker::find(std::string_view client_order_id) {
   const auto it = orders_.find(std::string{client_order_id});
   if (it == orders_.end()) {

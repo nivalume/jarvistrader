@@ -158,7 +158,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 ## M5 实盘、对账、运维、内置执行算法与纯 C++ 节点，规约 b（发布 v1.0）
 
 - [x] task: specs — `Reconciliation.tla`（交易所建模为会重排、重复、延迟消息的进程）与映射头（§18.1）：规约与 TLC 检查（三个协议变体都被不变量抓到）；成交只通过计数改变状态（与 OMS 一致）；映射头 `specs/map/reconciliation_actions.hpp` 与正向 trace validation（`MAP.toml` 中 `forward = true`）
-- [ ] task: execution — 对账协议：先订阅后快照、逐单比对、`userTrades` 合成漏成交、遗留与外部订单处理、置位与 `ReconciliationDiff`（§15.2）：内核一侧已完成（`jarvis/execution/reconciliation.hpp`：会话阶段、暂存、按快照置位、合成事件、差异与结果、`on_reconciled`、过期状态事件；单元与性质测试）；适配器用 REST 组装 `VenueSnapshot` 随 `LiveWiring`
+- [ ] task: execution — 对账协议：先订阅后快照、逐单比对、`userTrades` 合成漏成交、遗留与外部订单处理、置位与 `ReconciliationDiff`（§15.2）：内核一侧已完成（`jarvis/execution/reconciliation.hpp`：会话阶段、暂存、按快照置位、合成事件、差异与结果、`on_reconciled`、过期状态事件；单元与性质测试）；适配器用 REST 组装 `VenueSnapshot`（一致读）已完成（`jarvis/adapter/binance/snapshot.hpp`），接入 venue-io 线程随 `LiveWiring`
 - [ ] task: execution — 断线重连对账与每 60 秒轻量对账（§15.3）：断线重连已完成（内核会话阶段与 driver 同步闸门：`Running → Degraded → Syncing → Running`）；每 60 秒轻量对账待做
 - [ ] task: live — `LiveWiring`：`RingSource`、`SenderSink`、`MonotonicClock`；排空优先级 `admin > 回执 · ud-io > md-io > timer`（§5.5）
 - [ ] task: live — core 线程绑核与 busy-poll，IO 线程的 NUMA 亲和

@@ -297,6 +297,76 @@ Status RestClient::depth(std::string_view symbol, int limit, std::string& body,
   return s;
 }
 
+Status RestClient::open_orders(std::string& body, std::string& error) {
+  RestResponse r;
+  const Status s = json_call("GET", "/fapi/v1/openOrders", {}, Security::Signed, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
+Status RestClient::query_order(std::string_view symbol, std::string_view client_order_id,
+                               std::string& body, bool& found, std::string& error) {
+  found = false;
+  RestResponse r;
+  const Status s =
+      call("GET", "/fapi/v1/order",
+           {{"symbol", std::string{symbol}}, {"origClientOrderId", std::string{client_order_id}}},
+           Security::Signed, r, error);
+  if (!core::ok(s)) {
+    return s;
+  }
+  if (r.status == 400 && r.error_code == -2013) {
+    return Status::Ok; // "Order does not exist."
+  }
+  if (r.status != 200) {
+    error = "/fapi/v1/order: HTTP " + std::to_string(r.status) +
+            (r.error_code != 0 ? " code " + std::to_string(r.error_code) + " " + r.error_msg
+                               : std::string{});
+    return Status::InvalidArgument;
+  }
+  found = true;
+  body = std::move(r.body);
+  return Status::Ok;
+}
+
+Status RestClient::balances(std::string& body, std::string& error) {
+  RestResponse r;
+  const Status s = json_call("GET", "/fapi/v3/balance", {}, Security::Signed, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
+Status RestClient::positions(std::string& body, std::string& error) {
+  RestResponse r;
+  const Status s = json_call("GET", "/fapi/v3/positionRisk", {}, Security::Signed, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
+Status RestClient::user_trades(std::string_view symbol, std::optional<std::uint64_t> from_id,
+                               std::int64_t start_ms, int limit, std::string& body,
+                               std::string& error) {
+  Params params{{"symbol", std::string{symbol}}, {"limit", std::to_string(limit)}};
+  if (from_id) {
+    params.emplace_back("fromId", std::to_string(*from_id));
+  } else {
+    params.emplace_back("startTime", std::to_string(start_ms));
+  }
+  RestResponse r;
+  const Status s =
+      json_call("GET", "/fapi/v1/userTrades", std::move(params), Security::Signed, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
 Status RestClient::order_call(std::string_view method, RequestKind kind, const Params& order,
                               PlaceAck& ack, RequestError& refusal, bool& refused,
                               std::string& error) {

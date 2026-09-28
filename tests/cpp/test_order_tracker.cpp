@@ -262,4 +262,50 @@ TEST_SUITE("unit") {
     CHECK(state.is_reported);
     CHECK(state.ts_event == UnixNanos{11'000'000});
   }
+
+  TEST_CASE("reconciliation: unclosed orders, next trade ids, and absorbing a snapshot") {
+    const adapter::SymbolTable symbols = table();
+    binance::OrderTracker tracker{symbols, identity()};
+    tracker.on_submit(submit("C-1"));
+    tracker.on_submit(submit("C-2"));
+    tracker.on_submit(submit("C-3"));
+    adapter::CollectingEmitter out;
+    REQUIRE(tracker.on_report(report(order_update("C-1", "TRADE", 42, 1790000000090)), UnixNanos{1},
+                              out) == Status::Ok);
+    std::vector<binance::TrackedOrder> open = tracker.unclosed();
+    REQUIRE(open.size() == 3);
+    CHECK(open[0].client_order_id == "C-1");
+    CHECK(open[0].symbol == "BTCUSDT");
+    CHECK(open[0].venue_order_id == 8886774);
+    CHECK(open[1].venue_order_id == 0);
+    CHECK(tracker.next_trades().at("BTCUSDT") == 43);
+
+    // The snapshot: C-2 filled while away (trade 50), C-3 canceled.
+    std::vector<model::OrderStatusReport> orders(2);
+    orders[0].client_order_id = make<model::ClientOrderId>("C-2");
+    orders[0].venue_order_id = make<model::VenueOrderId>("900");
+    orders[0].order_status = model::OrderStatus::Filled;
+    orders[0].ts_last = UnixNanos{1790000000500'000'000};
+    orders[1].client_order_id = make<model::ClientOrderId>("C-3");
+    orders[1].venue_order_id = make<model::VenueOrderId>("901");
+    orders[1].order_status = model::OrderStatus::Canceled;
+    std::vector<model::FillReport> fills(1);
+    fills[0].client_order_id = orders[0].client_order_id;
+    fills[0].venue_order_id = orders[0].venue_order_id;
+    fills[0].trade_id = make<model::TradeId>("50");
+    model::VenueSnapshot snap;
+    snap.orders = orders;
+    snap.fills = fills;
+    tracker.absorb(snap);
+    open = tracker.unclosed();
+    REQUIRE(open.size() == 1);
+    CHECK(open[0].client_order_id == "C-1");
+    CHECK(tracker.next_trades().at("BTCUSDT") == 51);
+
+    // A late report of the trade the snapshot showed is not passed on again.
+    out.clear();
+    REQUIRE(tracker.on_report(report(order_update("C-2", "TRADE", 50, 1790000000400)), UnixNanos{2},
+                              out) == Status::Ok);
+    CHECK(out.events.empty());
+  }
 }

@@ -220,6 +220,7 @@ if(JARVIS_BUILD_LIVE)
     jarvis/adapter/binance/requests.cpp
     jarvis/adapter/binance/rest_client.cpp
     jarvis/adapter/binance/rest_codec.cpp
+    jarvis/adapter/binance/snapshot.cpp
     jarvis/adapter/binance/startup.cpp
     jarvis/adapter/binance/streams.cpp
     jarvis/adapter/binance/user_stream.cpp

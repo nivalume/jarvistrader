@@ -116,6 +116,7 @@ public:
   [[nodiscard]] std::optional<std::uint32_t> find(std::string_view venue_symbol) const;
   [[nodiscard]] std::optional<std::uint32_t> find(const model::InstrumentId& id) const;
   [[nodiscard]] const SymbolEntry& operator[](std::uint32_t index) const { return entries_[index]; }
+  [[nodiscard]] const std::string& venue_symbol(std::uint32_t index) const { return names_[index]; }
   [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
 
 private:
@@ -127,6 +128,7 @@ private:
   };
   std::unordered_map<std::string, std::uint32_t, Hash, std::equal_to<>> index_;
   std::vector<SymbolEntry> entries_;
+  std::vector<std::string> names_;
 };
 
 // Fixed-point values from venue strings, exactly: the value must lie on the grid of the given

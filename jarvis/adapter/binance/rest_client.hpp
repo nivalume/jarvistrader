@@ -88,6 +88,20 @@ public:
   [[nodiscard]] core::Status depth(std::string_view symbol, int limit, std::string& body,
                                    std::string& error);
 
+  // Reconciliation (snapshot.hpp): the raw JSON bodies, decoded by rest_codec.hpp.
+  [[nodiscard]] core::Status open_orders(std::string& body, std::string& error);
+  // GET /fapi/v1/order by ClientOrderId; `found` is false when the venue does not know it
+  // (-2013).
+  [[nodiscard]] core::Status query_order(std::string_view symbol, std::string_view client_order_id,
+                                         std::string& body, bool& found, std::string& error);
+  [[nodiscard]] core::Status balances(std::string& body, std::string& error);
+  [[nodiscard]] core::Status positions(std::string& body, std::string& error);
+  // GET /fapi/v1/userTrades from trade id `from_id` when given, else from `start_ms`.
+  [[nodiscard]] core::Status user_trades(std::string_view symbol,
+                                         std::optional<std::uint64_t> from_id,
+                                         std::int64_t start_ms, int limit, std::string& body,
+                                         std::string& error);
+
   // The order fallback: Ok with the acknowledgement, or Ok with `refused` set and the venue's
   // refusal (an HTTP 4xx with a code); IoError when the outcome is unknown (in flight).
   [[nodiscard]] core::Status place(const Params& order, PlaceAck& ack, RequestError& refusal,

@@ -15,6 +15,7 @@
 #include "jarvis/model/account.hpp"
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/outputs.hpp"
+#include "jarvis/model/reports.hpp"
 
 // This node's orders at the venue (docs/architecture.md sections 8.2 and 8.3): turns the
 // WebSocket API's answers and the user data stream's reports into kernel order events, with
@@ -65,6 +66,13 @@ struct RequestError {
   std::uint64_t time_ms = 0;
 };
 
+// An order the adapter sent and has not seen close (what a reconciliation snapshot asks about).
+struct TrackedOrder {
+  std::string symbol; // venue symbol
+  std::string client_order_id;
+  std::uint64_t venue_order_id = 0; // 0 when not acknowledged
+};
+
 struct TrackerStats {
   std::uint64_t unknown_orders = 0;   // reports of orders not sent by this node
   std::uint64_t stale_reports = 0;    // older than the order's last update
@@ -89,6 +97,14 @@ public:
                                               EventEmitter& out);
   [[nodiscard]] core::Status on_report(const UserReport& r, core::UnixNanos recv,
                                        EventEmitter& out);
+
+  // Reconciliation: the orders not seen closing, and the next trade id to ask for by venue
+  // symbol (the ones seen, plus one). After the kernel reconciled a snapshot, absorb() takes
+  // what it showed: venue ids, acceptance, closed orders and trades, so later reports of them are
+  // passed on as the tracker would have had it seen them.
+  [[nodiscard]] std::vector<TrackedOrder> unclosed() const;
+  [[nodiscard]] std::map<std::string, std::uint64_t> next_trades() const;
+  void absorb(const model::VenueSnapshot& snapshot);
 
   [[nodiscard]] const TrackerStats& stats() const noexcept { return stats_; }
   [[nodiscard]] std::size_t orders() const noexcept { return orders_.size(); }

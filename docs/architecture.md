@@ -1335,6 +1335,14 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 - 订阅早于 `T_s`。
 - 成交最后获取，保证仓位或余额反映的每一笔成交都在成交报告中。
 
+适配器一侧（M5-C1，`jarvis/adapter/binance/snapshot.hpp`）按上述约束用 REST 组装快照：
+
+1. `T_s` 取第一次调用前交易所的时钟（本地时钟加上测得的偏移）。
+2. `GET /fapi/v1/openOrders`；对 `OrderTracker` 尚未见到关闭、又不在列表中的订单逐个 `GET /fapi/v1/order`（`-2013` 表示交易所不认识，留给内核判 LOST）。
+3. 一致读：先 `userTrades`（按品种，从上次见到的成交号之后开始，没有时从节点启动时间开始），再 `/fapi/v3/balance` 与 `/fapi/v3/positionRisk`，再读一次 `userTrades`。第二次读到新成交时重读余额与仓位，最多三轮；读不稳定时放弃，稍后重试。这样仓位与余额反映的每一笔成交都在成交报告中，且报告之后没有它们不反映的成交。
+
+成交报告按已知的交易所订单号补上 `ClientOrderId`；未知品种与非内置币种的条目计数后跳过。内核对账之后，`OrderTracker::absorb` 吸收快照所示的交易所订单号、确认、关闭与成交，之后同一订单或成交的回报按正常规则去重。
+
 测试：`tests/cpp/test_reconciliation.cpp` 为每一步写了单元用例，并有一个性质测试：随机生成交易所历史（开单、逐笔成交、撤单、断线、重连、重排与重复投递、快照与对账交错），每一步检查规约的 `HaltedUntilSynced`、`CountedOnce`、`NoPhantom`，最终检查 `Converged`（成交量、开闭状态与确切状态）。变异检验：去掉成交报告、不回放暂存、断线不停止交易都会被抓到。
 
 ### 15.3 重连与持续对账
