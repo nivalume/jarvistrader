@@ -434,8 +434,9 @@ public:
     return std::nullopt;
   }
 
+  // A strategy receives no callbacks once halted, or once every strategy was stopped.
   [[nodiscard]] bool is_disabled(StrategyIndex s) const noexcept {
-    return s < disabled.size() && disabled[s] != 0;
+    return stopped || (s < disabled.size() && disabled[s] != 0);
   }
 
   void fail(StrategyIndex strategy, core::Status status) noexcept {
@@ -481,6 +482,8 @@ public:
   core::FixedVector<StrategyFailure> failures;
   core::FixedVector<std::uint8_t> disabled; // 1 once a strategy is halted
   bool halt_requested = false;
+  bool stopped = false; // Stopping: on_stop has run, strategies receive nothing more
+  std::optional<model::ShutdownMode> shutdown; // the Shutdown input, once stepped
   CountdownState countdown;
   Trading trading;
 

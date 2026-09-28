@@ -131,6 +131,15 @@ public:
 
   [[nodiscard]] bool halt_requested() const noexcept { return k_.halt_requested; }
 
+  // Orders not yet in a terminal state; the drain at shutdown waits until there are none.
+  [[nodiscard]] std::uint32_t open_orders() const noexcept {
+    std::uint32_t n = 0;
+    for (std::uint32_t slot = 0; slot < k_.instruments.size(); ++slot) {
+      n += k_.trading.oms.open_quantity(slot).orders;
+    }
+    return n;
+  }
+
 private:
   // ---- dispatch -----------------------------------------------------------------------------
 
@@ -142,10 +151,7 @@ private:
     } else if constexpr (std::is_same_v<T, model::OrderBookDeltas>) {
       return on_deltas(e);
     } else if constexpr (std::is_same_v<T, model::Bar>) {
-      if (const auto key = k_.find_bar_type(e.bar_type)) {
-        deliver(*key, data::DataKind::Bar, e, e.ts_init);
-      }
-      return core::Status::Ok;
+      return on_bar(e);
     } else if constexpr (std::is_same_v<T, model::MarkPriceUpdate>) {
       return on_mark(e);
     } else if constexpr (std::is_same_v<T, model::IndexPriceUpdate>) {
@@ -183,9 +189,18 @@ private:
     } else if constexpr (std::is_same_v<T, model::VenueSnapshot>) {
       ReconcileHost host{*this};
       return k_.trading.reconciler.reconcile(host, e);
+    } else if constexpr (std::is_same_v<T, model::Shutdown>) {
+      return on_shutdown(e);
     } else {
-      return core::Status::Ok; // Shutdown is the node's
+      return core::Status::Ok;
     }
+  }
+
+  core::Status on_bar(const model::Bar& e) {
+    if (const auto key = k_.find_bar_type(e.bar_type)) {
+      deliver(*key, data::DataKind::Bar, e, e.ts_init);
+    }
+    return core::Status::Ok;
   }
 
   [[nodiscard]] bool slot_of(const model::InstrumentId& id, std::uint32_t& slot) const noexcept {
@@ -718,41 +733,50 @@ private:
 
   core::Status on_lifecycle(const model::NodeLifecycle& e) {
     k_.trading.on_lifecycle(e.from, e.to);
-    if (countdown_ms() != 0) {
-      k_.countdown.running = e.to == model::NodeState::Running;
-      if (k_.countdown.running && !k_.countdown.armed) {
-        renew_countdown();
-      }
-    }
+    countdown_on_lifecycle(e.to);
     if (e.to == model::NodeState::Running && !started_) {
       started_ = true;
-      for (std::size_t i = 0; i < ss_->size(); ++i) {
-        const auto s = static_cast<StrategyIndex>(i);
-        if (k_.is_disabled(s)) {
-          continue;
-        }
-        strategy::Context ctx{k_, s};
-        const core::Status status = ss_->on_start(s, ctx);
-        if (!core::ok(status)) {
-          k_.fail(s, status);
-        }
+      for_each_active(
+          [this](StrategyIndex s, strategy::Context& ctx) { return ss_->on_start(s, ctx); });
+    } else if (e.to == model::NodeState::Stopping && !k_.stopped) {
+      if (started_) {
+        flush_batch();
+        for_each_active(
+            [this](StrategyIndex s, strategy::Context& ctx) { return ss_->on_stop(s, ctx); });
       }
-    } else if (e.to == model::NodeState::Stopping && started_ && !stopped_) {
-      stopped_ = true;
-      flush_batch();
-      for (std::size_t i = 0; i < ss_->size(); ++i) {
-        const auto s = static_cast<StrategyIndex>(i);
-        if (k_.is_disabled(s)) {
-          continue;
-        }
-        strategy::Context ctx{k_, s};
-        const core::Status status = ss_->on_stop(s, ctx);
-        if (!core::ok(status)) {
-          k_.fail(s, status);
-        }
-      }
+      k_.stopped = true;
     }
     return core::Status::Ok;
+  }
+
+  // Calls `call(s, ctx)` for every strategy still receiving callbacks; a failure is noted.
+  template <typename F> void for_each_active(F&& call) {
+    for (std::size_t i = 0; i < ss_->size(); ++i) {
+      const auto s = static_cast<StrategyIndex>(i);
+      if (k_.is_disabled(s)) {
+        continue;
+      }
+      strategy::Context ctx{k_, s};
+      const core::Status status = call(s, ctx);
+      if (!core::ok(status)) {
+        k_.fail(s, status);
+      }
+    }
+  }
+
+  // The node is shutting down (section 19.4). CancelAllThenExit halts trading and cancels every
+  // open order; the driver then waits in Stopping for the venue to confirm. ExitKeepOrders leaves
+  // the orders, so the countdown is disarmed at Stopped whatever is open.
+  core::Status on_shutdown(const model::Shutdown& e) {
+    if (k_.shutdown) {
+      return core::Status::Ok; // the first one decides
+    }
+    k_.shutdown = e.mode;
+    if (e.mode != model::ShutdownMode::CancelAllThenExit) {
+      return core::Status::Ok;
+    }
+    static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::AdminHalt));
+    return k_.trading.kill_switch(k_.current, k_.outputs);
   }
 
   core::Status on_timer_fired(const model::TimerFired& e) {
@@ -819,6 +843,19 @@ private:
     }
   }
 
+  void countdown_on_lifecycle(model::NodeState to) {
+    if (countdown_ms() == 0) {
+      return;
+    }
+    k_.countdown.running = to == model::NodeState::Running;
+    if (k_.countdown.running && !k_.countdown.armed) {
+      renew_countdown();
+    } else if (to == model::NodeState::Stopped && k_.shutdown &&
+               (*k_.shutdown == model::ShutdownMode::ExitKeepOrders || open_orders() == 0)) {
+      disarm_countdown();
+    }
+  }
+
   void renew_countdown() {
     for (std::uint32_t slot = 0; slot < k_.instruments.size() && slot < k_.countdown.live.size();
          ++slot) {
@@ -832,6 +869,29 @@ private:
         k_.timers.schedule(core::UnixNanos{k_.current.ts.value() + every}, core::DurationNanos{},
                            core::TimerKey{strategy::kKernelTimerOwner, strategy::kCountdownTimerId},
                            k_.countdown.timer));
+  }
+
+  // Stopped with nothing left open (or the orders kept on purpose): countdown 0 for every
+  // instrument renewed since the last renewal. Others have no open orders; their countdown, if
+  // still running, cancels nothing.
+  void disarm_countdown() {
+    if (k_.countdown.armed) {
+      static_cast<void>(k_.timers.cancel(k_.countdown.timer));
+      k_.countdown.armed = false;
+    }
+    for (std::uint32_t slot = 0; slot < k_.instruments.size() && slot < k_.countdown.live.size();
+         ++slot) {
+      if (k_.countdown.live[slot] == 0) {
+        continue;
+      }
+      model::CountdownCancelAll c;
+      c.instrument_id = k_.instruments.id(model::InstrumentSlot{slot});
+      c.countdown_ms = 0;
+      c.ts_init = k_.current.ts;
+      if (core::ok(k_.outputs.emplace_back(std::in_place_type<model::CountdownCancelAll>, c))) {
+        k_.countdown.live[slot] = 0;
+      }
+    }
   }
 
   void cover_submits(std::size_t first) {
@@ -886,7 +946,6 @@ private:
   core::FixedVector<StrategyIndex> calls_;
   core::FixedVector<std::uint32_t> overflowing_;
   bool started_ = false;
-  bool stopped_ = false;
 };
 
 } // namespace jarvis::engine

@@ -10,6 +10,7 @@
 #include "jarvis/core/sha256.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
+#include "jarvis/model/event.hpp"
 #include "jarvis/model/generated/enums.hpp"
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/money.hpp"
@@ -46,6 +47,9 @@ struct NodeSection {
   std::uint64_t seed = 0;
   bool strict_determinism = true;
   Capacity capacity;
+  // How a sandbox or live node stops (section 19.4); the Shutdown input records it.
+  model::ShutdownMode shutdown = model::ShutdownMode::CancelAllThenExit;
+  std::uint32_t shutdown_timeout_ms = 10'000; // the wait for the cancels to be confirmed
 };
 
 struct TimeRange {

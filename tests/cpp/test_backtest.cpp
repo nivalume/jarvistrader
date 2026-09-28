@@ -495,9 +495,166 @@ private:
   std::size_t next_ = 0;
 };
 
+md::Event perpetual(std::uint64_t ts) {
+  md::CryptoPerpetual p;
+  md::InstrumentCommon& c = p.common;
+  c.id = btc();
+  REQUIRE(md::Symbol::from("BTCUSDT", c.raw_symbol) == Status::Ok);
+  md::Currency base;
+  md::Currency quote;
+  REQUIRE(md::Currency::builtin("BTC", base) == Status::Ok);
+  REQUIRE(md::Currency::builtin("USDT", quote) == Status::Ok);
+  c.base_currency = base;
+  c.quote_currency = quote;
+  c.settlement_currency = quote;
+  REQUIRE(md::Price::parse("0.1", c.price_increment) == Status::Ok);
+  c.price_precision = 1;
+  REQUIRE(md::Quantity::parse("0.001", c.size_increment) == Status::Ok);
+  c.size_precision = 3;
+  REQUIRE(md::Quantity::parse("1", c.multiplier) == Status::Ok);
+  REQUIRE(md::Decimal::parse("0.05", c.margin_init) == Status::Ok);
+  REQUIRE(md::Decimal::parse("0.025", c.margin_maint) == Status::Ok);
+  c.ts_event = UnixNanos{ts};
+  c.ts_init = UnixNanos{ts};
+  return md::Event{p};
+}
+
+// Places one limit buy when it starts; logs what it hears.
+// NOLINTBEGIN(readability-make-member-function-const)
+struct Quoter {
+  std::vector<std::string>* log = nullptr;
+  std::vector<md::ClientOrderId>* ids = nullptr;
+
+  Status on_start(st::Context& ctx) {
+    md::Quantity qty;
+    md::Price px;
+    REQUIRE(md::Quantity::parse("1.000", qty) == Status::Ok);
+    REQUIRE(md::Price::parse("100.0", px) == Status::Ok);
+    md::ClientOrderId id;
+    const Status s = ctx.submit(ctx.limit(btc(), md::OrderSide::Buy, qty, px), id);
+    ids->push_back(id);
+    return s;
+  }
+  void on_order_event(st::Context& /*ctx*/, const md::OrderEvent& e) {
+    if (std::holds_alternative<md::OrderSubmitted>(e)) {
+      log->emplace_back("submitted");
+    } else if (std::holds_alternative<md::OrderPendingCancel>(e)) {
+      log->emplace_back("pending cancel");
+    } else {
+      log->emplace_back("other");
+    }
+  }
+  void on_stop(st::Context& ctx) { log->push_back("stop@" + std::to_string(ctx.now().value())); }
+};
+// NOLINTEND(readability-make-member-function-const)
+
+// A virtual clock stepping by 100 ns; asks to stop at `stop`. The venue confirms the cancel of
+// the first order at `cancel_at` (0: never).
+class DrainPump {
+public:
+  DrainPump(LivePushSource& source, const std::vector<md::ClientOrderId>& ids, std::uint64_t stop,
+            std::uint64_t cancel_at)
+      : source_{&source}, ids_{&ids}, stop_{stop}, cancel_at_{cancel_at} {}
+  [[nodiscard]] UnixNanos now() const { return UnixNanos{now_}; }
+  Status pump(UnixNanos now) {
+    if (cancel_at_ != 0 && !sent_ && now.value() >= cancel_at_ && !ids_->empty()) {
+      sent_ = true;
+      md::OrderCanceled e;
+      e.header.instrument_id = btc();
+      e.header.client_order_id = ids_->front();
+      e.header.ts_event = now;
+      e.header.ts_init = now;
+      source_->push(EventKey{now, 2, 0}, md::Event{e});
+    }
+    return Status::Ok;
+  }
+  Status idle(UnixNanos /*now*/) {
+    now_ += 100;
+    return Status::Ok;
+  }
+  [[nodiscard]] bool stop_requested() const { return now_ >= stop_; }
+
+private:
+  LivePushSource* source_;
+  const std::vector<md::ClientOrderId>* ids_;
+  std::uint64_t now_ = 500;
+  std::uint64_t stop_;
+  std::uint64_t cancel_at_;
+  bool sent_ = false;
+};
+
+struct DrainRun {
+  std::vector<std::string> log;
+  std::vector<std::string> moves; // lifecycle and shutdown inputs
+  std::size_t cancels = 0;        // CancelOrder outputs
+  bt::RunSummary summary;
+};
+
+DrainRun run_drain(std::optional<md::ShutdownMode> mode, std::uint64_t cancel_at) {
+  DrainRun r;
+  std::vector<md::ClientOrderId> ids;
+  st::KernelConfig c = small_config();
+  c.trading.risk.check_margin = false;
+  c.trading.risk.margin_ratio_bps = 0;
+  st::StaticStrategySet<Quoter> set{Quoter{&r.log, &ids}};
+  jarvis::engine::Engine engine{c, set};
+  LivePushSource source;
+  MemoryRecorder recorder;
+  const std::vector<md::Event> preamble = {perpetual(1)};
+  bt::DriverOptions options;
+  options.preamble = preamble;
+  options.shutdown = mode;
+  options.drain_for = jarvis::core::DurationNanos{2'000};
+  bt::Driver driver{engine, source, recorder, options};
+  DrainPump pump{source, ids, 1'000, cancel_at};
+  REQUIRE(driver.run_realtime(pump, r.summary) == Status::Ok);
+  for (const Keyed& k : recorder.inputs) {
+    if (const auto* lc = std::get_if<md::NodeLifecycle>(&k.event)) {
+      r.moves.push_back(std::string{md::to_string(lc->to)} + "@" +
+                        std::to_string(k.key.ts.value()));
+    } else if (const auto* sd = std::get_if<md::Shutdown>(&k.event)) {
+      r.moves.push_back(std::string{md::to_string(sd->mode)} + "@" +
+                        std::to_string(k.key.ts.value()));
+    } else if (std::holds_alternative<md::OrderCanceled>(k.event)) {
+      r.moves.push_back("CANCELED@" + std::to_string(k.key.ts.value()));
+    }
+  }
+  for (const KeyedOutput& o : recorder.outputs) {
+    r.cancels += std::holds_alternative<md::CancelOrder>(o.output) ? 1U : 0U;
+  }
+  return r;
+}
+
 } // namespace
 
 TEST_SUITE("unit") {
+  TEST_CASE("in real time, a shutdown cancels the orders and waits in Stopping for the venue") {
+    const DrainRun confirmed = run_drain(md::ShutdownMode::CancelAllThenExit, 1'300);
+    CHECK(confirmed.moves == std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500",
+                                                      "RUNNING@500", "CANCEL_ALL_THEN_EXIT@1000",
+                                                      "STOPPING@1000", "CANCELED@1300",
+                                                      "STOPPED@1300"});
+    CHECK(confirmed.cancels == 1);
+    CHECK(confirmed.summary.left_open == 0);
+    // The strategy hears of the cancel request, then stops; nothing reaches it after on_stop.
+    CHECK(confirmed.log == std::vector<std::string>{"submitted", "pending cancel", "stop@1000"});
+
+    // Without the venue's answer the node stops once the drain time is up.
+    const DrainRun timed_out = run_drain(md::ShutdownMode::CancelAllThenExit, 0);
+    CHECK(timed_out.moves.back() == "STOPPED@3000");
+    CHECK(timed_out.summary.left_open == 1);
+
+    // exit_keep_orders and the default (no shutdown input) stop at once, orders untouched.
+    const DrainRun kept = run_drain(md::ShutdownMode::ExitKeepOrders, 1'300);
+    CHECK(kept.moves.back() == "STOPPED@1000");
+    CHECK(kept.cancels == 0);
+    CHECK(kept.summary.left_open == 1);
+    const DrainRun plain = run_drain(std::nullopt, 1'300);
+    CHECK(plain.moves == std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500",
+                                                  "RUNNING@500", "STOPPING@1000", "STOPPED@1000"});
+    CHECK(plain.cancels == 0);
+  }
+
   TEST_CASE("in real time, timers fire once the clock reaches them, between arrivals") {
     const std::vector<Keyed> data = {{key(1000, 1, 1), trade(1000, 1000)},
                                      {key(2000, 1, 2), trade(2000, 1001)},

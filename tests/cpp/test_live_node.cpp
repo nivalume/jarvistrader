@@ -1,7 +1,9 @@
 // The live node (jarvis/live/live_node.hpp) end to end against a scripted venue: startup checks
 // and the listenKey over HTTPS, market data, the user data stream and the WebSocket API over WSS.
-// The node reconciles, starts its strategy, places an order, sees it filled, and its recording
-// replays under the backtest wiring with the same outputs.
+// The node reconciles, starts its strategy, places an order (with the venue's dead man's switch
+// for its instrument) and sees it partly filled; on the way out it cancels the rest, waits for
+// the venue's confirmation and disarms the switch. Its recording replays under the backtest
+// wiring with the same outputs.
 
 #include <atomic>
 #include <chrono>
@@ -69,6 +71,12 @@ std::string fill_of(std::string_view cid) {
          R"(","S":"BUY","o":"LIMIT","f":"GTC","q":"0.010","p":"84000.0","ap":"84000.0","sp":"0","x":"TRADE","X":"PARTIALLY_FILLED","i":42,"l":"0.004","z":"0.004","L":"84000.0","N":"USDT","n":"0.0672","T":1700000003090,"t":7,"b":"0","a":"0","m":true,"R":false,"wt":"CONTRACT_PRICE","ot":"LIMIT","ps":"BOTH","cp":false,"rp":"0"}}})";
 }
 
+std::string canceled_of(std::string_view cid) {
+  return R"({"stream":"LK1","data":{"e":"ORDER_TRADE_UPDATE","E":1700000004100,"T":1700000004099,"o":{"s":"BTCUSDT","c":")" +
+         std::string{cid} +
+         R"(","S":"BUY","o":"LIMIT","f":"GTC","q":"0.010","p":"84000.0","ap":"84000.0","sp":"0","x":"CANCELED","X":"CANCELED","i":42,"l":"0","z":"0.004","L":"0","N":"USDT","n":"0","T":1700000004090,"t":0,"b":"0","a":"0","m":false,"R":false,"wt":"CONTRACT_PRICE","ot":"LIMIT","ps":"BOTH","cp":false,"rp":"0"}}})";
+}
+
 // Buys once it runs; stops the node when the fill arrives.
 struct Buyer {
   std::atomic<bool>* stop = nullptr;
@@ -92,6 +100,8 @@ struct Buyer {
       log.emplace_back("submitted");
     } else if (std::holds_alternative<md::OrderAccepted>(e)) {
       log.emplace_back("accepted");
+    } else if (std::holds_alternative<md::OrderPendingCancel>(e)) {
+      log.emplace_back("pending cancel");
     } else if (std::holds_alternative<md::OrderFilled>(e)) {
       log.emplace_back("filled");
       if (stop != nullptr) {
@@ -152,13 +162,24 @@ TEST_SUITE("unit") {
             return {WsReply::send(R"({"result":null,"id":)" +
                                   m.substr(at + 5, m.find('}', at) - at - 5) + "}")};
           }
-          if (field(m, "method") == "order.place") {
-            const std::string cid = field(m, "newClientOrderId");
+          const auto to_stream = [&self](const std::string& frame) {
             for (std::size_t c = 0; c < 8; ++c) {
               if (self->target(c) == "/private/stream") {
-                self->push(c, WsReply::send(fill_of(cid)));
+                self->push(c, WsReply::send(frame));
               }
             }
+          };
+          if (field(m, "method") == "order.cancel") {
+            const std::string cid = field(m, "origClientOrderId");
+            to_stream(canceled_of(cid));
+            return {WsReply::send(
+                R"({"id":")" + field(m, "id") +
+                R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"CANCELED","clientOrderId":")" +
+                cid + R"(","updateTime":1700000004000}})")};
+          }
+          if (field(m, "method") == "order.place") {
+            const std::string cid = field(m, "newClientOrderId");
+            to_stream(fill_of(cid));
             return {WsReply::send(
                 R"({"id":")" + field(m, "id") +
                 R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"NEW","clientOrderId":")" +
@@ -182,8 +203,10 @@ TEST_SUITE("unit") {
             http(
                 R"([{"accountAlias":"a","asset":"USDT","balance":"10000.0","crossWalletBalance":"10000","crossUnPnl":"0","availableBalance":"10000.0","maxWithdrawAmount":"10000","marginAvailable":true,"updateTime":1700000000000}])"),
             http("[]"), http("[]"),
-            // The dead man's switch for the order the strategy places.
-            http(R"({"symbol":"BTCUSDT","countdownTime":"120000"})")},
+            // The dead man's switch for the order the strategy places, and its disarming once
+            // the shutdown has canceled what was left of the order.
+            http(R"({"symbol":"BTCUSDT","countdownTime":"120000"})"),
+            http(R"({"symbol":"BTCUSDT","countdownTime":"0"})")},
         wss.ca_file(), wss.key_file()};
 
     const TempDir dir;
@@ -224,18 +247,24 @@ TEST_SUITE("unit") {
     REQUIRE(s == Status::Ok);
     CHECK(result.epoch == 1);
     CHECK(result.startup.passed());
+    // The shutdown cancels the rest of the order; the strategy, stopped, hears only of the
+    // request.
     CHECK(set.get<0>().log == std::vector<std::string>{"reconciled orders=0", "start", "submitted",
-                                                       "accepted", "filled"});
-    CHECK(result.venue.commands == 2); // the order and its countdown
+                                                       "accepted", "filled", "pending cancel"});
+    CHECK(result.summary.left_open == 0);
+    // The order, its countdown, the shutdown's cancel, the countdown's disarming.
+    CHECK(result.venue.commands == 4);
     CHECK(result.venue.refused_locally == 0);
     CHECK(result.venue.snapshots == 1);
     CHECK(result.venue.decode_errors == 0);
-    CHECK(result.venue.countdowns == 1);
+    CHECK(result.venue.countdowns == 2);
     CHECK(result.venue.countdown_failures == 0);
     const std::vector<std::string> requests = https.requests();
-    REQUIRE_FALSE(requests.empty());
-    CHECK(requests.back().starts_with("POST /fapi/v1/countdownCancelAll"));
-    CHECK(requests.back().find("symbol=BTCUSDT&countdownTime=120000") != std::string::npos);
+    REQUIRE(requests.size() >= 2);
+    const std::string& arm = requests[requests.size() - 2];
+    CHECK(arm.starts_with("POST /fapi/v1/countdownCancelAll"));
+    CHECK(arm.find("symbol=BTCUSDT&countdownTime=120000") != std::string::npos);
+    CHECK(requests.back().find("symbol=BTCUSDT&countdownTime=0&") != std::string::npos);
     CHECK(result.summary.state == md::NodeState::Stopped);
     REQUIRE_FALSE(result.directory.empty());
 

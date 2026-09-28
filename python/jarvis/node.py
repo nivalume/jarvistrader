@@ -59,6 +59,7 @@ class RunResult:
     venue_answers: int  # order events from the simulated venue ([venues.sim])
     halted: bool
     state: str
+    left_open: int  # orders still open when the node stopped (sandbox and live shutdown)
     first_ts: int
     last_ts: int
     strategies: tuple[StrategyStats, ...]
@@ -88,6 +89,8 @@ class RunResult:
             f"skipped: {self.skipped}",
             f"state: {self.state}" + (" (halted by a strategy error)" if self.halted else ""),
         ]
+        if self.left_open:
+            lines.append(f"left open at stop: {self.left_open} orders")
         if self.directory:
             digest, records = _log.fingerprint(self.directory, "all")
             lines.append(f"fingerprint: {digest} records={records}")

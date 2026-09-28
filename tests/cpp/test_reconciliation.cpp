@@ -989,6 +989,60 @@ TEST_SUITE("property") {
     CHECK(h.engine().next_timer(none));
   }
 
+  TEST_CASE("a shutdown cancels every order, and the countdown is disarmed once none is open") {
+    const auto shutdown = [](md::ShutdownMode mode, std::uint64_t ts) {
+      return md::Event{md::Shutdown{mode, UnixNanos{ts}}};
+    };
+    const auto disarms = [](const Harness& h) {
+      std::size_t n = 0;
+      for (const md::CountdownCancelAll& c : h.outputs_of<md::CountdownCancelAll>()) {
+        n += c.countdown_ms == 0 ? 1U : 0U;
+      }
+      return n;
+    };
+    st::KernelConfig c = config();
+    c.trading.risk.countdown_cancel_ms = 120'000;
+
+    SUBCASE("cancel_all_then_exit, confirmed") {
+      Harness h{1, "1.000", c};
+      start(h, 1);
+      h.run({shutdown(md::ShutdownMode::CancelAllThenExit, 10)});
+      CHECK(h.trading().risk.trading_state() == md::TradingState::Halted);
+      REQUIRE(h.outputs_of<md::CancelOrder>().size() == 1);
+      CHECK(h.outputs_of<md::CancelOrder>()[0].client_order_id == h.ids[0]);
+      CHECK(h.log == std::vector<std::string>{"PENDING_CANCEL"});
+      h.run({lifecycle(NodeState::Running, NodeState::Stopping, 10),
+             md::Event{venue_event<md::OrderCanceled>(11, 11, h.ids[0])}});
+      CHECK(h.log == std::vector<std::string>{"PENDING_CANCEL"}); // stopped: nothing more
+      CHECK(h.engine().open_orders() == 0);
+      CHECK(disarms(h) == 0);
+      h.run({lifecycle(NodeState::Stopping, NodeState::Stopped, 12)});
+      CHECK(disarms(h) == 1);
+      jarvis::core::FiredTimer none;
+      CHECK_FALSE(h.engine().next_timer(none)); // the renewal timer is gone
+    }
+    SUBCASE("cancel_all_then_exit, not confirmed: the countdown stays") {
+      Harness h{1, "1.000", c};
+      start(h, 1);
+      h.run({shutdown(md::ShutdownMode::CancelAllThenExit, 10),
+             lifecycle(NodeState::Running, NodeState::Stopping, 10),
+             lifecycle(NodeState::Stopping, NodeState::Stopped, 20)});
+      CHECK(h.engine().open_orders() == 1);
+      CHECK(disarms(h) == 0);
+    }
+    SUBCASE("exit_keep_orders: nothing canceled, the countdown disarmed") {
+      Harness h{1, "1.000", c};
+      start(h, 1);
+      h.run({shutdown(md::ShutdownMode::ExitKeepOrders, 10),
+             lifecycle(NodeState::Running, NodeState::Stopping, 10),
+             lifecycle(NodeState::Stopping, NodeState::Stopped, 10)});
+      CHECK(h.outputs_of<md::CancelOrder>().empty());
+      CHECK(h.trading().risk.trading_state() == md::TradingState::Active);
+      CHECK(h.engine().open_orders() == 1);
+      CHECK(disarms(h) == 1);
+    }
+  }
+
   TEST_CASE("without a countdown the kernel sends none and arms no timer") {
     Harness h{1};
     start(h, 1);

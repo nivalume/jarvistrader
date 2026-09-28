@@ -89,6 +89,11 @@ struct DriverOptions {
   std::span<const model::Event> preamble;
   // Live: Running waits until the account is reconciled with the venue (section 15.1).
   bool await_sync = false;
+  // Real time: how the node stops (section 19.4). A Shutdown input with this mode comes before
+  // Stopping; with CancelAllThenExit the node then stays in Stopping, still stepping inputs,
+  // until no order is open or `drain_for` has passed.
+  std::optional<model::ShutdownMode> shutdown;
+  core::DurationNanos drain_for{10'000'000'000};
 };
 
 struct RunSummary {
@@ -101,6 +106,7 @@ struct RunSummary {
   std::uint64_t strategy_errors = 0;
   std::uint64_t venue_answers = 0; // order events from the simulated venue
   bool halted = false;             // a strategy error stopped the node (ErrorPolicy::HaltNode)
+  std::uint32_t left_open = 0;     // orders still open when the node stopped
   model::NodeState state = model::NodeState::Init;
   core::UnixNanos first_ts;
   core::UnixNanos last_ts;
@@ -163,32 +169,15 @@ public:
     summary_ = RunSummary{};
     core::Status s = start(pump.now());
     while (core::ok(s) && !engine_->halt_requested() && !pump.stop_requested()) {
-      const core::UnixNanos now = pump.now();
-      s = pump.pump(now);
-      if (!core::ok(s)) {
-        return s;
-      }
-      bool moved = false;
-      s = advance_until(now, moved);
-      if (core::ok(s) && !moved) {
-        s = close_batch();
-        if (core::ok(s)) {
-          s = pump.idle(now);
-        }
-      }
+      s = realtime_round(pump);
     }
     if (!core::ok(s)) {
       return s;
     }
     summary_.halted = engine_->halt_requested();
-    core::UnixNanos final_ts = pump.now();
-    final_ts = final_ts < last_ts_ ? last_ts_ : final_ts;
-    for (const auto reason :
-         {model::LifecycleReason::ShutdownRequested, model::LifecycleReason::Drained}) {
-      s = transition(reason, final_ts);
-      if (!core::ok(s)) {
-        return s;
-      }
+    s = shut_down(pump);
+    if (!core::ok(s)) {
+      return s;
     }
     s = close_batch();
     if (!core::ok(s)) {
@@ -201,6 +190,57 @@ public:
   }
 
 private:
+  [[nodiscard]] bool halted() const noexcept { return !draining_ && engine_->halt_requested(); }
+
+  // One round of the real-time loop: what the pump delivers, then everything due.
+  template <Pump P> core::Status realtime_round(P& pump) {
+    const core::UnixNanos now = pump.now();
+    core::Status s = pump.pump(now);
+    if (!core::ok(s)) {
+      return s;
+    }
+    bool moved = false;
+    s = advance_until(now, moved);
+    if (core::ok(s) && !moved) {
+      s = close_batch();
+      if (core::ok(s)) {
+        s = pump.idle(now);
+      }
+    }
+    return s;
+  }
+
+  // Shutdown (with DriverOptions::shutdown), Stopping, the drain, Stopped. The drain steps
+  // inputs even after a halt: the venue's answers to the cancels must still reach the kernel.
+  template <Pump P> core::Status shut_down(P& pump) {
+    const auto clock = [this, &pump] {
+      const core::UnixNanos now = pump.now();
+      return now < last_ts_ ? last_ts_ : now;
+    };
+    core::UnixNanos now = clock();
+    core::Status s = core::Status::Ok;
+    if (options_.shutdown) {
+      s = feed(core::EventKey{now, kKernelSource, 0},
+               model::Event{model::Shutdown{*options_.shutdown, now}});
+    }
+    if (core::ok(s)) {
+      s = transition(model::LifecycleReason::ShutdownRequested, now);
+    }
+    if (core::ok(s) && options_.shutdown == model::ShutdownMode::CancelAllThenExit) {
+      const core::UnixNanos until{now.value() + options_.drain_for.value()};
+      draining_ = true;
+      while (core::ok(s) && engine_->open_orders() > 0 && pump.now() < until) {
+        s = realtime_round(pump);
+      }
+      draining_ = false;
+    }
+    if (!core::ok(s)) {
+      return s;
+    }
+    summary_.left_open = engine_->open_orders();
+    return transition(model::LifecycleReason::Drained, clock());
+  }
+
   // Steps everything due at `now` or before, earliest first.
   core::Status advance_until(core::UnixNanos now, bool& moved) {
     if constexpr (VenueSource<Source>) {
@@ -214,7 +254,7 @@ private:
     const auto due_at = [now](const std::optional<core::UnixNanos>& t) {
       return t && !(now < *t) ? t : std::nullopt;
     };
-    while (!engine_->halt_requested()) {
+    while (!halted()) {
       std::optional<core::UnixNanos> venue;
       const core::Status s = source_->next_venue_time(venue);
       if (!core::ok(s)) {
@@ -237,7 +277,7 @@ private:
   }
 
   core::Status advance_plain_until(core::UnixNanos now, bool& moved) {
-    while (!engine_->halt_requested()) {
+    while (!halted()) {
       core::EventKey key;
       model::Event event;
       const core::Status s = source_->next(key, event);
@@ -309,12 +349,12 @@ private:
     if (!core::ok(s)) {
       return s;
     }
-    while (have && !engine_->halt_requested()) {
+    while (have && !halted()) {
       s = fire_timers(key.ts, true);
       if (!core::ok(s)) {
         return s;
       }
-      if (engine_->halt_requested()) {
+      if (halted()) {
         break;
       }
       s = feed(key, event);
@@ -342,7 +382,7 @@ private:
     if (!core::ok(s)) {
       return s;
     }
-    while (!engine_->halt_requested()) {
+    while (!halted()) {
       s = source_->next_venue_time(venue);
       if (!core::ok(s)) {
         return s;
@@ -410,7 +450,7 @@ private:
   // Fires every timer due at `limit` (inclusive) or before it (exclusive).
   core::Status fire_timers(core::UnixNanos limit, bool inclusive, bool* fired = nullptr) {
     core::FiredTimer due;
-    while (!engine_->halt_requested() && engine_->next_timer(due) &&
+    while (!halted() && engine_->next_timer(due) &&
            (due.deadline < limit || (inclusive && due.deadline == limit))) {
       if (fired != nullptr) {
         *fired = true;
@@ -509,6 +549,7 @@ private:
   std::uint64_t seq_ = 0;
   bool gating_ = false;      // after start: every input may move the lifecycle
   bool gate_active_ = false; // the gate's own transitions do not re-enter it
+  bool draining_ = false;    // shutting down: inputs are stepped even after a halt
   bool batch_open_ = false;
   core::UnixNanos batch_ts_;
   core::UnixNanos last_ts_;

@@ -516,6 +516,18 @@ check_margin = false
     node::NodeConfig bad;
     auto errors = parse("[node]\nid = \"mm01\"\n[risk]\nprice_band_bps = -1\n", bad);
     CHECK(has_error(errors, "risk.price_band_bps", ""));
+    CHECK(c.node.shutdown == m::ShutdownMode::CancelAllThenExit);
+    CHECK(c.node.shutdown_timeout_ms == 10'000);
+    REQUIRE(parse("[node]\nid = \"mm01\"\nshutdown = \"exit_keep_orders\"\n"
+                  "shutdown_timeout_ms = 3000\n",
+                  c)
+                .empty());
+    jarvis::backtest::DriverOptions options;
+    node::shutdown_options(c, options);
+    CHECK(options.shutdown == m::ShutdownMode::ExitKeepOrders);
+    CHECK(options.drain_for == jarvis::core::DurationNanos{3'000'000'000});
+    errors = parse("[node]\nid = \"mm01\"\nshutdown = \"later\"\n", bad);
+    CHECK(has_error(errors, "node.shutdown", "cancel_all_then_exit"));
     errors = parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 5000\n", bad);
     CHECK(has_error(errors, "risk.countdown_cancel_all_ms", "at least 10000"));
     CHECK(parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 0\n", bad).empty());

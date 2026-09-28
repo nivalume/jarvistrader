@@ -202,14 +202,15 @@ namespace detail {
 void await_commands(VenueIo& venue, std::chrono::milliseconds limit);
 
 template <strategy::StrategySet SS, typename Recorder, typename Hook>
-[[nodiscard]] core::Status live_loop(engine::Engine<SS>& engine, const LivePlan& plan,
-                                     LiveSource& source, Recorder& recorder, VenueIo& venue,
-                                     LivePump<Hook>& pump, const std::atomic<bool>* stop,
-                                     LiveResult& result, std::string& error) {
+[[nodiscard]] core::Status
+live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const LivePlan& plan,
+          LiveSource& source, Recorder& recorder, VenueIo& venue, LivePump<Hook>& pump,
+          const std::atomic<bool>* stop, LiveResult& result, std::string& error) {
   CommandRouter<Recorder> router{recorder, venue.commands(), stop};
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
   options.await_sync = true;
+  node::shutdown_options(config, options);
   backtest::Driver driver{engine, source, router, options};
   const core::Status s = driver.run_realtime(pump, result.summary);
   if (!core::ok(s)) {
@@ -287,10 +288,12 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   LivePump<Hook> pump{clock, feed, venue, source, hook, request.stop, deadline};
   if (persist) {
     node::LogRecorder<Hook> recorder{writer, hook};
-    s = detail::live_loop(engine, plan, source, recorder, venue, pump, request.stop, result, error);
+    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop, result,
+                          error);
   } else {
     node::NullRecorder<Hook> recorder{hook};
-    s = detail::live_loop(engine, plan, source, recorder, venue, pump, request.stop, result, error);
+    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop, result,
+                          error);
   }
   venue.stop();
   feed.stop();

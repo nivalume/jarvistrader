@@ -107,6 +107,12 @@ void name_strategies(const NodeConfig& config, strategy::KernelServices& kernel)
   }
 }
 
+void shutdown_options(const NodeConfig& config, backtest::DriverOptions& options) {
+  options.shutdown = config.node.shutdown;
+  options.drain_for =
+      core::DurationNanos{std::uint64_t{config.node.shutdown_timeout_ms} * 1'000'000U};
+}
+
 strategy::ErrorPolicy error_policy(const NodeConfig& config) {
   switch (config.risk.on_strategy_error) {
   case OnStrategyError::HaltStrategy:

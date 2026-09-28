@@ -30,6 +30,9 @@ inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
       << r.feed.decode_errors << ", connects " << r.feed.connects << ", snapshots "
       << r.feed.snapshots << " (" << r.feed.snapshot_failures << " failed), book syncs "
       << r.feed.book_syncs << ", ring waits " << r.feed.ring_waits << "\n";
+  if (s.left_open != 0) {
+    out << "left open at stop: " << s.left_open << " orders\n";
+  }
   return s.halted ? node::kExitFailed : node::kExitOk;
 }
 
@@ -43,8 +46,13 @@ inline int print_live(std::ostream& out, const LiveResult& r) {
       << r.feed.decode_errors << ", book syncs " << r.feed.book_syncs << "\n"
       << "venue: events " << r.venue.events << ", commands " << r.venue.commands << " (refused "
       << r.venue.refused_locally << ", unknown " << r.venue.unknown_outcomes << "), snapshots "
-      << r.venue.snapshots << " (" << r.venue.snapshot_failures << " failed), decode errors "
+      << r.venue.snapshots << " (" << r.venue.snapshot_failures << " failed), countdowns "
+      << r.venue.countdowns << " (" << r.venue.countdown_failures << " failed), decode errors "
       << r.venue.decode_errors << "\n";
+  if (s.left_open != 0) {
+    out << "left open at stop: " << s.left_open
+        << " orders (the venue's countdownCancelAll, still armed, cancels them)\n";
+  }
   for (const std::string& w : r.startup.warnings) {
     out << "warning: " << w << "\n";
   }

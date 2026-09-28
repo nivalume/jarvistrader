@@ -56,6 +56,9 @@ constexpr std::array<EnumName<OnStrategyError>, 3> kOnErrorNames{
     {{"halt_strategy", OnStrategyError::HaltStrategy},
      {"halt_node", OnStrategyError::HaltNode},
      {"ignore", OnStrategyError::Ignore}}};
+constexpr std::array<EnumName<m::ShutdownMode>, 2> kShutdownNames{
+    {{"cancel_all_then_exit", m::ShutdownMode::CancelAllThenExit},
+     {"exit_keep_orders", m::ShutdownMode::ExitKeepOrders}}};
 constexpr std::array<EnumName<PersistenceMode>, 3> kPersistenceNames{
     {{"none", PersistenceMode::None},
      {"async", PersistenceMode::Async},
@@ -386,6 +389,8 @@ void read_node(TableReader& root, NodeSection& n) {
   r.enumeration("env", n.env, kEnvNames);
   r.unsigned_int("seed", n.seed);
   r.boolean("strict_determinism", n.strict_determinism);
+  r.enumeration("shutdown", n.shutdown, kShutdownNames);
+  r.unsigned_int("shutdown_timeout_ms", n.shutdown_timeout_ms);
   if (const toml::table* cap = r.table("capacity")) {
     read_capacity(*cap, "node.capacity", root.errors(), n.capacity);
   }

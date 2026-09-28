@@ -796,6 +796,7 @@ nb::dict summary_dict(const node::BacktestResult& r) {
   d["strategy_errors"] = s.strategy_errors;
   d["venue_answers"] = s.venue_answers;
   d["halted"] = s.halted;
+  d["left_open"] = s.left_open;
   d["state"] = std::string{m::to_string(s.state)};
   d["first_ts"] = s.first_ts.value();
   d["last_ts"] = s.last_ts.value();
@@ -964,6 +965,8 @@ nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
   venue["decode_errors"] = result.venue.decode_errors;
   venue["snapshots"] = result.venue.snapshots;
   venue["snapshot_failures"] = result.venue.snapshot_failures;
+  venue["countdowns"] = result.venue.countdowns;
+  venue["countdown_failures"] = result.venue.countdown_failures;
   d["venue"] = venue;
   d["epoch"] = result.epoch;
   nb::list warnings;

@@ -70,6 +70,8 @@ private:
 // Kernel capacities and the strategy error policy from [node] and [risk].
 [[nodiscard]] strategy::KernelConfig kernel_config(const NodeConfig& config);
 [[nodiscard]] strategy::ErrorPolicy error_policy(const NodeConfig& config);
+// How a real-time node stops: [node] shutdown and shutdown_timeout_ms (section 19.4).
+void shutdown_options(const NodeConfig& config, backtest::DriverOptions& options);
 // Strategy i issues orders under [[strategies]][i].id (a nautilus StrategyId, "<name>-<tag>");
 // the default "strategy-00<i+1>" stays for entries without a valid one. A strategy whose entry
 // lists instruments may trade only those.

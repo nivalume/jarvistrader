@@ -157,6 +157,7 @@ run_wired(const node::NodeConfig& config, engine::Engine<SS>& engine, const Sand
           SandboxResult& result, std::string& error) {
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
+  node::shutdown_options(config, options);
   if (config.venues.empty() || !config.venues.front().sim) {
     return run_loop(engine, source, recorder, options, pump, result, error);
   }

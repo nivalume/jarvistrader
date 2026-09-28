@@ -201,7 +201,8 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - venue 侧死人开关 `countdownCancelAll`（第 10.3 节）只在 `env = "live"` 时打开。
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
-- 尚未实现：REST 下单兜底、`SIGTERM` 撤单流程（包括解除 `countdownCancelAll`）、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
+- 停止（`SIGINT`、`SIGTERM`、`--run-for` 到期或 `HaltNode`）按 `[node] shutdown` 进行（第 19.4 节）：默认撤单、在 `Stopping` 中等待交易所确认，再解除 `countdownCancelAll`。
+- 尚未实现：REST 下单兜底、行情与 WS API 健康接入同步闸门、每 60 秒轻量对账。
 
 ### 4.2 NodeConfig
 
@@ -220,6 +221,8 @@ env = "backtest"                  # backtest | sandbox | live
 seed = 42
 strict_determinism = true
 capacity = { orders = 4096, instruments = 64, batch = 1024, timers = 256, strategies = 8 }
+shutdown = "cancel_all_then_exit" # sandbox 与 live：cancel_all_then_exit | exit_keep_orders
+shutdown_timeout_ms = 10000       # 等待撤单确认的上限
 
 [data]                            # backtest 使用
 catalog = "runs/2026-09/"
@@ -828,7 +831,7 @@ C++ 的 `Strategy` concept 要求以下成员函数中的任意子集，未实�
 
 | 回调 | 触发 |
 | --- | --- |
-| `on_start(ctx)` / `on_stop(ctx)` | Node 进入 `Running` / `Stopping` |
+| `on_start(ctx)` / `on_stop(ctx)` | Node 进入 `Running` / `Stopping`；`on_stop` 之后策略不再收到任何回调，关停期间的交易所回报只更新内核状态 |
 | `on_reconciled(ctx, outcome)` | 对账完成（第 15 节） |
 | `on_trade(ctx, TradeTick)` | 成交流 |
 | `on_quote(ctx, QuoteTick)` | 最优报价 |
@@ -933,7 +936,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
   - 离开 `Running`（`Degraded`、`Syncing`、`Stopping`）后定时器到期不再续期，也不再重排：节点失步超过整个倒计时，由交易所撤单；回到 `Running` 时立即续期。
   - 只在 `env = "live"` 时打开（`kernel_config`）；设置值为 0 表示关闭，非 0 时至少 10000 毫秒，因为续期间隔是它的四分之一。
 - 命令经 venue-io 的 REST 线程发出（WS API 没有这个方法）。失败计入 `VenueIoStats::countdown_failures` 并写入 `last_error`，交易所上已有的倒计时继续走；接入健康事件随 M5-D3。venue-io 停止时，已交给 REST 线程的倒计时请求仍会发出。
-- 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时（M5-D2）。
+- 优雅关停时，先撤单并确认，再以 `countdownTime = 0` 解除倒计时（第 19.4 节）。
 
 ### 10.4 限速窗口与权重反馈
 
@@ -1646,6 +1649,17 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 ### 19.4 关停
 
 `SIGTERM` → `Shutdown{ mode }` 事件。默认模式 `cancel_all_then_exit`：TradingState 置 `Halted`，撤销全部订单，等待用户流确认终态（带超时），排空出站环与 persist 环，以 `countdownTime = 0` 解除 `countdownCancelAll`，写最终快照，退出。超时未确认时保留 `countdownCancelAll`，由交易所兜底。
+
+实现（M5-D2，sandbox 与 live；backtest 在数据结束时照旧直接停止）：
+
+1. 停止请求（`SIGINT`、`SIGTERM`、`--run-for` 到期，或 `HaltNode` 策略错误）到达时，driver 先步进一个 `Shutdown{ mode }` 输入（`[node] shutdown`），再转入 `Stopping`。`Shutdown` 是记录的输入，回放复算同样的撤单。
+2. `cancel_all_then_exit`：引擎把 TradingState 置为 `Halted`（`AdminHalt`），并对每个策略的每个未完成订单发出 `CancelOrder`（KillSwitch）。策略在同一步收到 `OrderPendingCancel`，随后进入 `Stopping` 时收到 `on_stop`；此后策略不再收到回调。
+3. driver 留在 `Stopping`，照常步进输入（交易所回报、定时器），直到没有未完成订单或 `shutdown_timeout_ms` 用完。这期间即使内核已请求停机（`HaltNode`）也继续步进，因为撤单确认必须到达内核。
+4. 转入 `Stopped` 时，若没有未完成订单，引擎为自上次续期以来续过期的 instrument 发出 `CountdownCancelAll{0}`。仍有未完成订单时不解除，交易所在倒计时结束时撤单。`RunSummary::left_open` 记下停止时仍未完成的订单数，命令行与 Python 的结果都会显示。
+5. `exit_keep_orders`：不撤单、不等待；转入 `Stopped` 时解除倒计时，订单留在交易所。
+6. core 线程退出 driver 后最多等 2 秒让命令离开环；venue-io 停止时先处理完命令环，REST 线程仍会发出已排队的 `countdownCancelAll`（第 7.1 节）。
+
+最终快照随 WAL 与恢复实现。
 
 ### 19.5 分片
 
