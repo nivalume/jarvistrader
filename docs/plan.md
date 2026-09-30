@@ -177,8 +177,8 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI：正向已进入 ctest（`trace.Reconciliation`）、CI formal job 与 nightly；反向待实盘日志
 - [ ] task: harness — 混沌测试：由规约 b 的行为生成断线、重复、乱序、丢消息场景，在 sandbox 与 testnet 执行：模拟交易所部分已完成（M5-P：`tests/cpp/test_chaos.cpp`，实盘节点对有自己账簿的模拟交易所，用户流按种子随机丢失、重复、乱序并周期断线，要求成交只计一次、成交集合与仓位等于交易所、无遗留挂单、回放一致；修正了成交号起点越过丢失成交、迟到成交被当作过期、时钟偏移取往返中点使 `T_s` 超前三个适配器问题；nightly 多种子）；testnet 执行待 API key
 - [x] task: harness — 只报告基准 `snapshot/save_state`、`snapshot/load_state`（`bench_report`，默认容量的内核，一个永续合约、每侧 200 档的订单簿、200 张订单中 100 张未结）：本机 Release 状态 229 KB，保存约 1.08 ms，恢复约 0.94 ms；快照在批次边界的 core 线程上编码，所以每 `snapshot_every` 条输入有一次约 1 ms 的停顿
-- [ ] task: harness — 延迟基准：tick 到命令、命令到 socket 的 p50 与 p99 归档，并据实测设定延迟目标
-- [ ] task: harness — nightly：1 小时 sandbox soak，以及对最近一次 soak 日志的反向验证
+- [x] task: harness — 延迟基准：tick 到命令、命令到 socket 的 p50 与 p99 归档，并据实测设定延迟目标：已完成（M5-P：`bench_latency` 以节点遥测直方图报告实盘节点对本地模拟交易所的延迟；开发虚拟机上 tick 到命令 p50 ≤ 10 µs、p99 ≤ 50 µs，命令到 socket p50 ≤ 1 ms、p99 ≤ 5 ms（不 busy-poll）；目标写入 §17.3）
+- [x] task: harness — nightly：1 小时 sandbox soak，以及对最近一次 soak 日志的反向验证：已完成（M5-P：nightly `soak` job 让实盘节点对混沌测试的模拟交易所在 ASan 与 UBSan 下运行 1 小时（`JARVIS_CHAOS_SOAK_S=3600`），保留运行目录，再以 `check_trace.py --log` 对 OrderLifecycle 做反向验证；本地 20 秒 soak 的日志 319 张订单、558 步通过。真实行情的 sandbox soak 需要能访问 Binance 的 runner）
 - [ ] task: docs — 运维手册：部署、配置、密钥、告警与故障处理
 - [ ] task: 验收 — Python 与 C++ 示例在 testnet 连续运行 72 小时，穿越强制断线与 listenKey 过期；录制日志回放逐字节一致；全部规约在 CI 中通过；小资金生产灰度完成后发布 v1.0
 

@@ -1568,6 +1568,9 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 | `py/callback_on_quote` | 一次 Python 回调 |
 
 - 只报告的基准：完整回测吞吐、Python 端到端回放、对账耗时、启动耗时。
+- 延迟基准（M5-P，`benchmarks/report/bench_latency.cpp`，可执行文件 `bench_latency`，只报告）：实盘节点对本地模拟交易所（回环 TLS，`tests/cpp/support` 的服务端）运行，行情连接每毫秒推送一条 `bookTicker`，策略对每条报价发一个命令（挂一张远离市场的单，下一条报价撤掉它）。数字取自节点自己的遥测直方图（第 19.2 节），百分位报告为所在桶的上界：`tick_to_command`（行情帧到达 feed 线程到命令进入 venue-io 命令环）与 `command_to_socket`（命令在环中等待到交给 WS API 连接）。`JARVIS_LATENCY_QUOTES` 设定报价数（默认 5000）。
+  - 实测（本仓库开发用的 4 核虚拟机，Release，未绑核，默认不 busy-poll）：`tick_to_command` p50 ≤ 10 µs、p90 ≤ 20 µs、p99 ≤ 50 µs；`command_to_socket` p50 ≤ 1 ms、p90 ≤ 2 ms、p99 ≤ 5 ms。后者主要是 venue-io 线程两轮网络处理之间最长 1 ms 的休眠（第 7.1 节），busy-poll 与绑核见第 19.6 节。
+  - 目标（据实测设定，在同类机器上）：`tick_to_command` p50 ≤ 20 µs、p99 ≤ 100 µs；`command_to_socket` 不 busy-poll 时 p99 ≤ 5 ms。
 - **对比方法**：`tools/bench_compare.py base.json head.json --thresholds benchmarks/thresholds.toml`。阈值文件为每个基准定义 `max_regression_pct`、`gating`、`abs_floor_ns`（绝对值低于该下限的变化忽略）。取 `--benchmark_repetitions=10 --benchmark_min_time=0.5s --benchmark_enable_random_interleaving=true` 的中位数比较。
 - **降噪**：从不与另一台虚拟机产生的 JSON 比较。PR job 用 `git worktree` 同时构建 merge-base 与 head，在同一台 runner 上用 `taskset` 绑核交替运行；回归必须在三轮 A/B 中复现两轮才判定。GitHub 托管 runner 上阈值为 10%；自托管 runner（`isolcpus`、performance 调速器、关闭 SMT）就绪后，核心路径阈值 3%，其他 5%。`main` 分支的基准结果归档为构件，只用于趋势图。
 

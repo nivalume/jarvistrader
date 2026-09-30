@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -19,7 +20,6 @@
 
 #include <asio.hpp>
 #include <asio/ssl.hpp>
-#include <doctest/doctest.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
@@ -46,10 +46,17 @@ private:
   std::filesystem::path path_;
 };
 
+// Throws when an OpenSSL call failed (the helpers here serve tests and benchmarks alike).
+inline void require_tls(bool ok, const char* what) {
+  if (!ok) {
+    throw std::runtime_error{std::string{"test certificate: "} + what};
+  }
+}
+
 // A self-signed certificate for localhost and 127.0.0.1 (its own CA).
 inline void make_certificate(const std::string& cert_path, const std::string& key_path) {
   EVP_PKEY* key = EVP_EC_gen("P-256");
-  REQUIRE(key != nullptr);
+  require_tls(key != nullptr, "EVP_EC_gen");
   X509* x = X509_new();
   X509_set_version(x, 2);
   ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
@@ -67,11 +74,11 @@ inline void make_certificate(const std::string& cert_path, const std::string& ke
   for (const auto& [nid, value] : {std::pair{NID_subject_alt_name, "DNS:localhost,IP:127.0.0.1"},
                                    std::pair{NID_basic_constraints, "critical,CA:TRUE"}}) {
     X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx, nid, value);
-    REQUIRE(ext != nullptr);
+    require_tls(ext != nullptr, "X509V3_EXT_conf_nid");
     X509_add_ext(x, ext, -1);
     X509_EXTENSION_free(ext);
   }
-  REQUIRE(X509_sign(x, key, EVP_sha256()) > 0);
+  require_tls(X509_sign(x, key, EVP_sha256()) > 0, "X509_sign");
   BIO* cert = BIO_new_file(cert_path.c_str(), "w");
   PEM_write_bio_X509(cert, x);
   BIO_free(cert);

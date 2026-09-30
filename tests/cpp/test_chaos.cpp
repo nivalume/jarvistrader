@@ -619,12 +619,18 @@ ChaosStats run_chaos(std::uint64_t seed) {
   // Faults until at least three disconnects and ten fills (slow builds take longer), then calm;
   // one more reconnect so that the last reconciliation sees everything the faults hid; then the
   // shutdown cancels what is open.
+  // A soak (JARVIS_CHAOS_SOAK_S seconds, nightly) keeps the faults up that long.
+  std::int64_t soak_s = 0;
+  if (const char* v = std::getenv("JARVIS_CHAOS_SOAK_S")) {
+    soak_s = std::strtoll(v, nullptr, 10);
+  }
+  const auto soak_end = Clock::now() + std::chrono::seconds{soak_s};
   wait_for(
       [&] {
         const ChaosStats c = venue.stats();
-        return c.disconnects >= 3 && c.fills >= 10;
+        return c.disconnects >= 3 && c.fills >= 10 && Clock::now() >= soak_end;
       },
-      std::chrono::milliseconds{90'000});
+      std::chrono::milliseconds{90'000 + soak_s * 1'000});
   venue.calm();
   std::this_thread::sleep_for(std::chrono::milliseconds{300});
   const int before = reconciled.load();
@@ -663,10 +669,12 @@ ChaosStats run_chaos(std::uint64_t seed) {
   CHECK(venue.open_orders() == 0);
   CHECK(result.venue.decode_errors == 0);
 
-  // JARVIS_CHAOS_KEEP=<dir>: a failed seed's run directory is copied there to be looked at.
+  // JARVIS_CHAOS_KEEP=<dir>: a failed seed's run directory (a soak's always) is copied there, to
+  // be looked at or checked against the specs.
   if (const char* keep = std::getenv("JARVIS_CHAOS_KEEP");
-      keep != nullptr && (trader.trades != venue.trade_ids() || result.summary.left_open != 0 ||
-                          trader.final_lots != venue.position_lots())) {
+      keep != nullptr &&
+      (soak_s > 0 || trader.trades != venue.trade_ids() || result.summary.left_open != 0 ||
+       trader.final_lots != venue.position_lots())) {
     const std::filesystem::path to = std::filesystem::path{keep} / ("seed-" + std::to_string(seed));
     std::filesystem::create_directories(to);
     std::filesystem::copy(result.directory, to,

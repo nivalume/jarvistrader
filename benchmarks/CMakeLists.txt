@@ -1,6 +1,7 @@
 # Benchmarks (docs/architecture.md section 17.3). Each group is one executable:
 #   bench_hot     gating benchmarks, compared A/B on every change
 #   bench_report  report-only benchmarks (EngineState snapshots)
+#   bench_latency report-only: the live node's tick-to-command and command-to-socket latency
 # Thresholds live in benchmarks/thresholds.toml; tools/bench_compare.py applies them.
 
 function(jarvis_add_bench_group group)
@@ -27,4 +28,13 @@ endif()
 # The live rings: header-only, but they belong to the live shell and cross threads.
 if(TARGET jarvis_live)
   jarvis_add_bench_group(live SOURCES hot/bench_ring.cpp LIBS jarvis::live)
+endif()
+
+# The live node's latency against a local venue over loopback TLS (report only): uses the mock
+# servers of tests/cpp/support.
+if(TARGET jarvis_live)
+  jarvis_add_bench_group(latency SOURCES report/bench_latency.cpp LIBS jarvis::live jarvis_asio)
+  target_include_directories(bench_latency PRIVATE "${PROJECT_SOURCE_DIR}/tests/cpp")
+  target_compile_definitions(bench_latency PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  target_link_libraries(bench_latency PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()

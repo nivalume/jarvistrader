@@ -1,8 +1,8 @@
 name: Nightly
 
-# Long-running checks (docs/architecture.md section 17.6), including large forward trace
-# validation runs. Soak runs and backward trace validation of soak logs join this workflow when
-# the sandbox environment exists (plan.md M4, M5).
+# Long-running checks (docs/architecture.md section 17.6): large forward trace validation runs,
+# the chaos test with many seeds, and a one-hour soak of the live node against the test's faulty
+# venue whose log is then checked against the OrderLifecycle spec (backward trace validation).
 
 on:
   schedule:
@@ -43,6 +43,38 @@ jobs:
           cmake --preset dev -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
           cmake --build --preset dev --target test_chaos
           JARVIS_CHAOS_SEEDS=20 build/dev/tests/test_chaos
+
+  soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build libssl-dev
+      - name: One hour of the live node against the faulty venue (ASan and UBSan)
+        run: |
+          cmake --preset dev -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          cmake --build --preset dev --target test_chaos jarvis_cli
+          mkdir -p build/soak
+          JARVIS_CHAOS_SEEDS=1 JARVIS_CHAOS_SOAK_S=3600 JARVIS_CHAOS_KEEP=build/soak \
+            build/dev/tests/test_chaos
+      - name: Backward trace validation of the soak log
+        run: |
+          python3 tools/tla/check_trace.py --spec OrderLifecycle --log build/soak/seed-1 \
+            --jarvis build/dev/bin/jarvis
+      - name: Keep the soak run when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-run
+          path: build/soak
+          retention-days: 7
 
   fuzz:
     runs-on: ubuntu-24.04
