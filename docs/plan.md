@@ -176,6 +176,7 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [ ] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）
 - [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI：正向已进入 ctest（`trace.Reconciliation`）、CI formal job 与 nightly；反向待实盘日志
 - [ ] task: harness — 混沌测试：由规约 b 的行为生成断线、重复、乱序、丢消息场景，在 sandbox 与 testnet 执行
+- [x] task: harness — 只报告基准 `snapshot/save_state`、`snapshot/load_state`（`bench_report`，默认容量的内核，一个永续合约、每侧 200 档的订单簿、200 张订单中 100 张未结）：本机 Release 状态 229 KB，保存约 1.08 ms，恢复约 0.94 ms；快照在批次边界的 core 线程上编码，所以每 `snapshot_every` 条输入有一次约 1 ms 的停顿
 - [ ] task: harness — 延迟基准：tick 到命令、命令到 socket 的 p50 与 p99 归档，并据实测设定延迟目标
 - [ ] task: harness — nightly：1 小时 sandbox soak，以及对最近一次 soak 日志的反向验证
 - [ ] task: docs — 运维手册：部署、配置、密钥、告警与故障处理

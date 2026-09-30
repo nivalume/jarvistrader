@@ -1,6 +1,6 @@
 # Benchmarks (docs/architecture.md section 17.3). Each group is one executable:
 #   bench_hot     gating benchmarks, compared A/B on every change
-#   bench_report  report-only benchmarks (added when the first one exists)
+#   bench_report  report-only benchmarks (EngineState snapshots)
 # Thresholds live in benchmarks/thresholds.toml; tools/bench_compare.py applies them.
 
 function(jarvis_add_bench_group group)
@@ -15,6 +15,8 @@ jarvis_add_bench_group(
   hot SOURCES hot/bench_noop.cpp hot/bench_model.cpp hot/bench_engine.cpp hot/bench_execution.cpp
   LIBS jarvis::kernel
 )
+
+jarvis_add_bench_group(report SOURCES report/bench_snapshot.cpp LIBS jarvis::kernel)
 
 # The venue codecs need the live shell (JARVIS_BUILD_LIVE); a separate gating group so the kernel
 # group builds without it.
