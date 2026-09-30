@@ -446,13 +446,15 @@ template <strategy::StrategySet SS, node::InputHook Hook>
     result.persist = persister->stats();
   }
   detail::await_commands(venue, std::chrono::milliseconds{2'000});
+  venue.stop();
+  feed.stop();
+  // The last sample once the IO threads have stopped: the venue-io thread times a command after
+  // taking it off the ring, so an empty ring does not mean the last time is counted yet.
   if (telemetry) {
     telemetry->sample(
         TelemetrySources{&engine.kernel(), &feed, &venue, persister.get(), request.strategy_stats},
         clock.now(), true);
   }
-  venue.stop();
-  feed.stop();
   if (admin) {
     admin->stop();
     result.admin_commands = admin->accepted();

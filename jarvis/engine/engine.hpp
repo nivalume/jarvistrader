@@ -428,7 +428,7 @@ private:
     }
     const bool top = q.bid_price.raw() > 0 && q.ask_price.raw() > q.bid_price.raw();
     if (top) {
-      k_.trading.set_top(slot, strategy::AlgoTop{q.bid_price, q.ask_price});
+      k_.trading.set_top(slot, strategy::AlgoTop{q.bid_price, q.ask_price, q.bid_size, q.ask_size});
     }
     data::OrderBook* book = k_.book_for_update(slot, q.bid_price, q.bid_size.precision());
     const bool l1 = book != nullptr && book->type() == model::BookType::L1_MBP;
@@ -484,7 +484,7 @@ private:
       data::BookLevel ask;
       top = book->best_bid(bid) && book->best_ask(ask) && ask.price.raw() > bid.price.raw();
       if (top) {
-        k_.trading.set_top(slot, strategy::AlgoTop{bid.price, ask.price});
+        k_.trading.set_top(slot, strategy::AlgoTop{bid.price, ask.price, bid.size, ask.size});
       }
     }
     deliver(slot, data::DataKind::BookDeltas, d, d.ts_init);

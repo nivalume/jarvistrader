@@ -116,6 +116,14 @@ md::Event quote_at(std::uint64_t ts, std::string_view bid, std::string_view ask)
   q.ts_init = UnixNanos{ts};
   return md::Event{q};
 }
+md::Event quote_sized(std::uint64_t ts, std::string_view bid, std::string_view ask,
+                      std::string_view bid_size, std::string_view ask_size) {
+  md::Event e = quote_at(ts, bid, ask);
+  auto& q = std::get<md::QuoteTick>(e);
+  q.bid_size = quantity(bid_size);
+  q.ask_size = quantity(ask_size);
+  return e;
+}
 md::Event running(std::uint64_t ts) {
   return md::Event{md::NodeLifecycle{NodeState::Syncing, NodeState::Running,
                                      LifecycleReason::Synced, UnixNanos{ts}}};
@@ -904,6 +912,11 @@ md::Event updated(std::uint64_t ts, const md::ClientOrderId& id, std::string_vie
 md::Event canceled(std::uint64_t ts, const md::ClientOrderId& id) {
   return md::Event{venue_event<md::OrderCanceled>(ts, id)};
 }
+md::Event modify_rejected(std::uint64_t ts, const md::ClientOrderId& id) {
+  auto e = venue_event<md::OrderModifyRejected>(ts, id);
+  static_cast<void>(md::ReasonText::from("-5022", e.reason));
+  return md::Event{e};
+}
 
 std::string order_line(const md::OrderEvent& e) {
   ex::OrderEventKind kind{};
@@ -1366,6 +1379,119 @@ TEST_SUITE("unit") {
     }
     REQUIRE(m.has_value());
     CHECK(m.value_or(md::ModifyOrder{}).price == price("99.5"));
+  }
+
+  TEST_CASE("pegged_quote at the front of its queue holds a tick longer") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        st::AlgoParams p;
+        p.values = {0, 0, 1, 0}; // at the same-side best, following one-tick moves
+        REQUIRE(ctx.submit_parent(st::AlgoKind::PeggedQuote,
+                                  ctx.market(btc, md::OrderSide::Buy, quantity("1.000")), parent,
+                                  p) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    const auto last_modify = [](const auto& engine) {
+      std::optional<md::Price> px;
+      for (const md::Output& o : engine.outputs()) {
+        if (const auto* m = std::get_if<md::ModifyOrder>(&o)) {
+          px = m->price;
+        }
+      }
+      return px;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    // Joins the best bid behind 1.000: not at the front yet.
+    REQUIRE(drive(engine,
+                  {perpetual_definition(1), running(2),
+                   quote_sized(3, "99.0", "99.5", "1.000", "2.000")},
+                  seq) == Status::Ok);
+    md::ClientOrderId child;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* sub = std::get_if<md::SubmitOrder>(&o)) {
+        child = sub->client_order_id;
+        CHECK(sub->price == price("99.0"));
+      }
+    }
+    REQUIRE(drive(engine, {accepted(4, child, "v1")}, seq) == Status::Ok);
+
+    SUBCASE("at the back, it follows a one-tick move") {
+      REQUIRE(drive(engine, {quote_sized(5, "99.1", "99.5", "0.300", "2.000")}, seq) == Status::Ok);
+      CHECK(last_modify(engine) == price("99.1"));
+    }
+    SUBCASE("at the front, it waits for a second tick") {
+      // The level shrinks to 0.400 (with the order in it): 0.400 of the 1.000 ahead is left.
+      REQUIRE(drive(engine, {quote_sized(5, "99.0", "99.5", "0.400", "2.000")}, seq) == Status::Ok);
+      REQUIRE(drive(engine, {quote_sized(6, "99.1", "99.5", "0.300", "2.000")}, seq) == Status::Ok);
+      CHECK_FALSE(last_modify(engine).has_value());
+      REQUIRE(drive(engine, {quote_sized(7, "99.2", "99.5", "0.300", "2.000")}, seq) == Status::Ok);
+      CHECK(last_modify(engine) == price("99.2"));
+    }
+    SUBCASE("a move away from the market is followed at the threshold") {
+      // At the front, then the book shows the bid a tick lower: the target moves away from the
+      // market, and that is followed at the threshold.
+      REQUIRE(drive(engine, {quote_sized(5, "99.0", "99.5", "0.400", "2.000")}, seq) == Status::Ok);
+      REQUIRE(drive(engine, {quote_sized(6, "98.9", "99.5", "0.500", "2.000")}, seq) == Status::Ok);
+      CHECK(last_modify(engine) == price("98.9"));
+    }
+  }
+
+  TEST_CASE("pegged_quote replaces an order whose modify the venue refuses") {
+    const md::InstrumentId btc = iid("BTCUSDT-PERP.BINANCE");
+    std::vector<std::string> log;
+    md::ClientOrderId parent;
+    Script script = [&](st::Context& ctx, int step) -> Status {
+      if (step == 0) {
+        st::AlgoParams p;
+        p.values = {1, 0, 1, 0};
+        REQUIRE(ctx.submit_parent(st::AlgoKind::PeggedQuote,
+                                  ctx.market(btc, md::OrderSide::Buy, quantity("1.000")), parent,
+                                  p) == Status::Ok);
+      }
+      return Status::Ok;
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), running(2), quote_at(3, "99.0", "99.5")},
+                  seq) == Status::Ok);
+    md::ClientOrderId child;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* sub = std::get_if<md::SubmitOrder>(&o)) {
+        child = sub->client_order_id;
+      }
+    }
+    // Not yet acknowledged: a move waits (a modify needs the venue's order).
+    REQUIRE(drive(engine, {quote_at(4, "99.2", "99.6")}, seq) == Status::Ok);
+    CHECK(count_outputs<md::ModifyOrder>(engine.outputs()) == 0);
+    REQUIRE(drive(engine, {accepted(5, child, "v1"), quote_at(6, "99.3", "99.6")}, seq) ==
+            Status::Ok);
+    REQUIRE(count_outputs<md::ModifyOrder>(engine.outputs()) == 1);
+    // The venue refuses the modify: the order is canceled, and quotes wait for the cancel.
+    REQUIRE(drive(engine, {modify_rejected(7, child)}, seq) == Status::Ok);
+    CHECK(count_outputs<md::CancelOrder>(engine.outputs()) == 1);
+    REQUIRE(drive(engine, {quote_at(8, "99.4", "99.6")}, seq) == Status::Ok);
+    CHECK(count_outputs<md::ModifyOrder>(engine.outputs()) == 1); // (outputs accumulate)
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 1);
+    // Canceled: a new order at the next quote.
+    REQUIRE(drive(engine, {canceled(9, child), quote_at(10, "99.4", "99.6")}, seq) == Status::Ok);
+    std::optional<md::Price> replaced;
+    for (const md::Output& o : engine.outputs()) {
+      if (const auto* sub = std::get_if<md::SubmitOrder>(&o)) {
+        replaced = sub->price;
+      }
+    }
+    CHECK(count_outputs<md::SubmitOrder>(engine.outputs()) == 2);
+    CHECK(replaced == price("99.3"));
+    st::ParentView pv;
+    REQUIRE(engine.kernel().trading.parent(0, parent, pv));
+    CHECK(pv.children == 1);
   }
 
   TEST_CASE(

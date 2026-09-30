@@ -355,6 +355,11 @@ public:
       const model::OrderStatus s = t_.oms.at(index).state.status();
       return s == model::OrderStatus::PendingUpdate || s == model::OrderStatus::PendingCancel;
     }
+    // Whether the venue has acknowledged `child` (it has the venue's order id).
+    [[nodiscard]] bool acknowledged(const model::ClientOrderId& child) const noexcept {
+      const std::uint32_t index = t_.oms.find(child);
+      return index != execution::kNoIndex && t_.oms.at(index).venue_order_id.has_value();
+    }
     // The instrument's best bid and ask, once known (quotes or the L2 book).
     [[nodiscard]] std::optional<AlgoTop> top() const noexcept {
       const std::uint32_t slot = parent().slot;

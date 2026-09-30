@@ -305,12 +305,15 @@ struct ParentView {
   bool canceling = false;
 };
 
-// The best bid and ask of the parent's instrument (quotes, or the L2 book's best levels).
+// The best bid and ask of the parent's instrument and their displayed sizes (quotes, or the L2
+// book's best levels).
 struct AlgoTop {
   model::Price bid;
   model::Price ask;
+  model::Quantity bid_size;
+  model::Quantity ask_size;
 
-  template <typename Ar> void state(Ar& ar) { ar(bid, ask); }
+  template <typename Ar> void state(Ar& ar) { ar(bid, ask, bid_size, ask_size); }
 };
 
 struct AlgoQuote { // the top moved (algorithms for which wants_quotes)
@@ -518,10 +521,34 @@ private:
 //   params[2]  how far the target must move before the order follows, in ticks (0: 1)
 //   params[3]  orders of rate budget to keep: the order follows only while more remain (0: 2)
 //
-// The order is post-only and never priced through the other side. It follows the reference by
-// modifying its price; while a modify is pending, or the budget is short, it waits for the
-// next quote. If the venue refuses or cancels it, a new one goes out at the next quote.
+// The order is post-only and never priced through the other side. On Binance USD-M a modify
+// and a cancel-replace both put the order at the back of its new price's queue and both cost
+// one order in the rate windows (a cancel costs none), so the order follows the reference by
+// modifying its price, which leaves no gap and takes one round trip. What the queue decides is
+// whether a move is worth following:
+//
+//   - queue estimate: when the order goes to a price, the quantity ahead of it is the displayed
+//     size there if that is the best on its side, none if it improves the best, unknown if it
+//     is behind. While its price is the best, a smaller displayed size shrinks what is ahead in
+//     proportion (trades and cancels spread over the queue, as the QueuePosition fill model
+//     assumes); a larger one joins behind it. Out of sight (behind the best) the estimate stays.
+//   - an order at the front of its queue (less ahead of it than its own remaining quantity)
+//     follows a move toward the market only one tick later than the threshold: a place at the
+//     front is worth a tick. A move away from the market is followed at the threshold, since
+//     the offset is what keeps the order out of the way.
+//
+// While a modify is pending, the order is not yet acknowledged, or the budget is short, it waits
+// for the next quote. A modify the venue refuses is replaced: the order is canceled and a new one
+// goes out at the first quote after the cancel is confirmed, as after the venue refuses or
+// cancels an order itself.
 struct PeggedQuote {
+  // The algorithm's scratch slots.
+  static constexpr std::size_t kPrice = 0;     // the order's price (raw)
+  static constexpr std::size_t kAhead = 1;     // the estimated quantity ahead of it (raw)
+  static constexpr std::size_t kLevel = 2;     // the displayed size at its price, while the best
+  static constexpr std::size_t kReplacing = 3; // 1: canceled after a refused modify
+  static constexpr std::int64_t kUnknown = -1;
+
   template <typename Ctx> [[nodiscard]] core::Status on_parent(AlgoState& st, Ctx& ctx) const {
     const std::optional<AlgoTop> top = ctx.top();
     return top ? quote(st, ctx, *top) : core::Status::Ok; // else at the first quote
@@ -532,7 +559,18 @@ struct PeggedQuote {
     if (const auto* q = std::get_if<AlgoQuote>(&e)) {
       return quote(st, ctx, q->top);
     }
-    return core::Status::Ok; // children's events: the parent's fill accounting does the rest
+    if (st.child_count == 0) {
+      st.scratch[kReplacing] = 0;
+      return core::Status::Ok; // the parent's fill accounting does the rest
+    }
+    const auto* event = std::get_if<model::OrderEvent>(&e);
+    if (event != nullptr && std::holds_alternative<model::OrderModifyRejected>(*event) &&
+        !st.canceling && st.scratch[kReplacing] == 0) {
+      st.scratch[kReplacing] = 1;
+      const core::Status s = ctx.cancel(st.children[0].id);
+      return s == core::Status::InvalidState ? core::Status::Ok : s; // closing meanwhile
+    }
+    return core::Status::Ok;
   }
 
   template <typename Ctx> [[nodiscard]] core::Status on_cancel(AlgoState& /*st*/, Ctx& ctx) const {
@@ -540,13 +578,23 @@ struct PeggedQuote {
   }
 
 private:
+  [[nodiscard]] static bool buying(const AlgoState& st) noexcept {
+    return st.intent.side == model::OrderSide::Buy;
+  }
+  [[nodiscard]] static std::int64_t best_of(const AlgoState& st, const AlgoTop& top) noexcept {
+    return buying(st) ? top.bid.raw() : top.ask.raw();
+  }
+  [[nodiscard]] static std::int64_t size_of(const AlgoState& st, const AlgoTop& top) noexcept {
+    return static_cast<std::int64_t>(buying(st) ? top.bid_size.raw() : top.ask_size.raw());
+  }
+
   [[nodiscard]] static std::optional<model::Price> target(const AlgoState& st, model::Price tick,
                                                           const AlgoTop& top) {
     if (top.bid.raw() <= 0 || top.ask.raw() <= top.bid.raw()) {
       return std::nullopt;
     }
     const std::int64_t t = tick.raw();
-    const bool buy = st.intent.side == model::OrderSide::Buy;
+    const bool buy = buying(st);
     std::int64_t ref = buy ? top.bid.raw() : top.ask.raw();
     if (st.params.values[1] == 1) {
       const std::int64_t mid = top.bid.raw() + (top.ask.raw() - top.bid.raw()) / 2;
@@ -560,6 +608,48 @@ private:
       px = top.bid.raw() + t;
     }
     return algo_detail::price_of(px, tick.precision());
+  }
+
+  // The order went to `px`: it joins the back of that price's queue.
+  static void placed(AlgoState& st, std::int64_t px, const AlgoTop& top) noexcept {
+    const std::int64_t best = best_of(st, top);
+    st.scratch[kPrice] = px;
+    if (px == best) {
+      st.scratch[kAhead] = size_of(st, top);
+      st.scratch[kLevel] = size_of(st, top);
+    } else if (buying(st) ? px > best : px < best) {
+      st.scratch[kAhead] = 0; // it improves the best
+      st.scratch[kLevel] = 0;
+    } else {
+      st.scratch[kAhead] = kUnknown; // behind the best: the queue there is out of sight
+      st.scratch[kLevel] = 0;
+    }
+  }
+
+  // The quantity ahead of the order follows the displayed size at its price.
+  static void track(AlgoState& st, const AlgoTop& top) noexcept {
+    const std::int64_t best = best_of(st, top);
+    const std::int64_t size = size_of(st, top);
+    const std::int64_t px = st.scratch[kPrice];
+    std::int64_t& ahead = st.scratch[kAhead];
+    std::int64_t& level = st.scratch[kLevel];
+    if (px == best) {
+      if (ahead == kUnknown) {
+        ahead = size; // back in sight: at most all of it is ahead
+      } else if (level == 0) {
+        ahead = ahead < size ? ahead : size;
+      } else if (size < level && size >= 0) {
+        ahead = static_cast<std::int64_t>(
+            (static_cast<core::u128>(ahead) * static_cast<std::uint64_t>(size)) /
+            static_cast<std::uint64_t>(level));
+      }
+      level = size;
+    } else if (buying(st) ? best < px : best > px) {
+      ahead = 0; // nothing is left at its price but itself (or it is not in the book yet)
+      level = 0;
+    } else {
+      level = 0; // behind the best again
+    }
   }
 
   template <typename Ctx>
@@ -582,22 +672,32 @@ private:
           ctx.submit(algo_detail::child_of(st, st.reserved_raw, px, true, model::TimeInForce::Gtc),
                      child, denied);
       if (core::ok(s) && !denied) {
-        st.scratch[0] = px->raw();
+        st.scratch[kReplacing] = 0;
+        placed(st, px->raw(), top);
       }
       return s;
     }
+    track(st, top);
+    if (st.scratch[kReplacing] != 0) {
+      return core::Status::Ok; // the cancel is on its way
+    }
+    const std::int64_t t = tick->raw();
+    const std::int64_t move = px->raw() - st.scratch[kPrice];
+    const bool toward = buying(st) ? move > 0 : move < 0;
+    const std::int64_t ahead = st.scratch[kAhead];
+    const bool front =
+        ahead != kUnknown && ahead < static_cast<std::int64_t>(st.children[0].leaves_raw);
     const std::int64_t threshold =
-        (st.params.values[2] > 0 ? st.params.values[2] : 1) * tick->raw();
+        (st.params.values[2] > 0 ? st.params.values[2] : 1) * t + (toward && front ? t : 0);
     const std::int64_t reserve = st.params.values[3] > 0 ? st.params.values[3] : 2;
-    const std::int64_t move = px->raw() - st.scratch[0];
-    if ((move < 0 ? -move : move) < threshold || ctx.pending(st.children[0].id) ||
+    const model::ClientOrderId& id = st.children[0].id;
+    if ((move < 0 ? -move : move) < threshold || !ctx.acknowledged(id) || ctx.pending(id) ||
         static_cast<std::int64_t>(ctx.rate_budget()) <= reserve) {
       return core::Status::Ok;
     }
-    const core::Status s = ctx.modify(st.children[0].id, std::nullopt, px);
-    if (core::ok(s)) {
-      st.scratch[0] = px->raw();
-      return s;
+    const core::Status s = ctx.modify(id, std::nullopt, px);
+    if (core::ok(s) && ctx.pending(id)) {
+      placed(st, px->raw(), top); // else the risk gate refused it: the order stays where it is
     }
     return s == core::Status::InvalidState ? core::Status::Ok : s; // closing meanwhile
   }
