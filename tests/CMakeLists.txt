@@ -103,7 +103,7 @@ add_executable(trace_driver trace/trace_driver.cpp trace/behaviour_file.cpp)
 target_link_libraries(trace_driver PRIVATE jarvis::kernel)
 set_target_properties(trace_driver PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_dependencies(jarvis_tests trace_driver)
-foreach(spec IN ITEMS OrderLifecycle TradingState Matching DepthSync Reconciliation)
+foreach(spec IN ITEMS OrderLifecycle TradingState Matching DepthSync Reconciliation NodeLifecycle)
   add_test(NAME trace.${spec}
            COMMAND trace_driver "${PROJECT_SOURCE_DIR}/tests/trace/behaviours/${spec}.txt")
   set_tests_properties(trace.${spec} PROPERTIES LABELS "conformance;trace")

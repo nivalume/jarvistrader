@@ -173,14 +173,14 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [x] task: execution — 内置执行算法 `PassiveThenAggressive`：已实现（M5-H：post-only 挂单、超时或偏离后撤单并以 IOC 吃单、吃单份额上限；引擎测试与 Python 模拟交易所回测含回放一致）
 - [x] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点：已完成（`jarvis/node/node_main.hpp`，示例 `trade_logger` 与 `pegged_mm` 只链接 `jarvis::shell`（live 版另加 `jarvis::live`），不依赖 libpython）
 - [x] task: python — `node.add_native_strategy()`：Python 启动的混合节点承载注册的 C++ 策略：已完成（按名创建注册的策略；M5-N：`jarvis.load_native(path)` 加载 `jarvis_add_strategy_plugin` 构建的插件，入口报告编译器与共享类型的布局指纹，不一致即拒绝；C++ 与 Python 端到端测试）
-- [ ] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）
+- [x] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）：已采纳（M5-O：`specs/tla/NodeLifecycle.tla`，转移表、同步闸门、关停与撤单等待、`Faulted`、策略回调与未完成订单；TLC 检查不变量与 `Stopping` 的终结；`MAP.toml` 条目与正向 trace validation，trace driver 运行真实的实时 driver，ctest `trace.NodeLifecycle`；反向验证留待实盘日志）
 - [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI：正向已进入 ctest（`trace.Reconciliation`）、CI formal job 与 nightly；反向待实盘日志
 - [ ] task: harness — 混沌测试：由规约 b 的行为生成断线、重复、乱序、丢消息场景，在 sandbox 与 testnet 执行
 - [x] task: harness — 只报告基准 `snapshot/save_state`、`snapshot/load_state`（`bench_report`，默认容量的内核，一个永续合约、每侧 200 档的订单簿、200 张订单中 100 张未结）：本机 Release 状态 229 KB，保存约 1.08 ms，恢复约 0.94 ms；快照在批次边界的 core 线程上编码，所以每 `snapshot_every` 条输入有一次约 1 ms 的停顿
 - [ ] task: harness — 延迟基准：tick 到命令、命令到 socket 的 p50 与 p99 归档，并据实测设定延迟目标
 - [ ] task: harness — nightly：1 小时 sandbox soak，以及对最近一次 soak 日志的反向验证
 - [ ] task: docs — 运维手册：部署、配置、密钥、告警与故障处理
-- [ ] task: 验收 — Python 与 C++ 示例在 testnet 连续运行 72 小时，穿越强制断线与 listenKey 过期；录制日志回放逐字节一致；五个规约全部在 CI 中通过；小资金生产灰度完成后发布 v1.0
+- [ ] task: 验收 — Python 与 C++ 示例在 testnet 连续运行 72 小时，穿越强制断线与 listenKey 过期；录制日志回放逐字节一致；全部规约在 CI 中通过；小资金生产灰度完成后发布 v1.0
 
 ## M6 v1.x：Spot、SBE、更多执行算法与扩展
 

@@ -63,6 +63,14 @@ budget_min = 5
 tlc_args = []
 trace_vars = ["phase", "local", "lastU", "visible", "out"]
 
+[specs.NodeLifecycle]
+paths = ["jarvis/engine/lifecycle.hpp", "jarvis/engine/sync_gate.hpp",
+         "jarvis/backtest/driver.hpp", "specs/map/node_lifecycle_actions.hpp"]
+forward = true
+backward = false
+budget_min = 5
+tlc_args = []
+
 [global]
 # Touching any of these runs every spec.
 always = ["jarvis/core/**", "jarvis/engine/**", "specs/tla/**", "specs/map/**"]

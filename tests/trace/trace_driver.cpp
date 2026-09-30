@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <iostream>
 #include <map>
@@ -26,6 +27,7 @@
 #include "behaviour_file.hpp"
 #include "jarvis/adapter/binance/depth_sync.hpp"
 #include "jarvis/adapter/codec.hpp"
+#include "jarvis/backtest/driver.hpp"
 #include "jarvis/backtest/matching/sim_exchange.hpp"
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
@@ -53,6 +55,7 @@
 #include "jarvis/strategy/strategy_set.hpp"
 #include "specs/map/depth_sync_actions.hpp"
 #include "specs/map/matching_actions.hpp"
+#include "specs/map/node_lifecycle_actions.hpp"
 #include "specs/map/order_lifecycle_actions.hpp"
 #include "specs/map/reconciliation_actions.hpp"
 #include "specs/map/trading_state_actions.hpp"
@@ -1066,6 +1069,297 @@ private:
   std::vector<m::PositionStatusReport> position_reports_;
 };
 
+// ---- NodeLifecycle -----------------------------------------------------------------------------
+
+// Counts its callbacks; answers every ParamUpdate with one limit buy. Writes through pointers to
+// the replayer's state.
+// NOLINTBEGIN(readability-make-member-function-const)
+struct LifecycleTrader {
+  int* starts = nullptr;
+  int* stops = nullptr;
+  std::vector<m::ClientOrderId>* placed = nullptr;
+
+  Status on_start(st::Context& /*ctx*/) {
+    ++*starts;
+    return Status::Ok;
+  }
+  void on_stop(st::Context& /*ctx*/) { ++*stops; }
+  Status on_params_changed(st::Context& ctx, const m::ParamUpdate& /*p*/) {
+    m::ClientOrderId id;
+    const Status s = ctx.submit(ctx.limit(instrument_id(), m::OrderSide::Buy, quantity(kScale, 0),
+                                          price(100 * static_cast<std::int64_t>(kScale), 1)),
+                                id);
+    if (jarvis::core::ok(s)) {
+      placed->push_back(id);
+    }
+    return s;
+  }
+};
+// NOLINTEND(readability-make-member-function-const)
+
+// Inputs the pump hands over; empty until the next one.
+class LifecycleSource {
+public:
+  void push(jarvis::core::EventKey key, const m::Event& event) { items_.emplace_back(key, event); }
+  Status next(jarvis::core::EventKey& key, m::Event& event) {
+    if (items_.empty()) {
+      return Status::WouldBlock;
+    }
+    key = items_.front().first;
+    event = items_.front().second;
+    items_.pop_front();
+    return Status::Ok;
+  }
+
+private:
+  std::deque<std::pair<jarvis::core::EventKey, m::Event>> items_;
+};
+
+// Counts the cancels the node sends; fails every record once `broken`.
+struct LifecycleRecorder {
+  bool broken = false;
+  std::size_t cancels = 0;
+
+  [[nodiscard]] Status record(const jarvis::core::EventKey& /*key*/,
+                              const m::Event& /*event*/) const {
+    return broken ? Status::IoError : Status::Ok;
+  }
+  Status emit(const jarvis::core::EventKey& /*key*/, const m::Output& output) {
+    cancels += std::holds_alternative<m::CancelOrder>(output) ? 1U : 0U;
+    return Status::Ok;
+  }
+};
+
+// One behaviour, replayed through backtest::Driver::run_realtime. The driver calls the pump's
+// idle() when nothing more is due: the replayer then compares the state the last action left
+// with the spec's and stages the next action for the following rounds.
+class NodeLifecycleRun {
+public:
+  static constexpr std::uint64_t kStep = 10;           // ns between actions
+  static constexpr std::uint64_t kStaleNs = 1'000;     // node.market_data_stale_ms, in ns
+  static constexpr std::uint64_t kDrainNs = 1'000'000; // [node] shutdown_timeout_ms, in ns
+
+  explicit NodeLifecycleRun(const jarvis::trace::Behaviour& b)
+      : steps_{b.steps}, set_{LifecycleTrader{&starts_, &stops_, &placed_}},
+        engine_{config(), set_}, pump_{this} {}
+
+  // The first divergence (its step in `failed`), or nothing.
+  std::string execute(std::size_t& failed) {
+    bt::DriverOptions options;
+    preamble_ = {m::Event{perpetual(0)}};
+    options.preamble = preamble_;
+    options.await_sync = steps_.front().boolean("await");
+    options.drain_for = jarvis::core::DurationNanos{kDrainNs};
+    for (const Step& s : steps_) {
+      if (s.action == "Shutdown" && s.args.at(0) != "NONE") {
+        options.shutdown = s.args.at(0) == "CANCEL_ALL_THEN_EXIT"
+                               ? m::ShutdownMode::CancelAllThenExit
+                               : m::ShutdownMode::ExitKeepOrders;
+      }
+    }
+    bt::Driver driver{engine_, source_, recorder_, options};
+    static_cast<void>(driver.run_realtime(pump_, summary_)); // faults are expected
+    ended_ = true;
+    if (diff_.empty() && checking_) {
+      diff_ = compare(steps_.at(index_));
+    }
+    if (diff_.empty() && index_ + 1 < steps_.size()) {
+      diff_ = "  the run ended before the behaviour did\n";
+      ++index_;
+    }
+    failed = index_;
+    return diff_;
+  }
+
+private:
+  class Pump {
+  public:
+    explicit Pump(NodeLifecycleRun* run) : run_{run} {}
+    [[nodiscard]] UnixNanos now() const { return UnixNanos{run_->now_}; }
+    Status pump(UnixNanos now) { return run_->hand_over(now); }
+    Status idle(UnixNanos /*now*/) {
+      run_->on_idle();
+      return Status::Ok;
+    }
+    [[nodiscard]] bool stop_requested() const { return run_->stop_; }
+
+  private:
+    NodeLifecycleRun* run_;
+  };
+
+  static st::KernelConfig config() {
+    st::KernelConfig c;
+    c.instruments = 4;
+    c.strategies = 1;
+    c.timers = 8;
+    c.features = 1;
+    c.bar_types = 1;
+    c.buffers = 4;
+    c.book_window_levels = 64;
+    c.book_overflow_levels = 16;
+    c.market_data_stale_ns = kStaleNs;
+    c.trading.orders = 16;
+    c.trading.trades = 64;
+    c.trading.risk.orders_per_10s = 0;
+    c.trading.risk.orders_per_minute = 0;
+    c.trading.risk.check_margin = false;
+    c.trading.risk.margin_ratio_bps = 0;
+    return c;
+  }
+
+  Status hand_over(UnixNanos now) {
+    for (m::Event& e : staged_) {
+      std::visit(
+          [now](auto& x) {
+            if constexpr (requires { x.ts_init; }) {
+              x.ts_init = now;
+            } else if constexpr (requires { x.header.ts_init; }) {
+              x.header.ts_init = now;
+            }
+          },
+          e);
+      source_.push(jarvis::core::EventKey{now, 1, 0}, e);
+    }
+    staged_.clear();
+    return fail_ ? Status::IoError : Status::Ok;
+  }
+
+  void on_idle() {
+    if (checking_) {
+      diff_ = compare(steps_.at(index_));
+      checking_ = false;
+    }
+    if (!diff_.empty() || index_ + 1 >= steps_.size()) {
+      stop_ = true;     // diverged, or the behaviour is over: let the driver shut down,
+      now_ += kDrainNs; // without waiting for a drain
+      return;
+    }
+    now_ += kStep;
+    stage(steps_.at(++index_));
+    checking_ = true;
+  }
+
+  static m::Event connection(m::ConnectionKind kind, bool up) {
+    m::ConnectionStatus c;
+    c.kind = kind;
+    c.up = up;
+    return m::Event{c};
+  }
+
+  void stage(const Step& s) {
+    const std::string& a = s.action;
+    if (a == "Link") {
+      staged_.push_back(connection(s.args.at(0) == "MARKET_DATA" ? m::ConnectionKind::MarketData
+                                                                 : m::ConnectionKind::OrderEntry,
+                                   s.args.at(1) == "TRUE"));
+    } else if (a == "Stream") {
+      staged_.push_back(connection(m::ConnectionKind::UserStream, s.args.at(0) == "TRUE"));
+    } else if (a == "Snapshot") {
+      staged_.push_back(snapshot());
+    } else if (a == "Stale") {
+      now_ += 2 * kStaleNs; // the freshness timer fires on the way
+    } else if (a == "Fresh") {
+      m::TradeTick t;
+      t.instrument_id = instrument_id();
+      t.price = price(100 * static_cast<std::int64_t>(kScale), 1);
+      t.size = quantity(kScale, 0);
+      t.aggressor_side = m::AggressorSide::Buy;
+      require(m::TradeId::from("t" + std::to_string(now_), t.trade_id), "trade id");
+      t.ts_event = UnixNanos{now_};
+      staged_.push_back(m::Event{t});
+    } else if (a == "Submit") {
+      m::ParamUpdate p;
+      require(m::ParamKey::from("submit", p.key), "param key");
+      staged_.push_back(m::Event{p});
+    } else if (a == "Answer") {
+      m::OrderCanceled e;
+      e.header.instrument_id = instrument_id();
+      e.header.client_order_id = placed_.at(answered_++);
+      e.header.ts_event = UnixNanos{now_};
+      staged_.push_back(m::Event{e});
+    } else if (a == "Shutdown") {
+      stop_ = true;
+    } else if (a == "Timeout") {
+      now_ += 2 * kDrainNs;
+    } else if (a == "Fault") {
+      if (s.args.at(0) == "PUMP") {
+        fail_ = true;
+      } else {
+        recorder_.broken = true; // the next input fails to record
+        staged_.push_back(connection(m::ConnectionKind::OrderEntry, true));
+      }
+    } else {
+      throw std::runtime_error("unknown NodeLifecycle action " + a);
+    }
+  }
+
+  // The venue has every order not yet answered, accepted when it was placed.
+  m::Event snapshot() {
+    reports_.clear();
+    for (std::size_t i = answered_; i < placed_.size(); ++i) {
+      m::OrderStatusReport r;
+      r.instrument_id = instrument_id();
+      r.client_order_id = placed_[i];
+      require(m::VenueOrderId::from("v" + std::to_string(i + 1), r.venue_order_id),
+              "venue order id");
+      r.order_status = m::OrderStatus::Accepted;
+      r.quantity = quantity(kScale, 0);
+      r.filled_qty = quantity(0, 0);
+      r.price = price(100 * static_cast<std::int64_t>(kScale), 1);
+      r.ts_accepted = UnixNanos{now_ - 1};
+      r.ts_last = UnixNanos{now_ - 1};
+      reports_.push_back(r);
+    }
+    m::VenueSnapshot v;
+    v.ts_snapshot = UnixNanos{now_};
+    v.orders = reports_;
+    return m::Event{v};
+  }
+
+  [[nodiscard]] std::string compare(const Step& s) const {
+    namespace map = jarvis::specmap::node_lifecycle;
+    Diff diff;
+    const st::KernelServices& k = engine_.kernel();
+    const m::NodeState state = ended_ ? summary_.state : k.node_state;
+    diff.expect("state", s.var("state"), std::string{m::to_string(state)});
+    diff.expect("phase", s.var("phase"), std::string{ex::to_string(k.trading.reconciler.phase())});
+    diff.expect("md", s.var("md"), std::string{map::link_name(k.health.market_data)});
+    diff.expect("oe", s.var("oe"), std::string{map::link_name(k.health.order_entry)});
+    diff.expect("stale", s.boolean("stale"), k.health.market_data_stale);
+    diff.expect("orders", s.integer("orders"), static_cast<long long>(engine_.open_orders()));
+    diff.expect("mode", s.var("mode"),
+                std::string{k.shutdown ? m::to_string(*k.shutdown) : "NONE"});
+    diff.expect("kill", s.boolean("kill"), recorder_.cancels > 0);
+    diff.expect("starts", s.integer("starts"), static_cast<long long>(starts_));
+    diff.expect("stops", s.integer("stops"), static_cast<long long>(stops_));
+    return diff.text();
+  }
+
+  std::vector<Step> steps_;
+  int starts_ = 0;
+  int stops_ = 0;
+  std::vector<m::ClientOrderId> placed_;
+  std::size_t answered_ = 0;
+  st::StaticStrategySet<LifecycleTrader> set_;
+  jarvis::engine::Engine<st::StaticStrategySet<LifecycleTrader>> engine_;
+  LifecycleSource source_;
+  LifecycleRecorder recorder_;
+  Pump pump_;
+  std::vector<m::Event> preamble_;
+  std::vector<m::Event> staged_;
+  std::vector<m::OrderStatusReport> reports_;
+  bt::RunSummary summary_;
+  std::uint64_t now_ = 1'000;
+  std::size_t index_ = 0;
+  bool checking_ = true; // the Init state is compared at the first idle
+  bool stop_ = false;
+  bool fail_ = false;
+  bool ended_ = false;
+  std::string diff_;
+};
+
+bool replay_node_lifecycle(const BehaviourFile& file, const std::string& path);
+
 // ---- driver ------------------------------------------------------------------------------------
 
 std::string describe(const Step& s) {
@@ -1112,6 +1406,41 @@ template <typename Replayer> bool replay(const BehaviourFile& file, const std::s
   return ok;
 }
 
+bool replay_node_lifecycle(const BehaviourFile& file, const std::string& path) {
+  std::map<std::string, std::size_t, std::less<>> seen;
+  std::size_t steps = 0;
+  for (const jarvis::trace::Behaviour& b : file.behaviours) {
+    if (b.steps.empty() || b.steps.front().action != "Init") {
+      std::cerr << path << ": behaviour " << b.number << " does not start with Init\n";
+      return false;
+    }
+    NodeLifecycleRun run{b};
+    std::size_t failed = 0;
+    const std::string diff = run.execute(failed);
+    if (!diff.empty()) {
+      const Step& s = b.steps.at(failed);
+      std::cerr << path << ":" << s.line << ": NodeLifecycle behaviour " << b.number << " step "
+                << failed << " (" << describe(s) << ") diverges:\n"
+                << diff;
+      return false;
+    }
+    for (std::size_t i = 0; i < b.steps.size(); ++i) {
+      ++seen[b.steps[i].action];
+    }
+    steps += b.steps.size() - 1;
+  }
+  bool ok = true;
+  for (const std::string_view action : jarvis::specmap::node_lifecycle::kActions) {
+    if (!seen.contains(action)) {
+      std::cerr << path << ": action " << action << " never appears\n";
+      ok = false;
+    }
+  }
+  std::cout << "trace_driver: " << file.spec << ": " << file.behaviours.size() << " behaviours, "
+            << steps << " steps matched\n";
+  return ok;
+}
+
 bool run(const std::string& path) {
   const BehaviourFile file = jarvis::trace::read_behaviour_file(path);
   if (file.spec == "OrderLifecycle") {
@@ -1128,6 +1457,9 @@ bool run(const std::string& path) {
   }
   if (file.spec == "Reconciliation") {
     return replay<ReconciliationReplayer>(file, path);
+  }
+  if (file.spec == "NodeLifecycle") {
+    return replay_node_lifecycle(file, path);
   }
   std::cerr << path << ": no trace driver for spec " << file.spec << "\n";
   return false;
