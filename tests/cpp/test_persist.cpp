@@ -22,6 +22,7 @@
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/corpus.hpp"
 #include "jarvis/node/event_log.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 
 namespace {
 
@@ -205,6 +206,75 @@ TEST_SUITE("unit") {
     REQUIRE(persister.close() == Status::Ok);
     CHECK(bytes(a.str() + "/events-000000.jlog") == bytes(b.str() + "/events-000000.jlog"));
     MESSAGE("ring stalls: " << persister.stats().stalls);
+  }
+
+  TEST_CASE("a snapshot file is written only once the log is durable up to it") {
+    const auto snapshot_file = [](const std::string& dir, std::uint64_t seq) {
+      return dir + "/" + node::snapshot_name(seq);
+    };
+    const std::vector<std::byte> body{std::byte{1}, std::byte{2}, std::byte{3}};
+
+    // async, syncing once an hour: the snapshot waits for the sync at close.
+    const TempDir slow{"snap-async"};
+    live::PersistConfig config;
+    config.sync_every = std::chrono::hours{1};
+    live::Persister persister{config};
+    std::string error;
+    REQUIRE(persister.open(slow.str(), header(), error) == Status::Ok);
+    append_corpus(persister, 100);
+    REQUIRE(persister.write_snapshot(node::SnapshotInfo{100, 7, true, 1}, body) == Status::Ok);
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    CHECK_FALSE(std::filesystem::exists(snapshot_file(slow.str(), 100)));
+    REQUIRE(persister.close() == Status::Ok);
+    REQUIRE(std::filesystem::exists(snapshot_file(slow.str(), 100)));
+    std::vector<std::byte> file;
+    REQUIRE(node::read_file_bytes(snapshot_file(slow.str(), 100), file) == Status::Ok);
+    wire::LogHeader h;
+    node::SnapshotInfo info;
+    std::span<const std::byte> read;
+    REQUIRE(node::decode_snapshot(file, h, info, read) == Status::Ok);
+    CHECK(info.seq == 100);
+    CHECK(info.ts == 7);
+    CHECK(info.complete);
+    CHECK(std::vector<std::byte>(read.begin(), read.end()) == body);
+    CHECK(h.seed == header().seed);
+    CHECK(persister.stats().snapshots == 1);
+
+    // barrier: written as soon as the log is synced past it.
+    const TempDir fast{"snap-barrier"};
+    config.barrier = true;
+    live::Persister barrier{config};
+    REQUIRE(barrier.open(fast.str(), header(), error) == Status::Ok);
+    append_corpus(barrier, 100);
+    REQUIRE(barrier.write_snapshot(node::SnapshotInfo{100, 7, true, 1}, body) == Status::Ok);
+    bool written = false;
+    for (int i = 0; i < 5000 && !written; ++i) {
+      written = std::filesystem::exists(snapshot_file(fast.str(), 100));
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    CHECK(written);
+    REQUIRE(barrier.close() == Status::Ok);
+  }
+
+  TEST_CASE("at most two snapshots wait; a third replaces the older one") {
+    const TempDir dir{"snap-drop"};
+    live::PersistConfig config;
+    config.sync_every = std::chrono::hours{1};
+    live::Persister persister{config};
+    std::string error;
+    REQUIRE(persister.open(dir.str(), header(), error) == Status::Ok);
+    append_corpus(persister, 10);
+    for (std::uint64_t seq = 1; seq <= 3; ++seq) {
+      REQUIRE(persister.write_snapshot(node::SnapshotInfo{seq, seq, true, 1},
+                                       std::vector<std::byte>{std::byte{0}}) == Status::Ok);
+    }
+    REQUIRE(persister.close() == Status::Ok);
+    const std::vector<node::SnapshotEntry> list = node::list_snapshots(dir.str());
+    REQUIRE(list.size() == 2);
+    CHECK(list[0].seq == 2);
+    CHECK(list[1].seq == 3);
+    CHECK(persister.stats().snapshots == 2);
+    CHECK(persister.stats().snapshots_dropped == 1);
   }
 
   TEST_CASE("the persister refuses appends before open and after close") {

@@ -57,6 +57,8 @@ struct Cadence {
     return mode != Mode::Sampled || period.value() > 0;
   }
 
+  template <typename Ar> void state(Ar& ar) { ar(mode, period); }
+
   friend constexpr bool operator==(const Cadence&, const Cadence&) noexcept = default;
 };
 
@@ -68,6 +70,8 @@ struct Subscriber {
   Cadence cadence;
   std::uint64_t last_period = UINT64_MAX; // Sampled: period index of the last delivery
   std::uint32_t buffer = UINT32_MAX;      // Conflated or OnBatch: index of the engine's buffer
+
+  template <typename Ar> void state(Ar& ar) { ar(strategy, cadence, last_period, buffer); }
 };
 
 // Subscribers per (row, kind). Rows are instrument slots for instrument data, bar keys for bars
@@ -175,6 +179,35 @@ private:
   std::uint32_t per_cell_;
   core::FixedVector<Subscriber> cells_;
   core::FixedVector<std::uint32_t> counts_;
+
+public:
+  // Snapshot encoding (core/state.hpp): each cell's count and its live subscribers (the slots
+  // past the count are never read; a restored matrix has them empty). The shape comes from the
+  // configuration.
+  template <typename Ar> void state(Ar& ar) {
+    auto cells = static_cast<std::uint32_t>(counts_.size());
+    std::uint32_t per_cell = per_cell_;
+    ar(cells, per_cell);
+    if (cells != counts_.size() || per_cell != per_cell_) {
+      ar.fail(core::Status::CapacityExceeded);
+      return;
+    }
+    for (std::size_t i = 0; i < counts_.size(); ++i) {
+      ar(counts_[i]);
+      if (counts_[i] > per_cell_) {
+        ar.fail(core::Status::CapacityExceeded);
+        return;
+      }
+      for (std::uint32_t k = 0; k < per_cell_; ++k) {
+        Subscriber& sub = cells_[i * per_cell_ + k];
+        if (k < counts_[i]) {
+          ar(sub);
+        } else if constexpr (Ar::kReading) {
+          sub = Subscriber{};
+        }
+      }
+    }
+  }
 };
 
 } // namespace jarvis::data

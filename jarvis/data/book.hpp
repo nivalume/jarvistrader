@@ -5,6 +5,7 @@
 #include <span>
 
 #include "jarvis/core/fixed_vector.hpp"
+#include "jarvis/core/state.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/model/data.hpp"
@@ -36,6 +37,8 @@ struct BookConfig {
 
 class OrderBook {
 public:
+  // An empty shell for a snapshot to restore into (state() gives it its shape).
+  OrderBook() = default;
   explicit OrderBook(const BookConfig& config)
       : type_{config.type}, tick_raw_{config.tick.raw()}, price_precision_{config.tick.precision()},
         size_precision_{config.size_precision}, window_{(config.window_levels + 63U) / 64U * 64U},
@@ -157,6 +160,8 @@ private:
   struct OverflowLevel {
     std::int64_t tick = 0;
     std::uint64_t size = 0;
+
+    template <typename Ar> void state(Ar& ar) { ar(tick, size); }
   };
 
   [[nodiscard]] core::Status tick_of(model::Price price, std::int64_t& tick) const noexcept {
@@ -434,21 +439,59 @@ private:
     return core::Status::Ok;
   }
 
-  model::BookType type_;
-  std::int64_t tick_raw_;
-  std::uint8_t price_precision_;
-  std::uint8_t size_precision_;
-  std::uint32_t window_;
-  core::FixedVector<std::uint64_t> bids_;
-  core::FixedVector<std::uint64_t> asks_;
-  core::FixedVector<std::uint64_t> bid_bits_;
-  core::FixedVector<std::uint64_t> ask_bits_;
-  core::FixedVector<OverflowLevel> bid_overflow_;
-  core::FixedVector<OverflowLevel> ask_overflow_;
+  model::BookType type_ = model::BookType::L2_MBP;
+  std::int64_t tick_raw_ = 0;
+  std::uint8_t price_precision_ = 0;
+  std::uint8_t size_precision_ = 0;
+  std::uint32_t window_ = 0;
+  core::FixedVector<std::uint64_t> bids_{0};
+  core::FixedVector<std::uint64_t> asks_{0};
+  core::FixedVector<std::uint64_t> bid_bits_{0};
+  core::FixedVector<std::uint64_t> ask_bits_{0};
+  core::FixedVector<OverflowLevel> bid_overflow_{0};
+  core::FixedVector<OverflowLevel> ask_overflow_{0};
   std::int64_t base_ = 0;
   bool has_base_ = false;
   std::uint64_t sequence_ = 0;
   core::UnixNanos ts_last_;
+
+public:
+  // Snapshot encoding (core/state.hpp): the shape, then the levels, the window's mostly empty
+  // arrays as runs.
+  template <typename Ar> void state(Ar& ar) {
+    ar(type_, tick_raw_, price_precision_, size_precision_, window_);
+    if constexpr (Ar::kReading) {
+      if (window_ % 64U != 0 || window_ > (1U << 24U)) {
+        ar.fail(core::Status::InvalidArgument);
+        return;
+      }
+      if (bids_.capacity() != window_) {
+        shape(window_);
+      }
+    }
+    core::state_sparse(ar, bids_);
+    core::state_sparse(ar, asks_);
+    core::state_sparse(ar, bid_bits_);
+    core::state_sparse(ar, ask_bits_);
+    ar(bid_overflow_, ask_overflow_, base_, has_base_, sequence_, ts_last_);
+  }
+
+private:
+  // Empty level arrays for a window of `window` levels (a restore into the empty shell).
+  void shape(std::uint32_t window) {
+    bids_ = core::FixedVector<std::uint64_t>{window};
+    asks_ = core::FixedVector<std::uint64_t>{window};
+    bid_bits_ = core::FixedVector<std::uint64_t>{window / 64U};
+    ask_bits_ = core::FixedVector<std::uint64_t>{window / 64U};
+    for (std::uint32_t i = 0; i < window; ++i) {
+      static_cast<void>(bids_.push_back(0));
+      static_cast<void>(asks_.push_back(0));
+    }
+    for (std::uint32_t i = 0; i < window / 64U; ++i) {
+      static_cast<void>(bid_bits_.push_back(0));
+      static_cast<void>(ask_bits_.push_back(0));
+    }
+  }
 };
 
 // Read-only view of one instrument's book, valid during the callback that receives it.

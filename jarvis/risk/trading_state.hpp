@@ -181,6 +181,9 @@ public:
     return state() != before;
   }
 
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) { ar(base_, syncing_, degraded_); }
+
 private:
   model::TradingState base_;
   bool syncing_ = false;

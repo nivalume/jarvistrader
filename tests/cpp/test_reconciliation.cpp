@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -24,6 +25,7 @@
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/reports.hpp"
+#include "jarvis/model/wire.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 #include "jarvis/testkit/property.hpp"
@@ -191,6 +193,8 @@ struct Trader {
                           " state=" + std::string{md::to_string(ctx.trading_state())});
     return Status::Ok;
   }
+  // Snapshots: nothing of its own (the lists belong to the test).
+  template <typename Ar> void state(Ar& /*ar*/) {}
 };
 // NOLINTEND(readability-make-member-function-const,readability-convert-member-functions-to-static)
 
@@ -213,23 +217,68 @@ st::KernelConfig config() {
 
 using TestEngine = jarvis::engine::Engine<st::StaticStrategySet<Trader>>;
 
+std::vector<std::byte> encoded(const EventKey& key, const md::Output& o) {
+  std::vector<std::byte> buffer(1U << 16U);
+  std::size_t written = 0;
+  REQUIRE(jarvis::model::wire::encode_output_record(key, o, buffer, written) == Status::Ok);
+  buffer.resize(written);
+  return buffer;
+}
+
 class Harness {
 public:
   explicit Harness(std::size_t orders, std::string_view qty = "1.000",
                    st::KernelConfig c = config())
-      : set_{Trader{orders, qty, &ids, &log, &reconciled}}, engine_{c, set_} {}
+      : orders_{orders}, qty_{qty}, config_{c}, set_{Trader{orders, qty, &ids, &log, &reconciled}},
+        engine_{c, set_} {}
 
   TestEngine& engine() { return engine_; }
   const st::Trading& trading() { return engine_.kernel().trading; }
   const ex::Reconciler& reconciler() { return engine_.kernel().trading.reconciler; }
 
   Status step(const md::Event& event) {
-    const Status s = engine_.step(EventKey{md::ts_init_of(event), 0, ++seq_}, event);
+    const EventKey key{md::ts_init_of(event), 0, ++seq_};
+    const Status s = engine_.step(key, event);
+    if (twin_) {
+      REQUIRE(twin_->engine.step(key, event) == s);
+      REQUIRE(twin_->engine.outputs().size() == engine_.outputs().size());
+      for (std::size_t i = 0; i < engine_.outputs().size(); ++i) {
+        REQUIRE(encoded(key, twin_->engine.outputs()[i]) == encoded(key, engine_.outputs()[i]));
+      }
+      twin_->engine.clear_outputs();
+    }
     for (const md::Output& o : engine_.outputs()) {
       outputs.push_back(o);
     }
     engine_.clear_outputs();
+    if (twin_) {
+      REQUIRE(twin_->log == log);
+      REQUIRE(twin_->reconciled == reconciled);
+    }
     return s;
+  }
+
+  // From now on a second engine, restored from this one's snapshot, takes every step too and
+  // must produce the same outputs and callbacks.
+  void fork() {
+    std::vector<std::byte> bytes;
+    REQUIRE(engine_.save_state(bytes) == Status::Ok);
+    twin_ = std::make_unique<Twin>(orders_, qty_, config_);
+    twin_->ids = ids;
+    twin_->log = log;
+    twin_->reconciled = reconciled;
+    REQUIRE(twin_->engine.load_state(bytes) == Status::Ok);
+  }
+  // With a twin: both engines save the same bytes.
+  void check_twin() {
+    if (!twin_) {
+      return;
+    }
+    std::vector<std::byte> a;
+    std::vector<std::byte> b;
+    REQUIRE(engine_.save_state(a) == Status::Ok);
+    REQUIRE(twin_->engine.save_state(b) == Status::Ok);
+    REQUIRE(a == b);
   }
   void run(const std::vector<md::Event>& events) {
     for (const md::Event& e : events) {
@@ -261,9 +310,23 @@ public:
   std::vector<md::Output> outputs;
 
 private:
+  struct Twin {
+    Twin(std::size_t orders, std::string_view qty, const st::KernelConfig& c)
+        : set{Trader{orders, qty, &ids, &log, &reconciled}}, engine{c, set} {}
+    std::vector<md::ClientOrderId> ids;
+    std::vector<std::string> log;
+    std::vector<std::string> reconciled;
+    st::StaticStrategySet<Trader> set;
+    TestEngine engine;
+  };
+
+  std::size_t orders_;
+  std::string_view qty_;
+  st::KernelConfig config_;
   st::StaticStrategySet<Trader> set_;
   TestEngine engine_;
   std::uint64_t seq_ = 0;
+  std::unique_ptr<Twin> twin_;
 };
 
 // Storage a VenueSnapshot event borrows.
@@ -841,6 +904,8 @@ void run_history(Gen& g, std::size_t orders, std::uint64_t max_fill, int steps) 
   REQUIRE(h.step(stream(false, ++now)) == Status::Ok); // the spec's Init: Disconnected, halted
   std::optional<Snapshot> snap;
   bool requested = false;
+  // The snapshot check: at one random step a restored twin joins and must stay identical.
+  const int fork_at = static_cast<int>(g.below(static_cast<std::uint64_t>(steps) + 1));
 
   const auto reconcile = [&] {
     REQUIRE(h.step(snap->event(++now)) == Status::Ok);
@@ -860,6 +925,9 @@ void run_history(Gen& g, std::size_t orders, std::uint64_t max_fill, int steps) 
   };
 
   for (int step = 0; step < steps; ++step) {
+    if (step == fork_at) {
+      h.fork();
+    }
     const ex::SyncPhase phase = h.reconciler().phase();
     switch (g.below(7)) {
     case 0: { // a venue change
@@ -934,6 +1002,7 @@ void run_history(Gen& g, std::size_t orders, std::uint64_t max_fill, int steps) 
     REQUIRE(h.order(o).state.status() == expected);
   }
   REQUIRE(h.venue_position() == h.strategy_position());
+  h.check_twin();
 }
 
 } // namespace

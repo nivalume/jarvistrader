@@ -52,6 +52,10 @@ struct PortfolioStats {
   std::uint64_t unsupported_fills = 0;
   std::uint64_t late_commissions = 0; // commissions booked after a Lite fill
   std::uint64_t funding_settlements = 0;
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(fills, unsupported_fills, late_commissions, funding_settlements);
+  }
 };
 
 // What one part of a fill did to the strategy's position.
@@ -74,6 +78,8 @@ struct FillOutcome {
 struct FundingShare {
   StrategyIndex strategy = 0;
   model::Money payment; // positive received, negative paid
+
+  template <typename Ar> void state(Ar& ar) { ar(strategy, payment); }
 };
 
 class Portfolio {
@@ -345,10 +351,14 @@ private:
     std::optional<model::Price> last;
     std::optional<model::Decimal> rate;
     std::optional<core::UnixNanos> next_funding;
+
+    template <typename Ar> void state(Ar& ar) { ar(mark, last, rate, next_funding); }
   };
   struct Balance {
     model::Currency currency;
     std::int64_t total_raw = 0;
+
+    template <typename Ar> void state(Ar& ar) { ar(currency, total_raw); }
   };
 
   [[nodiscard]] static bool linear(const model::Instrument& instrument) noexcept {
@@ -451,6 +461,12 @@ private:
   core::FixedVector<FundingShare> funding_out_;
   Margin margin_;
   PortfolioStats stats_;
+
+public:
+  // Snapshot encoding (core/state.hpp); the margin model comes from the configuration.
+  template <typename Ar> void state(Ar& ar) {
+    ar(venue_, ledger_, marks_, balances_, funding_out_, stats_);
+  }
 };
 
 } // namespace jarvis::portfolio

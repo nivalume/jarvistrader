@@ -141,6 +141,7 @@ impl = "cpp:Buyer"
 instruments = ["BTCUSDT-PERP.BINANCE"]
 
 [persistence]
+snapshot_every = 5
 mode = ")" +
          std::string{mode} +
          R"("
@@ -243,6 +244,12 @@ TEST_SUITE("unit") {
     request.spot_rest = ""; // no key permission check against the mock
     request.credentials = node::ApiCredentials{"KEY1", "s3cret"};
     request.epoch_file = dir.file("epoch");
+    // Earlier runs took epochs 1 to 4: this one's ClientOrderIds carry 5, and so must the replay's
+    // (the RunStart input records it).
+    for (int i = 0; i < 4; ++i) {
+      std::uint64_t earlier = 0;
+      REQUIRE(node::next_epoch(dir.file("epoch"), earlier) == Status::Ok);
+    }
     request.stop = &stop;
     request.run_for = std::chrono::seconds{10};
     request.now_ms = [] { return std::int64_t{1'700'000'002'000}; };
@@ -254,7 +261,7 @@ TEST_SUITE("unit") {
     const Status s = live::run_live(request, set, result, error, hook);
     INFO(error);
     REQUIRE(s == Status::Ok);
-    CHECK(result.epoch == 1);
+    CHECK(result.epoch == 5);
     CHECK(result.startup.passed());
     // The shutdown cancels the rest of the order; the strategy, stopped, hears only of the
     // request.
@@ -296,14 +303,19 @@ TEST_SUITE("unit") {
     INFO((report.divergence ? report.divergence->recorded + " / " + report.divergence->replayed
                             : std::string{}));
     CHECK_FALSE(report.divergence.has_value());
+    // Every snapshot the persist thread wrote matches the replayed state.
+    CHECK(result.summary.snapshots > 0);
+    CHECK(result.summary.snapshot_failures == 0);
+    CHECK(result.persist.snapshots == result.summary.snapshots);
+    CHECK(report.snapshots_checked == result.summary.snapshots);
     CHECK(report.inputs == result.summary.inputs);
     CHECK(report.outputs == result.summary.outputs);
     CHECK(fresh.get<0>().log == set.get<0>().log);
 
-    // The next start takes the next epoch.
+    // The epoch file holds the last epoch taken.
     std::uint64_t epoch = 0;
     REQUIRE(node::read_epoch(dir.file("epoch"), epoch) == Status::Ok);
-    CHECK(epoch == 1);
+    CHECK(epoch == 5);
     CHECK(wss.error().empty());
     CHECK(https.error().empty());
   }

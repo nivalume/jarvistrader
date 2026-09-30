@@ -766,7 +766,7 @@ M2 的实测值（本仓库的云端开发容器，单核，Release 构建；`be
 格式：`{node_tag}-{epoch}-{seq}`。
 
 - `node_tag`：即 `node.id`，1 到 8 个 ASCII 字母或数字，配置解析时校验。
-- `epoch`：持久化计数器，每次节点启动加一，Base32 编码 6 字符。计数器文件（`jarvis/node/epoch_store.hpp`）以原子方式替换：写临时文件、fsync、rename、fsync 目录。文件损坏时启动失败而不是从 1 重来，因为从 1 重来可能复用仍挂在交易所的订单的 id。
+- `epoch`：持久化计数器，每次节点启动加一，Base32 编码 6 字符。计数器文件（`jarvis/node/epoch_store.hpp`）以原子方式替换：写临时文件、fsync、rename、fsync 目录。文件损坏时启动失败而不是从 1 重来，因为从 1 重来可能复用仍挂在交易所的订单的 id。live 运行的第一条输入是记录下来的 `RunStart{epoch, prior_seq}`，内核据此设定 epoch，所以回放生成的 id 与运行时相同，与回放时的配置无关（M5-I2 之前 epoch 只在内核配置中，回放 epoch 不为 1 的 live 运行会出现偏差）。
 - `seq`：本 epoch 内单调递增，Base32 编码 8 字符。
 - 总长不超过 24 字符，满足 Binance `newClientOrderId` 的正则 `^[\.A-Z\:/a-z0-9_-]{1,36}$`。
 - 不含墙钟时间，在回放中确定。Binance 只保证未完成订单之间的 `clientOrderId` 唯一，jarvis 通过 epoch 保证永不复用。
@@ -1448,11 +1448,23 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - 每 `snapshot_every` 条事件写一次 `EngineState` 快照（同样是定宽显式编码），包含策略状态哈希；之后可截断更早的日志段。
 - 恢复 = 最近快照 + 日志尾部回放 + 对账。
 
+快照的实现（M5-I2）：
+
+- 内容是内核的全部状态，而不是摘要：instrument 表、订阅矩阵、订单簿、K 线聚合器、特征、定时器队列（连同其中已取消的旧条目与编号计数）、批次缓冲、OMS（订单、成交记录、id 哈希表、已关闭订单环）、组合、风控（TradingState、限速窗口、亏损监控）、执行算法的父单、对账器（会话阶段、暂存的事件与账户状态、轻量对账的待确认差异）、连接状态、`countdownCancelAll` 定时器与各项统计。配置决定的部分（容量、费率、保证金模型、风控限额）不写入，快照只能恢复到用同一配置构建的内核中。
+- 编码：每个有状态的类用一个成员模板 `template <typename Ar> void state(Ar& ar) { ar(a_, b_, c_); }` 同时描述保存与恢复（`jarvis/core/state.hpp`）。整数、枚举、bool 按定宽小端序；有字段描述符的模型结构体（`jarvis/model/schema.hpp`）逐字段编码；Price、Quantity 等数值类型复用事件日志的编码器，恢复时经过各自的校验构造函数；标识符、币种、UUID 的默认值（未使用槽位中的空 id）按原样恢复。容器按实际布局写出，恢复后分配顺序与原内核相同：定时器 arena 的空闲表、OMS 被淘汰槽位的复用顺序、成交记录的空闲链都保持不变。从未使用过的 OMS 订单槽与成交记录只写数量，订单簿价位窗口按零段压缩。
+- 策略自己的状态：C++ 策略同样写一个 `state(ar)` 成员模板；Python 策略定义 `on_save(self) -> bytes` 与 `on_load(self, state)`。每个策略的状态写在自己的长度前缀段中，恢复时必须恰好读完。没有提供的策略仍会被快照，但快照标记为不完整：恢复后该策略保持构造时的状态，所以不能用来精确续跑，恢复这类节点只能从日志开头回放。
+- 快照点：一次 `BatchEnd` 输入处理完、输出全部写出之后，且距上一个快照点至少 `snapshot_every` 条输入（`engine/snapshot_schedule.hpp`）。这里处于两个批次之间，没有未交付的输出；回放对记录下来的输入使用同一规则，所以节点与回放在同一条输入之后取快照。
+- 文件：运行目录下的 `snapshot-<seq>.jsnap`，内容为魔数、格式版本、本次运行的日志头（配置 hash、seed、提交号）、取快照的输入 `seq` 与 `ts`、完整标志、策略数、状态字节与 CRC-32C（`jarvis/node/snapshot_file.hpp`）。先写临时文件再改名，所以文件要么完整、要么不存在。backtest 在 core 线程上直接写；sandbox 与 live 由 persist 线程在日志落盘到该快照的位置之后再写（并同步文件与目录），磁盘上的快照从不超前于日志。等待写出的快照最多两个，更多时替换较旧的一个并计数。
+- 取快照失败（策略的 `on_save` 抛出异常、文件写不进去）只计数（`RunSummary::snapshot_failures`），运行继续：日志才是记录，快照只是加速。
+- 回放校验：`--replay` 在每个快照点重算内核状态，与目录中同一 `seq` 的快照文件逐字节比较，不同即为 `ReplayDivergence`；`--from-snapshot FILE` 从该快照恢复内核（只接受完整的快照），然后从下一条输入开始回放，输出仍须与日志逐字节一致。
+- 测试：引擎层性质测试在随机输入序列的任意一步保存、恢复到新引擎，逐步比较两者的输出、策略回调与最终状态字节；对账性质测试在随机交易所历史的任意一步让一个从快照恢复的孪生引擎加入，此后每一步都比较；golden 场景（订单、K 线、批次、订单簿、特征、报价、成交）每隔几十条输入取一次快照，逐个从快照回放到结尾均无偏差。
+
 ### 16.4 命令行工具
 
 | 命令 | 作用 |
 | --- | --- |
-| `jarvis replay <run-dir> [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
+| `jarvis replay <run-dir> [--from-snapshot file] [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，并在每个快照点与目录中的快照文件逐字节比对；`--from-snapshot` 从该快照开始回放；可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
+| `jarvis snapshot <file>` | 打印快照文件的 `seq`、完整与否、配置 hash、提交号与状态字节的 SHA-256（确定性门比较 Release 与 `-O0` 写出的快照用它） |
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |
 | `jarvis trace-export <log> --spec <X> --out <dir>` | 按规约变量投影日志，生成 `<X>Trace.tla` 与 `.cfg`（第 18.2 节） |

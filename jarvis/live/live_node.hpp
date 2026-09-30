@@ -182,6 +182,12 @@ public:
     return inner_->record(key, event);
   }
 
+  template <typename Engine>
+    requires requires(Rec& r, Engine& e, const core::EventKey& k) { r.snapshot(e, k); }
+  [[nodiscard]] core::Status snapshot(Engine& engine, const core::EventKey& key) {
+    return inner_->snapshot(engine, key);
+  }
+
   [[nodiscard]] core::Status emit(const core::EventKey& key, const model::Output& output) {
     const core::Status s = inner_->emit(key, output);
     if (!core::ok(s)) {
@@ -236,6 +242,8 @@ template <strategy::StrategySet SS, typename Recorder, typename Hook>
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
   options.await_sync = true;
+  options.snapshot_every = config.persistence.snapshot_every;
+  options.run_start = model::RunStart{plan.epoch, 0, {}};
   node::shutdown_options(config, options);
   backtest::Driver driver{engine, source, router, options};
   const core::Status s = driver.run_realtime(pump, result.summary);

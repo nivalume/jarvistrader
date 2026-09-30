@@ -145,6 +145,9 @@ public:
     return core::Status::Ok;
   }
 
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) { ar(status_, previous_, quantity_, filled_); }
+
 private:
   static model::Quantity zero_like(model::Quantity q) noexcept {
     model::Quantity out;

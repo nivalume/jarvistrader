@@ -7,7 +7,8 @@
 //   jarvis dump DIR [--out FILE] [--no-header] [--limit N]
 //   jarvis roundtrip INPUT --out FILE
 //   jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]
-//   jarvis replay RUN_DIR [--until SEQ] [--dump-state]
+//   jarvis replay RUN_DIR [--from-snapshot FILE] [--until SEQ] [--dump-state]
+//   jarvis snapshot FILE
 //   jarvis trace-export LOG_DIR --spec NAME --out DIR
 //   jarvis report RUN_DIR [--out FILE]
 //   jarvis admin SOCKET COMMAND | jarvis admin --config FILE COMMAND
@@ -31,6 +32,7 @@
 #include <vector>
 
 #include "jarvis/core/event_key.hpp"
+#include "jarvis/core/sha256.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
@@ -46,6 +48,7 @@
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
 #include "jarvis/node/run_report.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -68,7 +71,8 @@ constexpr std::string_view kUsageText =
     "  jarvis fingerprint --compare A B [--records inputs|outputs|all]\n"
     "  jarvis dump DIR [--out FILE] [--no-header] [--limit N]\n"
     "  jarvis roundtrip INPUT --out FILE\n"
-    "  jarvis replay RUN_DIR [--until SEQ] [--dump-state]\n"
+    "  jarvis replay RUN_DIR [--from-snapshot FILE] [--until SEQ] [--dump-state]\n"
+    "  jarvis snapshot FILE\n"
     "  jarvis trace-export LOG_DIR --spec NAME --out DIR\n"
     "  jarvis report RUN_DIR [--out FILE]\n"
     "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n"
@@ -373,6 +377,9 @@ int cmd_replay(const Args& args) {
   const std::string directory{args.positional[0]};
   node::ReplayOptions options;
   options.dump_state = args.flag("--dump-state");
+  if (const auto from = args.option("--from-snapshot")) {
+    options.from_snapshot = std::string{*from};
+  }
   if (const auto until = args.option("--until")) {
     std::uint64_t seq = 0;
     if (!parse_u64(*until, seq)) {
@@ -536,6 +543,35 @@ int cmd_trace_export(const Args& args) {
   return kOk;
 }
 
+// An EngineState snapshot file (docs/architecture.md section 16.3): where it was taken, whether
+// every strategy's state is in it, and the SHA-256 of the state bytes (the determinism gate
+// compares those: the file's header names the build).
+int cmd_snapshot(const Args& args) {
+  if (args.positional.size() != 1) {
+    return usage("snapshot needs one snapshot file");
+  }
+  const std::string path{args.positional[0]};
+  std::vector<std::byte> file;
+  Status s = node::read_file_bytes(path, file);
+  jarvis::model::wire::LogHeader header;
+  node::SnapshotInfo info;
+  std::span<const std::byte> body;
+  if (jarvis::core::ok(s)) {
+    s = node::decode_snapshot(file, header, info, body);
+  }
+  if (!jarvis::core::ok(s)) {
+    return failed("snapshot " + path, s);
+  }
+  jarvis::core::Sha256 sha;
+  sha.update(body);
+  std::cout << "seq " << info.seq << ", ts " << info.ts << ", strategies " << info.strategies
+            << (info.complete ? ", complete" : ", incomplete") << ", config "
+            << node::hex(header.config_hash).substr(0, 16) << ", commit "
+            << header.git_commit.view() << "\n"
+            << "state " << node::hex(sha.finish()) << " bytes=" << body.size() << "\n";
+  return kOk;
+}
+
 // The subcommands that read a log or a run directory.
 int run_log_command(std::string_view command, std::span<char*> rest, Args& args) {
   if (command == "dump") {
@@ -544,13 +580,16 @@ int run_log_command(std::string_view command, std::span<char*> rest, Args& args)
     return parse_args(rest, kValues, kFlags, args) ? cmd_dump(args) : kUsage;
   }
   if (command == "replay") {
-    constexpr std::array<std::string_view, 1> kValues = {"--until"};
+    constexpr std::array<std::string_view, 2> kValues = {"--until", "--from-snapshot"};
     constexpr std::array<std::string_view, 1> kFlags = {"--dump-state"};
     return parse_args(rest, kValues, kFlags, args) ? cmd_replay(args) : kUsage;
   }
   if (command == "report") {
     constexpr std::array<std::string_view, 1> kValues = {"--out"};
     return parse_args(rest, kValues, {}, args) ? cmd_report(args) : kUsage;
+  }
+  if (command == "snapshot") {
+    return parse_args(rest, {}, {}, args) ? cmd_snapshot(args) : kUsage;
   }
   if (command == "trace-export") {
     constexpr std::array<std::string_view, 2> kValues = {"--spec", "--out"};

@@ -265,6 +265,9 @@ template <typename F> constexpr void fields(Shutdown& e, F&& f) {
 template <typename F> constexpr void fields(AdminCommand& e, F&& f) {
   f("action", e.action), f("ts_init", e.ts_init);
 }
+template <typename F> constexpr void fields(RunStart& e, F&& f) {
+  f("epoch", e.epoch), f("prior_seq", e.prior_seq), f("ts_init", e.ts_init);
+}
 template <typename F> constexpr void fields(RateLimitFeedback& e, F&& f) {
   f("kind", e.kind), f("interval_ns", e.interval_ns), f("used", e.used), f("limit", e.limit),
       f("ts_init", e.ts_init);

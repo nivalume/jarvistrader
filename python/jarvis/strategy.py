@@ -33,6 +33,16 @@ order to an execution algorithm (``passthrough``, ``passive_then_aggressive``, `
 An exception in a callback becomes a recorded StrategyError; ``risk.on_strategy_error`` decides
 what happens next (by default the strategy stops). Inside callbacks the wall clock and
 ``random`` are off limits (``jarvis.determinism``); use ``ctx.now()`` and ``ctx.rng(key)``.
+
+EngineState snapshots (docs/architecture.md section 16.3): a strategy that keeps state of its own
+defines both ``on_save(self) -> bytes`` and ``on_load(self, state: bytes)``. The node calls
+``on_save`` at each snapshot point (``persistence.snapshot_every`` inputs, after a batch) and
+``on_load`` with the same bytes when it restores that snapshot; neither gets a context. The
+bytes must be a function of the strategy's state alone (a replay compares snapshots byte for
+byte), for example ``json.dumps(..., sort_keys=True).encode()``. Orders, positions,
+subscriptions and timers are the kernel's and are in the snapshot already. A strategy without
+these methods is still snapshotted, but restoring leaves it as constructed, so a node recovers
+it by replaying the log instead.
 """
 
 from __future__ import annotations

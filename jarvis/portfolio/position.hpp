@@ -258,6 +258,15 @@ private:
   core::UnixNanos ts_last_;
   model::Price last_px_;
   model::Quantity last_qty_;
+
+public:
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) {
+    ar(signed_raw_, size_precision_, entry_, open_notional_, close_notional_, close_raw_,
+       avg_open_raw_, peak_raw_, realized_raw_, commission_raw_, funding_raw_, total_realized_raw_,
+       total_commission_raw_, total_funding_raw_, opening_order_id_, ts_opened_, ts_last_, last_px_,
+       last_qty_);
+  }
 };
 
 } // namespace jarvis::portfolio

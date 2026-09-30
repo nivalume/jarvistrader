@@ -27,19 +27,20 @@ std::string node_usage(std::string_view program) {
          " --config FILE [--env ENV] [--set path=value]... [--out DIR] [--run-for SECONDS]\n"
          "  " +
          p +
-         " --replay RUN_DIR [--until SEQ] [--dump-state]\n"
+         " --replay RUN_DIR [--from-snapshot FILE] [--until SEQ] [--dump-state]\n"
          "\n"
          "--config runs the node and writes the run log to --out or persistence.dir; a sandbox\n"
          "or live node runs until SIGINT or SIGTERM, or for --run-for seconds. --replay\n"
          "recomputes a run's outputs from its inputs and reports the first divergence (exit\n"
-         "code 3).\n";
+         "code 3); the run's EngineState snapshots must match the replayed state. With\n"
+         "--from-snapshot the replay starts from that snapshot instead of the first input.\n";
 }
 
 namespace {
 
 bool takes_value(std::string_view arg) {
   return arg == "--config" || arg == "--env" || arg == "--set" || arg == "--out" ||
-         arg == "--replay" || arg == "--until" || arg == "--run-for";
+         arg == "--replay" || arg == "--until" || arg == "--run-for" || arg == "--from-snapshot";
 }
 
 bool assign(std::string_view arg, const std::string& value, NodeArgs& out, std::string& error) {
@@ -53,6 +54,8 @@ bool assign(std::string_view arg, const std::string& value, NodeArgs& out, std::
     out.out = value;
   } else if (arg == "--replay") {
     out.replay = value;
+  } else if (arg == "--from-snapshot") {
+    out.from_snapshot = value;
   } else if (arg == "--run-for") {
     std::uint64_t seconds = 0;
     if (!parse_u64(value, seconds) || seconds == 0) {
@@ -85,8 +88,8 @@ bool consistent(const NodeArgs& out, std::string& error) {
             "--run-for)";
     return false;
   }
-  if (out.replay.empty() && (out.until || out.dump_state)) {
-    error = "--until and --dump-state apply to --replay";
+  if (out.replay.empty() && (out.until || out.dump_state || !out.from_snapshot.empty())) {
+    error = "--until, --dump-state and --from-snapshot apply to --replay";
     return false;
   }
   return true;
@@ -155,6 +158,9 @@ int print_backtest(std::ostream& out, const BacktestResult& result) {
       << "skipped: " << s.skipped << "\n"
       << "state: " << model::to_string(s.state) << (s.halted ? " (halted by a strategy error)" : "")
       << "\n";
+  if (s.snapshots != 0 || s.snapshot_failures != 0) {
+    out << "snapshots: " << s.snapshots << " (" << s.snapshot_failures << " failed)\n";
+  }
   if (!result.directory.empty()) {
     Fingerprint fp;
     if (core::ok(fingerprint_log(result.directory, RecordFilter::All, fp))) {
@@ -172,6 +178,12 @@ int print_replay(std::ostream& out, const std::string& directory, const ReplayRe
   } else {
     out << "replayed " << directory << ": " << report.inputs << " inputs, " << report.outputs
         << " outputs, no divergence\n";
+  }
+  if (report.start_seq != 0) {
+    out << "started from the snapshot after seq " << report.start_seq << "\n";
+  }
+  if (report.snapshots_checked != 0) {
+    out << "snapshots matching the replayed state: " << report.snapshots_checked << "\n";
   }
   if (!report.state.empty()) {
     out << report.state;

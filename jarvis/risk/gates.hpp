@@ -341,6 +341,10 @@ struct RiskStats {
   std::uint64_t modify_rejected = 0;
   std::uint64_t kill_switches = 0;
   std::uint64_t state_changes = 0;
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(checked, denied_a, denied_b, modify_rejected, kill_switches, state_changes);
+  }
 };
 
 // The gates' state: configuration, TradingState, rate limit, instrument statuses, whitelists
@@ -510,6 +514,12 @@ private:
   core::FixedVector<std::uint8_t> allowed_;    // strategy x slot
   core::FixedVector<std::uint8_t> restricted_; // by strategy
   RiskStats stats_;
+
+public:
+  // Snapshot encoding (core/state.hpp); the configuration is not part of it.
+  template <typename Ar> void state(Ar& ar) {
+    ar(state_, limiter_, monitor_, trading_, allowed_, restricted_, stats_);
+  }
 };
 
 } // namespace jarvis::risk

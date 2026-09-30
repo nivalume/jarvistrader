@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "jarvis/core/clock.hpp"
+#include "jarvis/core/state.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/data/book.hpp"
@@ -41,6 +42,16 @@
 //                                                 closed, adjusted (funding)
 //   on_timer(ctx, TimerKey, UnixNanos deadline)
 //   on_error(ctx, StrategyError)                  this strategy failed
+//
+// A strategy that keeps state of its own describes it for EngineState snapshots (section 16.3)
+// with one member template, used to save and to restore it:
+//
+//   template <typename Ar> void state(Ar& ar) { ar(count_, last_price_, open_ids_); }
+//
+// `ar` takes integers, enums, bool, the model's value types (Price, Quantity, InstrumentId,
+// ClientOrderId, ...), std::optional, std::array, std::variant and core::FixedVector of those.
+// Without it a snapshot still holds the kernel's state, but restoring one leaves the strategy as
+// it was constructed, so a node recovers such strategies by replaying the log instead.
 
 namespace jarvis::strategy {
 
@@ -253,5 +264,31 @@ template <typename S> core::Status invoke_data(S& s, Context& ctx, const DataVie
 // A C++ strategy: a movable class. Every callback is optional.
 template <typename S>
 concept Strategy = std::is_class_v<S> && std::move_constructible<S>;
+
+template <typename S>
+concept StatefulStrategy = requires(S& s, core::StateWriter& w, core::StateReader& r) {
+  s.state(w);
+  s.state(r);
+};
+
+template <typename S> constexpr bool has_state() noexcept { return StatefulStrategy<S>; }
+
+template <typename S> core::Status invoke_save(S& s, core::StateWriter& w) {
+  if constexpr (StatefulStrategy<S>) {
+    s.state(w);
+    return w.status();
+  } else {
+    return core::Status::Ok;
+  }
+}
+
+template <typename S> core::Status invoke_load(S& s, core::StateReader& r) {
+  if constexpr (StatefulStrategy<S>) {
+    s.state(r);
+    return r.status();
+  } else {
+    return core::Status::Ok;
+  }
+}
 
 } // namespace jarvis::strategy

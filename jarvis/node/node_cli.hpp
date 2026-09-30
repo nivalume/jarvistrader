@@ -17,7 +17,7 @@
 // (docs/architecture.md section 4.5).
 //
 //   PROGRAM --config FILE [--env ENV] [--set path=value]... [--out DIR] [--run-for SECONDS]
-//   PROGRAM --replay RUN_DIR [--until SEQ] [--dump-state]
+//   PROGRAM --replay RUN_DIR [--from-snapshot FILE] [--until SEQ] [--dump-state]
 
 namespace jarvis::node {
 
@@ -31,6 +31,7 @@ struct NodeArgs {
   ConfigOverrides overrides;
   std::string out;
   std::string replay;
+  std::string from_snapshot; // --replay from this snapshot file of the run
   std::optional<std::uint64_t> until;
   std::optional<std::uint64_t> run_for_s; // sandbox and live: stop after this long
   bool dump_state = false;

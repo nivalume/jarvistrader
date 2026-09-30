@@ -15,6 +15,7 @@
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/event_log.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 
 // The persist thread (docs/architecture.md sections 7.1 and 16.2). In sandbox and live the core
 // thread does not write the event log itself: it encodes each record and hands it over a SPSC
@@ -33,6 +34,11 @@
 // A full ring makes the core wait (counted in stalls); a record is never dropped. When a write
 // or a sync fails the persist thread stops taking records and durable() stops moving: the core's
 // next append fails with IoError, and in barrier mode no further command leaves.
+//
+// EngineState snapshots (section 16.3) go the same way: the core hands over the encoded state
+// with the log position it was taken at, and the persist thread writes the snapshot file once
+// the log is durable up to there, so a snapshot on disk never runs ahead of the log. Two may
+// wait; a third replaces the older waiting one (counted).
 
 namespace jarvis::live {
 
@@ -48,9 +54,11 @@ struct PersistStats {
   std::uint64_t position = 0;
   std::uint64_t durable = 0;
   std::uint64_t syncs = 0;
-  std::uint64_t stalls = 0;   // appends that found the ring full
-  std::uint64_t max_lag = 0;  // most bytes one sync made durable: the widest window at risk
-  std::uint64_t segments = 0; // segments written
+  std::uint64_t stalls = 0;    // appends that found the ring full
+  std::uint64_t max_lag = 0;   // most bytes one sync made durable: the widest window at risk
+  std::uint64_t segments = 0;  // segments written
+  std::uint64_t snapshots = 0; // snapshot files written
+  std::uint64_t snapshots_dropped = 0; // replaced while waiting
 };
 
 // From [persistence]: barrier for mode = "barrier", sync_every_ms.
@@ -73,6 +81,9 @@ public:
   [[nodiscard]] core::Status append(const core::EventKey& key, const model::Event& event);
   [[nodiscard]] core::Status append_output(const core::EventKey& key, const model::Output& output);
   [[nodiscard]] core::Status append_record(std::span<const std::byte> record);
+  // An EngineState snapshot taken after the latest record; written once that record is durable.
+  [[nodiscard]] core::Status write_snapshot(const node::SnapshotInfo& info,
+                                            std::vector<std::byte> body);
   // The log position after the latest record the core appended.
   [[nodiscard]] std::uint64_t position() const noexcept;
 

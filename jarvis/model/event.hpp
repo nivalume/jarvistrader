@@ -272,6 +272,18 @@ struct AdminCommand {
   core::UnixNanos ts_init;
 };
 
+// The first input of a live run (docs/architecture.md sections 4.1 and 16.3): new ClientOrderIds
+// take this run's `epoch`, so a replay issues the ids the run issued. With prior_seq > 0 the run
+// continues an earlier run of this node whose state the kernel was restored to, up to that run's
+// input `prior_seq`, and what belonged to the earlier process is reset: its venue connections are
+// gone (the account reconciles again), shutdown and stop requests clear, the lifecycle starts
+// over from Init, and the countdownCancelAll timer is disarmed.
+struct RunStart {
+  std::uint64_t epoch = 0;
+  std::uint64_t prior_seq = 0;
+  core::UnixNanos ts_init;
+};
+
 // The venue's count of one rate limit window (docs/architecture.md section 10.4), from response
 // headers and the WebSocket API's rateLimits: the kernel raises its own count of the matching
 // order window to at least `used`. An HTTP 429 arrives as used = limit (the window is spent).
@@ -304,7 +316,8 @@ using Event =
                  OrderPendingUpdate, OrderPendingCancel, OrderModifyRejected, OrderCancelRejected,
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
-                 CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot, AdminCommand>;
+                 CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot, AdminCommand,
+                 RunStart>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.

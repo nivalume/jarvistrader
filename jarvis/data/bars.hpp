@@ -270,6 +270,13 @@ private:
   model::Price close_;
   std::uint64_t volume_raw_ = 0;
   core::UnixNanos last_ts_;
+
+public:
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) {
+    ar(type_, mode_, price_precision_, size_precision_, volume_step_raw_, interval_ns_, window_end_,
+       count_, open_, high_, low_, close_, volume_raw_, last_ts_);
+  }
 };
 
 } // namespace jarvis::data

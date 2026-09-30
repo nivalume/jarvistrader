@@ -1,6 +1,8 @@
 #include "jarvis/live/persist.hpp"
 
 #include <algorithm>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -19,6 +21,7 @@ constexpr std::size_t kMaxRecordBytes =
 constexpr std::size_t kMinRingBytes = std::size_t{4} << 20U;
 constexpr std::size_t kBatch = 4096; // records per pass before the persist thread looks at syncing
 constexpr int kSpins = 64;           // idle passes that only yield before the thread sleeps
+constexpr std::size_t kSnapshotsWaiting = 2;
 
 std::uint64_t load(const std::atomic<std::uint64_t>& a) {
   return a.load(std::memory_order_relaxed);
@@ -31,6 +34,12 @@ struct Persister::Impl {
       : ring{std::max(c.ring_bytes, kMinRingBytes)}, scratch(kMaxRecordBytes), config{c} {
     config.log.durable = true;
   }
+
+  struct WaitingSnapshot {
+    std::uint64_t position = 0;
+    node::SnapshotInfo info;
+    std::vector<std::byte> body;
+  };
 
   SpscByteRing ring;
   std::thread thread;
@@ -46,17 +55,45 @@ struct Persister::Impl {
   std::atomic<std::uint64_t> syncs{0};
   std::atomic<std::uint64_t> max_lag{0};
   std::atomic<std::uint64_t> segments{0};
+  std::atomic<std::uint64_t> snapshots{0};
+  std::atomic<std::uint64_t> snapshots_dropped{0};
 
   std::vector<std::byte> scratch; // the core's encoding buffer
   PersistConfig config;
+  std::mutex snapshot_mutex;
+  std::deque<WaitingSnapshot> waiting; // guarded by snapshot_mutex
   node::EventLogWriter writer;
   std::atomic<bool> closing{false};
   std::atomic<bool> failed{false};
   Status error = Status::Ok; // the persist thread's; read after join
+  std::atomic<bool> has_waiting{false};
 
   void fail(Status s) {
     error = s;
     failed.store(true, std::memory_order_release);
+  }
+
+  // Writes the waiting snapshots whose position is durable (all of them with `all`).
+  bool write_snapshots(std::uint64_t synced, bool all) {
+    while (has_waiting.load(std::memory_order_acquire)) {
+      WaitingSnapshot next;
+      {
+        const std::lock_guard lock{snapshot_mutex};
+        if (waiting.empty() || (!all && waiting.front().position > synced)) {
+          return true;
+        }
+        next = std::move(waiting.front());
+        waiting.pop_front();
+        has_waiting.store(!waiting.empty(), std::memory_order_release);
+      }
+      const Status s = writer.write_snapshot(next.info, next.body);
+      if (!core::ok(s)) {
+        fail(s);
+        return false;
+      }
+      snapshots.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
   }
 
   // Takes up to kBatch records; false after a failed write.
@@ -118,6 +155,9 @@ struct Persister::Impl {
         }
         last_sync = now;
       }
+      if (!write_snapshots(synced, false)) {
+        return;
+      }
       if (closing_now && moved == 0) {
         break;
       }
@@ -129,6 +169,9 @@ struct Persister::Impl {
         std::this_thread::sleep_for(config.barrier ? std::chrono::microseconds{20}
                                                    : std::chrono::microseconds{500});
       }
+    }
+    if (!write_snapshots(synced, true)) {
+      return;
     }
     const Status s = writer.close();
     if (!core::ok(s)) {
@@ -206,6 +249,24 @@ Status Persister::append_record(std::span<const std::byte> record) {
   return Status::Ok;
 }
 
+Status Persister::write_snapshot(const node::SnapshotInfo& info, std::vector<std::byte> body) {
+  Impl& p = *impl_;
+  if (!p.thread.joinable() || p.closing.load(std::memory_order_relaxed)) {
+    return Status::InvalidState;
+  }
+  if (p.failed.load(std::memory_order_acquire)) {
+    return Status::IoError;
+  }
+  const std::lock_guard lock{p.snapshot_mutex};
+  if (p.waiting.size() >= kSnapshotsWaiting) {
+    p.waiting.pop_front();
+    p.snapshots_dropped.fetch_add(1, std::memory_order_relaxed);
+  }
+  p.waiting.push_back(Impl::WaitingSnapshot{p.position, info, std::move(body)});
+  p.has_waiting.store(true, std::memory_order_release);
+  return Status::Ok;
+}
+
 std::uint64_t Persister::position() const noexcept { return impl_->position; }
 
 const std::atomic<std::uint64_t>& Persister::durable() const noexcept { return impl_->durable; }
@@ -214,8 +275,9 @@ bool Persister::failed() const noexcept { return impl_->failed.load(std::memory_
 
 PersistStats Persister::stats() const noexcept {
   const Impl& p = *impl_;
-  return PersistStats{load(p.records), load(p.position_seen), load(p.durable), load(p.syncs),
-                      load(p.stalls),  load(p.max_lag),       load(p.segments)};
+  return PersistStats{load(p.records),  load(p.position_seen), load(p.durable),
+                      load(p.syncs),    load(p.stalls),        load(p.max_lag),
+                      load(p.segments), load(p.snapshots),     load(p.snapshots_dropped)};
 }
 
 Status Persister::close() {

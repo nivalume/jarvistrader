@@ -1,0 +1,20 @@
+# EngineState snapshots on the orders plan (tests/golden/replay_orders): taking them leaves the
+# run log unchanged (expected.run.txt is replay_orders' log), the replay finds every snapshot equal
+# to the state it recomputes, and a replay from an early and from a late snapshot reproduces the
+# rest of the log (docs/architecture.md section 16.3).
+commands = [
+  ["{bin}/bin/golden_node", "catalog", "--seed", "7", "--out", "{out}/catalog", "--instrument"],
+  ["{bin}/bin/golden_node", "--config", "{root}/tests/golden/replay_orders/node.toml",
+   "--set", "data.catalog={out}/catalog", "--set", "persistence.snapshot_every=100",
+   "--out", "{out}/run"],
+  ["{bin}/bin/jarvis", "dump", "{out}/run", "--no-header", "--out", "{out}/run.txt"],
+  ["{bin}/bin/golden_node", "--replay", "{out}/run"],
+  ["{bin}/bin/golden_node", "--replay", "{out}/run", "--from-snapshot",
+   "{out}/run/snapshot-00000000000000000101.jsnap"],
+  ["{bin}/bin/golden_node", "--replay", "{out}/run", "--from-snapshot",
+   "{out}/run/snapshot-00000000000000000805.jsnap"],
+]
+
+[[compare]]
+produced = "run.txt"
+expected = "expected.run.txt"

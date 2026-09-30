@@ -76,6 +76,8 @@ struct AlgoTimerState {
   bool armed = false;
   std::uint64_t deadline = 0;
   core::TimerHandle timer;
+
+  template <typename Ar> void state(Ar& ar) { ar(armed, deadline, timer); }
 };
 
 // The venue-side dead man's switch (RiskConfig::countdown_cancel_ms, section 10.3).
@@ -84,10 +86,14 @@ struct CountdownState {
   bool armed = false;   // the renewal timer is scheduled
   core::TimerHandle timer;
   core::FixedVector<std::uint8_t> live{0}; // by slot: renewed at the last renewal or since
+
+  template <typename Ar> void state(Ar& ar) { ar(running, armed, timer, live); }
 };
 
 struct BookMark {
   std::uint32_t slot = 0;
+
+  template <typename Ar> void state(Ar& ar) { ar(slot); }
 };
 
 using PendingValue =
@@ -101,6 +107,8 @@ struct Pending {
   StrategyIndex strategy = 0;
   bool dirty = false;
   PendingValue value;
+
+  template <typename Ar> void state(Ar& ar) { ar(strategy, dirty, value); }
 };
 
 // OnBatch subscription: every update of the batch.
@@ -111,6 +119,10 @@ struct BatchBuffer {
   bool dirty = false;
   core::FixedVector<model::TradeTick> trades{0};
   core::FixedVector<model::QuoteTick> quotes{0};
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(strategy, kind, instrument_id, dirty, trades, quotes);
+  }
 };
 
 struct AggregatorState {
@@ -121,12 +133,18 @@ struct AggregatorState {
   data::BarAggregator aggregator;
   std::uint64_t armed_deadline = 0; // 0: no close timer armed
   core::TimerHandle timer;
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(bar_type, slot, bar_key, ready, aggregator, armed_deadline, timer);
+  }
 };
 
 struct TimerEntry {
   core::TimerKey key;
   core::TimerHandle handle;
   bool periodic = false;
+
+  template <typename Ar> void state(Ar& ar) { ar(key, handle, periodic); }
 };
 
 class KernelServices {
@@ -497,6 +515,22 @@ public:
   CountdownState countdown;
   AlgoTimerState algo_timer;
   Trading trading;
+
+  // Snapshot encoding (core/state.hpp): everything the engine writes, taken between steps. The
+  // configuration is not part of it (a snapshot restores into a kernel built from the same
+  // one), and neither is the step's output buffer, which is empty between steps.
+  template <typename Ar> void state(Ar& ar) {
+    std::uint32_t transient = static_cast<std::uint32_t>(outputs.size() + failures.size());
+    ar(transient);
+    if (transient != 0) {
+      ar.fail(core::Status::InvalidState); // taken inside a step
+      return;
+    }
+    ar(current, instruments, matrix, features, books, ticks, bar_types, aggregators, timers,
+       timer_entries, pending, dirty_pending, batches, dirty_batches, disabled, halt_requested,
+       stop_requested, node_state, stopped, shutdown, health, countdown, algo_timer, trading,
+       book_types_);
+  }
 
 private:
   [[nodiscard]] static std::uint32_t rows_for(const KernelConfig& c) noexcept {

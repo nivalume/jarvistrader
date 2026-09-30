@@ -15,6 +15,8 @@ template <typename Tag> struct Handle {
   std::uint32_t index = 0;
   std::uint32_t generation = 0;
 
+  template <typename Ar> void state(Ar& ar) { ar(index, generation); }
+
   friend constexpr bool operator==(Handle, Handle) noexcept = default;
   friend constexpr auto operator<=>(Handle, Handle) noexcept = default;
 };
@@ -82,6 +84,48 @@ public:
 
   [[nodiscard]] std::size_t size() const noexcept { return size_; }
   [[nodiscard]] std::size_t capacity() const noexcept { return slots_.size(); }
+
+  // Snapshot encoding: every slot's generation and occupancy, the live values, and the free list
+  // in its order (it decides the next handles).
+  template <typename Ar> void state(Ar& ar) {
+    std::uint32_t capacity = static_cast<std::uint32_t>(slots_.size());
+    ar(capacity);
+    if (capacity != slots_.size()) {
+      ar.fail(Status::CapacityExceeded);
+      return;
+    }
+    for (Slot& slot : slots_) {
+      ar(slot.generation, slot.occupied);
+      if constexpr (Ar::kReading) {
+        slot.value = T{};
+      }
+      if (slot.occupied) {
+        ar(slot.value);
+      }
+    }
+    std::uint32_t free = static_cast<std::uint32_t>(free_.size());
+    ar(free);
+    if (free > slots_.size()) {
+      ar.fail(Status::CapacityExceeded);
+      return;
+    }
+    if constexpr (Ar::kReading) {
+      free_.assign(free, 0);
+    }
+    for (std::uint32_t& index : free_) {
+      ar(index);
+      if (index >= slots_.size()) {
+        ar.fail(Status::OutOfRange);
+        return;
+      }
+    }
+    std::uint64_t size = size_;
+    ar(size);
+    size_ = static_cast<std::size_t>(size);
+    if (size_ + free_.size() != slots_.size()) {
+      ar.fail(Status::InvalidState);
+    }
+  }
 
 private:
   struct Slot {

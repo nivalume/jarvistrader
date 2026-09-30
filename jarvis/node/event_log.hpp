@@ -11,6 +11,7 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 
 namespace jarvis::node {
 
@@ -43,6 +44,10 @@ public:
   [[nodiscard]] core::Status append_output(const core::EventKey& key, const model::Output& output);
   // Appends an already encoded record (as produced by model::wire::encode_record).
   [[nodiscard]] core::Status append_record(std::span<const std::byte> record);
+  // Writes an EngineState snapshot file beside the segments (snapshot_file.hpp); synced with
+  // `durable`.
+  [[nodiscard]] core::Status write_snapshot(const SnapshotInfo& info,
+                                            std::span<const std::byte> body);
   [[nodiscard]] core::Status flush();
   // flush() and fdatasync: every record appended so far survives a crash.
   [[nodiscard]] core::Status sync();

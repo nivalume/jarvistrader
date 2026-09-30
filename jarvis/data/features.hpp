@@ -42,6 +42,8 @@ struct FeatureSpec {
   model::InstrumentId instrument_id;
   std::uint32_t window = 0; // EMA period; VWAP and RealizedVol window in trades
 
+  template <typename Ar> void state(Ar& ar) { ar(kind, instrument_id, window); }
+
   friend constexpr bool operator==(const FeatureSpec&, const FeatureSpec&) noexcept = default;
 };
 
@@ -170,6 +172,12 @@ public:
     return has_last_;
   }
 
+  // Snapshot encoding (core/state.hpp); the window ring keeps its capacity (the spec's window).
+  template <typename Ar> void state(Ar& ar) {
+    ar(spec_, slot_, has_value_, ema_raw_, last_price_, ring_, head_, sum_contribution_, sum_size_,
+       last_, has_last_);
+  }
+
 private:
   void remember(bool produced, model::Decimal value) noexcept {
     if (produced) {
@@ -182,6 +190,8 @@ private:
     std::int64_t price = 0;
     std::uint64_t size = 0;
     core::i128 contribution = 0; // price*size (VWAP) or squared return (RealizedVol)
+
+    template <typename Ar> void state(Ar& ar) { ar(price, size, contribution); }
   };
 
   // Adds `sample`, evicting the oldest when the window is full.
@@ -282,6 +292,8 @@ public:
   [[nodiscard]] std::size_t size() const noexcept { return features_.size(); }
   [[nodiscard]] Feature& at(FeatureId id) noexcept { return features_[id]; }
   [[nodiscard]] const Feature& at(FeatureId id) const noexcept { return features_[id]; }
+
+  template <typename Ar> void state(Ar& ar) { ar(features_); }
 
 private:
   core::FixedVector<Feature> features_;

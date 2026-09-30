@@ -264,6 +264,9 @@ struct GoldenStrategy {
   std::optional<m::ClientOrderId> bid;
   std::optional<m::ClientOrderId> ask;
 
+  // EngineState snapshots (the plan comes from the configuration).
+  template <typename Ar> void state(Ar& ar) { ar(quotes, bid, ask); }
+
   static Status create(const jarvis::node::StrategyParams& p, GoldenStrategy& out) {
     std::string_view plan;
     const Status s = p.get("plan", plan);

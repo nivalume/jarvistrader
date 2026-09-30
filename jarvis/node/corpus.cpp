@@ -553,6 +553,11 @@ struct CorpusMakers {
     return Status::Ok;
   }
 
+  static Status run_start(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
+    event = m::RunStart{1 + g.draw(94) % 1000U, g.draw(95) % 1'000'000U, g.ts_};
+    return Status::Ok;
+  }
+
   static Status rate_limit(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
     const bool orders = g.draw(76) % 2 == 0;
     event = m::RateLimitFeedback{
@@ -681,8 +686,8 @@ struct CorpusMakers {
 
   // A market-data-heavy mix in which every kind has at least 0.9%, so a few hundred events cover
   // all of them. Same order as model::Event.
-  static constexpr std::array<Weighted, 40> kMix = {{
-      {180, &trade},         {184, &quote},         {70, &deltas},          {35, &bar},
+  static constexpr std::array<Weighted, 41> kMix = {{
+      {180, &trade},         {175, &quote},         {70, &deltas},          {35, &bar},
       {43, &mark},           {26, &index},          {17, &funding},         {9, &status},
       {10, &close},          {9, &liquidation},     {34, &initialized},     {10, &denied},
       {10, &emulated},       {10, &released},       {10, &submitted},       {17, &accepted},
@@ -692,6 +697,7 @@ struct CorpusMakers {
       {26, &timer},          {17, &batch_end},      {9, &lifecycle},        {9, &strategy_error},
       {10, &shutdown},       {9, &pair_def},        {9, &perpetual_def},    {9, &future_def},
       {9, &rate_limit},      {9, &connection},      {9, &venue_snapshot},   {9, &admin},
+      {9, &run_start},
   }};
 };
 

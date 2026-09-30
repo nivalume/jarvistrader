@@ -169,6 +169,7 @@ add_library(
   jarvis/node/strategy_registry.cpp
   jarvis/node/log_source.cpp
   jarvis/node/run_dir.cpp
+  jarvis/node/snapshot_file.cpp
   jarvis/node/state_text.cpp
   jarvis/node/backtest_node.cpp
   jarvis/node/node_cli.cpp

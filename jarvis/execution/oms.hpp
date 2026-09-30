@@ -53,6 +53,13 @@ struct OrderRecord {
   bool used = false;
 };
 
+// Snapshot encoding (core/state.hpp); a free function because `state` names the order's state.
+template <typename Ar> void state_io(Ar& ar, OrderRecord& r) {
+  ar(r.client_order_id, r.venue_order_id, r.strategy, r.slot, r.instrument_id, r.side, r.type,
+     r.time_in_force, r.post_only, r.reduce_only, r.price, r.state, r.fill_notional, r.ts_init,
+     r.ts_venue, r.trades, r.parent, r.parent_seq, r.used);
+}
+
 // Open order quantities of one instrument, for open_exposure() (section 9.3) and the risk gates.
 struct OpenQuantity {
   std::uint64_t buy_raw = 0;    // leaves of open buy orders
@@ -60,6 +67,10 @@ struct OpenQuantity {
   std::uint32_t orders = 0;     // open orders
   core::u128 buy_notional = 0;  // sum of leaves.raw x price.raw of open priced buy orders
   core::u128 sell_notional = 0; // the same for sells (10^18 scale)
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(buy_raw, sell_raw, orders, buy_notional, sell_notional);
+  }
 };
 
 class Oms {
@@ -249,6 +260,43 @@ public:
     return out;
   }
 
+  // Snapshot encoding (core/state.hpp): the orders ever used (the rest are empty), the trade
+  // records up to the last one ever used (the rest still link the initial free list), the id
+  // table, the closed ring and the open totals, all as laid out, so that the restored OMS evicts
+  // and allocates exactly as this one would.
+  template <typename Ar> void state(Ar& ar) {
+    std::uint32_t used = next_unused_;
+    std::uint32_t capacity = static_cast<std::uint32_t>(orders_.size());
+    ar(capacity, used);
+    if (capacity != orders_.size() || used > orders_.size()) {
+      ar.fail(core::Status::CapacityExceeded);
+      return;
+    }
+    next_unused_ = used;
+    for (std::uint32_t i = 0; i < orders_.size(); ++i) {
+      if (i < next_unused_) {
+        ar(orders_[i]);
+      } else if constexpr (Ar::kReading) {
+        orders_[i] = OrderRecord{};
+      }
+    }
+    std::uint32_t trades = static_cast<std::uint32_t>(trades_.size());
+    std::uint32_t touched = touched_trades();
+    ar(trades, touched);
+    if (trades != trades_.size() || touched > trades) {
+      ar.fail(core::Status::CapacityExceeded);
+      return;
+    }
+    for (std::uint32_t i = 0; i < trades; ++i) {
+      if (i < touched) {
+        ar(trades_[i]);
+      } else if constexpr (Ar::kReading) {
+        trades_[i] = pristine_trade(i);
+      }
+    }
+    ar(table_, closed_, open_, closed_head_, closed_count_, free_trade_, live_);
+  }
+
 private:
   // What an order adds to its instrument's open totals.
   struct Share {
@@ -286,6 +334,8 @@ private:
     std::uint64_t qty_raw = 0;
     std::uint32_t next = kNoIndex;
     bool commission_pending = false; // a Lite fill whose commission has not been reported
+
+    template <typename Ar> void state(Ar& ar) { ar(trade_id, qty_raw, next, commission_pending); }
   };
 
   static std::size_t table_size(std::uint32_t orders) noexcept {
@@ -333,6 +383,25 @@ private:
       next = (next + 1) & mask;
     }
     table_[hole] = kNoIndex;
+  }
+
+  // A trade record as the constructor left it.
+  [[nodiscard]] TradeRecord pristine_trade(std::uint32_t i) const noexcept {
+    return TradeRecord{{}, 0, i + 1 < trades_.size() ? i + 1 : kNoIndex, false};
+  }
+  // One past the last trade record that differs from its initial state.
+  [[nodiscard]] std::uint32_t touched_trades() const noexcept {
+    auto n = static_cast<std::uint32_t>(trades_.size());
+    while (n > 0) {
+      const TradeRecord& t = trades_[n - 1];
+      const TradeRecord p = pristine_trade(n - 1);
+      if (!t.trade_id.empty() || t.qty_raw != p.qty_raw || t.next != p.next ||
+          t.commission_pending) {
+        break;
+      }
+      --n;
+    }
+    return n;
   }
 
   [[nodiscard]] std::uint32_t find_trade(const OrderRecord& r,

@@ -143,6 +143,9 @@ public:
     return core::Status::Ok;
   }
 
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) { ar(tag_, epoch_, seq_); }
+
 private:
   core::FixedString<kMaxNodeTag> tag_;
   std::uint64_t epoch_ = 0;

@@ -16,6 +16,8 @@ public:
   struct Entry {
     EventKey key;
     T payload;
+
+    template <typename Ar> void state(Ar& ar) { ar(key, payload); }
   };
 
   explicit PriorityQueue(std::size_t capacity) : heap_{capacity} {}
@@ -66,6 +68,9 @@ public:
   [[nodiscard]] bool empty() const noexcept { return heap_.empty(); }
   [[nodiscard]] bool full() const noexcept { return heap_.full(); }
   void clear() noexcept { heap_.clear(); }
+
+  // Snapshot encoding: the heap array as it is (a valid heap stays one).
+  template <typename Ar> void state(Ar& ar) { ar(heap_); }
 
 private:
   void sift_up(std::size_t i) noexcept {

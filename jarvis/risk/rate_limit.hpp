@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 
+#include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 
 // Order rate limits (docs/architecture.md section 10.4), in the kernel so a backtest throttles
@@ -68,6 +69,20 @@ public:
   }
 
   [[nodiscard]] std::size_t windows() const noexcept { return count_; }
+
+  // Snapshot encoding (core/state.hpp): each window's current interval and count (the windows
+  // themselves come from the configuration).
+  template <typename Ar> void state(Ar& ar) {
+    std::uint64_t count = count_;
+    ar(count);
+    if (count != count_) {
+      ar.fail(core::Status::InvalidState);
+      return;
+    }
+    for (std::size_t i = 0; i < count_; ++i) {
+      ar(windows_[i].index, windows_[i].used);
+    }
+  }
 
 private:
   struct State {

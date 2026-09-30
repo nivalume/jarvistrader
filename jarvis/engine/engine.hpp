@@ -8,10 +8,12 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "jarvis/core/clock.hpp"
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/fixed_vector.hpp"
+#include "jarvis/core/state.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/data/book.hpp"
@@ -24,6 +26,7 @@
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/reports.hpp"
+#include "jarvis/model/state_io.hpp"
 #include "jarvis/portfolio/portfolio.hpp"
 #include "jarvis/risk/trading_state.hpp"
 #include "jarvis/strategy/context.hpp"
@@ -143,6 +146,90 @@ public:
     return n;
   }
 
+  // ---- EngineState snapshots (docs/architecture.md section 16.3) ----------------------------
+
+  [[nodiscard]] std::size_t strategy_count() const noexcept { return ss_->size(); }
+
+  // Every strategy describes its own state (strategy.hpp): a restored snapshot then continues
+  // exactly as this engine would.
+  [[nodiscard]] bool snapshot_complete() {
+    for (std::size_t i = 0; i < ss_->size(); ++i) {
+      if (!strategy_has_state(static_cast<StrategyIndex>(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Appends the kernel's state and each strategy's own to `out`. Between steps only.
+  [[nodiscard]] core::Status save_state(std::vector<std::byte>& out) {
+    core::StateWriter w{out};
+    state(w);
+    const auto count = static_cast<std::uint16_t>(ss_->size());
+    w.u16(count);
+    std::vector<std::byte> inner;
+    for (std::uint16_t i = 0; i < count; ++i) {
+      const bool has = strategy_has_state(i);
+      w.u8(has ? 1U : 0U);
+      if (!has) {
+        continue;
+      }
+      inner.clear();
+      core::StateWriter iw{inner};
+      if constexpr (requires { ss_->save_state(i, iw); }) {
+        const core::Status s = ss_->save_state(i, iw);
+        if (!core::ok(s)) {
+          return s;
+        }
+      }
+      w.u32(static_cast<std::uint32_t>(inner.size()));
+      w.raw(inner);
+    }
+    return w.status();
+  }
+
+  // Restores what save_state wrote into this engine, built from the same configuration and the
+  // same strategies. On failure the engine is unusable and must be discarded.
+  [[nodiscard]] core::Status load_state(std::span<const std::byte> in) {
+    core::StateReader r{in};
+    state(r);
+    const std::uint16_t count = r.u16();
+    if (!r.ok_state()) {
+      return r.status();
+    }
+    if (count != ss_->size()) {
+      return core::Status::InvalidArgument;
+    }
+    for (std::uint16_t i = 0; i < count; ++i) {
+      const bool has = r.u8() == 1U;
+      if (!r.ok_state()) {
+        return r.status();
+      }
+      if (has != strategy_has_state(i)) {
+        return core::Status::InvalidState;
+      }
+      if (!has) {
+        continue;
+      }
+      const std::uint32_t n = r.u32();
+      const std::span<const std::byte> bytes = r.raw(n);
+      if (!r.ok_state()) {
+        return r.status();
+      }
+      core::StateReader ir{bytes};
+      if constexpr (requires { ss_->load_state(i, ir); }) {
+        const core::Status s = ss_->load_state(i, ir);
+        if (!core::ok(s)) {
+          return s;
+        }
+      }
+      if (ir.remaining() != 0) {
+        return core::Status::InvalidArgument;
+      }
+    }
+    return r.remaining() == 0 ? core::Status::Ok : core::Status::InvalidArgument;
+  }
+
 private:
   // ---- dispatch -----------------------------------------------------------------------------
 
@@ -167,7 +254,14 @@ private:
       return simple(e, data::DataKind::Close);
     } else if constexpr (std::is_same_v<T, model::LiquidationOrder>) {
       return simple(e, data::DataKind::Liquidation);
-    } else if constexpr (std::is_same_v<T, model::NodeLifecycle>) {
+    } else {
+      return dispatch_other(e);
+    }
+  }
+
+  // Everything that is not market data: kernel inputs, venue events, definitions, control.
+  template <typename T> core::Status dispatch_other(const T& e) {
+    if constexpr (std::is_same_v<T, model::NodeLifecycle>) {
       return on_lifecycle(e);
     } else if constexpr (std::is_same_v<T, model::TimerFired>) {
       return on_timer_fired(e);
@@ -196,6 +290,8 @@ private:
       return on_shutdown(e);
     } else if constexpr (std::is_same_v<T, model::AdminCommand>) {
       return on_admin(e);
+    } else if constexpr (std::is_same_v<T, model::RunStart>) {
+      return on_run_start(e);
     } else {
       return core::Status::Ok;
     }
@@ -776,6 +872,16 @@ private:
     return core::Status::Ok;
   }
 
+  template <typename Ar> void state(Ar& ar) { ar(k_, started_); }
+
+  [[nodiscard]] bool strategy_has_state(StrategyIndex i) {
+    if constexpr (requires { ss_->has_state(i); }) {
+      return ss_->has_state(i);
+    } else {
+      return false;
+    }
+  }
+
   // Calls `call(s, ctx)` for every strategy still receiving callbacks; a failure is noted.
   template <typename F> void for_each_active(F&& call) {
     for (std::size_t i = 0; i < ss_->size(); ++i) {
@@ -789,6 +895,55 @@ private:
         k_.fail(s, status);
       }
     }
+  }
+
+  // A live run's first input (sections 4.1 and 16.3): new ClientOrderIds take its epoch. When
+  // the run continues an earlier run's state, what belonged to that process goes: its
+  // connections are gone, so the account reconciles again (trading halts until it has);
+  // shutdown, stop and halt requests and the Degraded mark clear; the lifecycle restarts from
+  // Init (on_start is not called again: the strategies have started); the countdown timer is
+  // disarmed (the venue's own countdown keeps running until the new session renews or lets it
+  // fire); updates buffered for a batch the earlier run never closed are dropped. In a fresh
+  // kernel all of that is already so.
+  core::Status on_run_start(const model::RunStart& e) {
+    model::ClientOrderIdGenerator ids;
+    const core::Status s =
+        model::ClientOrderIdGenerator::create(k_.trading.ids.node_tag(), e.epoch, ids);
+    if (!core::ok(s)) {
+      return s;
+    }
+    k_.trading.ids = ids;
+    k_.node_state = model::NodeState::Init;
+    k_.stopped = false;
+    k_.stop_requested = false;
+    k_.halt_requested = false;
+    k_.shutdown.reset();
+    k_.health = execution::ConnectionHealth{};
+    static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::Recovered));
+    if (k_.trading.reconciler.phase() != execution::SyncPhase::Local &&
+        k_.trading.reconciler.on_connection(false)) {
+      static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::SyncStarted));
+    }
+    if (k_.countdown.armed) {
+      static_cast<void>(k_.timers.cancel(k_.countdown.timer));
+      k_.countdown.armed = false;
+    }
+    k_.countdown.running = false;
+    for (std::size_t slot = 0; slot < k_.countdown.live.size(); ++slot) {
+      k_.countdown.live[slot] = 0;
+    }
+    for (std::size_t i = 0; i < k_.dirty_pending.size(); ++i) {
+      k_.pending[k_.dirty_pending[i]].dirty = false;
+    }
+    k_.dirty_pending.clear();
+    for (std::size_t i = 0; i < k_.dirty_batches.size(); ++i) {
+      strategy::BatchBuffer& b = k_.batches[k_.dirty_batches[i]];
+      b.dirty = false;
+      b.trades.clear();
+      b.quotes.clear();
+    }
+    k_.dirty_batches.clear();
+    return core::Status::Ok;
   }
 
   // An operator's command (section 19.3). The TradingState changes are the TradingState spec's

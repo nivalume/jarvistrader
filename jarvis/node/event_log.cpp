@@ -193,6 +193,18 @@ Status EventLogWriter::append_record(std::span<const std::byte> record) {
   return buffer_.size() >= kFlushThreshold ? flush() : Status::Ok;
 }
 
+Status EventLogWriter::write_snapshot(const SnapshotInfo& info, std::span<const std::byte> body) {
+  if (directory_.empty()) {
+    return Status::InvalidState;
+  }
+  std::vector<std::byte> encoded;
+  const Status s = encode_snapshot(header_, info, body, encoded);
+  if (!core::ok(s)) {
+    return s;
+  }
+  return write_snapshot_file(directory_, info.seq, encoded, options_.durable);
+}
+
 Status EventLogWriter::flush() {
   if (fd_ < 0) {
     return Status::InvalidState;

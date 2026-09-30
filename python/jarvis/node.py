@@ -60,11 +60,14 @@ class RunResult:
     halted: bool
     state: str
     left_open: int  # orders still open when the node stopped (sandbox and live shutdown)
+    snapshots: int  # EngineState snapshots taken (persistence.snapshot_every)
+    snapshot_failures: int
     first_ts: int
     last_ts: int
     strategies: tuple[StrategyStats, ...]
     feed: Mapping[str, int] | None = None  # sandbox and live: the market data feed's counters
     venue: Mapping[str, int] | None = None  # live: the account and order entry's counters
+    log: Mapping[str, int] | None = None  # sandbox and live: the persist thread's counters
     epoch: int | None = None  # live: the ClientOrderId epoch this run took
     warnings: tuple[str, ...] = ()  # live: what the startup checks warned about
 
@@ -91,6 +94,8 @@ class RunResult:
         ]
         if self.left_open:
             lines.append(f"left open at stop: {self.left_open} orders")
+        if self.snapshots or self.snapshot_failures:
+            lines.append(f"snapshots: {self.snapshots} ({self.snapshot_failures} failed)")
         if self.directory:
             digest, records = _log.fingerprint(self.directory, "all")
             lines.append(f"fingerprint: {digest} records={records}")
@@ -98,6 +103,8 @@ class RunResult:
             lines.append("feed: " + ", ".join(f"{k} {v}" for k, v in self.feed.items()))
         if self.venue is not None:
             lines.append("venue: " + ", ".join(f"{k} {v}" for k, v in self.venue.items()))
+        if self.log is not None:
+            lines.append("log: " + ", ".join(f"{k} {v}" for k, v in self.log.items()))
         if self.epoch is not None:
             lines.append(f"epoch: {self.epoch}")
         lines.extend(f"warning: {w}" for w in self.warnings)
@@ -124,6 +131,8 @@ class ReplayReport:
     outputs: int
     divergence: Divergence | None
     state: str
+    snapshots_checked: int = 0  # snapshot files that matched the replayed state
+    start_seq: int = 0  # replayed from the snapshot taken after this seq (0: from the start)
 
     def __str__(self) -> str:
         if self.divergence is not None:
@@ -137,6 +146,10 @@ class ReplayReport:
                 f"replayed {self.directory}: {self.inputs} inputs, {self.outputs} outputs, "
                 "no divergence"
             )
+        if self.start_seq:
+            text += f"\nstarted from the snapshot after seq {self.start_seq}"
+        if self.snapshots_checked:
+            text += f"\nsnapshots matching the replayed state: {self.snapshots_checked}"
         return text + ("\n" + self.state.rstrip("\n") if self.state else "")
 
 
@@ -227,15 +240,19 @@ class Node:
         *,
         until: int | None = None,
         dump_state: bool = False,
+        from_snapshot: str | os.PathLike[str] | None = None,
     ) -> ReplayReport:
-        """Recomputes a run's outputs from its inputs and reports the first divergence."""
+        """Recomputes a run's outputs from its inputs and reports the first divergence. The
+        run's EngineState snapshots must match the replayed state; with `from_snapshot` (a
+        snapshot file of the run) the replay starts there instead of at the first input."""
         target = os.fspath(directory) if directory is not None else self._run_directory
         if not target:
             raise ValueError("replay needs a run directory")
         if not self._strategies:
             raise ValueError("the node has no strategies; add_strategy() first")
+        snapshot = os.fspath(from_snapshot) if from_snapshot is not None else None
         with self._guard():
-            report = self._setup.replay(target, self._strategies, until, dump_state)
+            report = self._setup.replay(target, self._strategies, until, dump_state, snapshot)
         divergence = report["divergence"]
         return ReplayReport(
             directory=target,
@@ -243,6 +260,8 @@ class Node:
             outputs=report["outputs"],
             divergence=Divergence(**divergence) if divergence is not None else None,
             state=report["state"],
+            snapshots_checked=report["snapshots_checked"],
+            start_seq=report["start_seq"],
         )
 
     def _guard(self) -> Any:
@@ -317,7 +336,11 @@ def run_main(classes: Sequence[type], argv: Sequence[str] | None = None) -> int:
         for strategy in build_strategies(node.strategy_entries, classes):
             node._strategies.append(strategy)
         if parsed["replay"]:
-            report = node.replay(until=parsed["until"], dump_state=parsed["dump_state"])
+            report = node.replay(
+                until=parsed["until"],
+                dump_state=parsed["dump_state"],
+                from_snapshot=parsed["from_snapshot"] or None,
+            )
             print(report)
             return 3 if report.divergence is not None else 0
         result = node.run(run_for=parsed["run_for"])

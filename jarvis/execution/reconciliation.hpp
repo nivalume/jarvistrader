@@ -109,6 +109,8 @@ struct ConnectionHealth {
   [[nodiscard]] constexpr bool healthy() const noexcept {
     return market_data != LinkState::Down && order_entry != LinkState::Down;
   }
+
+  template <typename Ar> void state(Ar& ar) { ar(market_data, order_entry); }
 };
 
 // What happens to a venue order the node does not manage.
@@ -141,6 +143,11 @@ struct ReconcileStats {
   std::uint64_t ignored_checks = 0;    // light checks that arrived while not synced
   std::uint64_t check_diffs = 0;       // differences light checks confirmed
   std::uint64_t dropped_suspects = 0;  // differences beyond `suspects`, not tracked
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(held, reconciliations, stale, ignored_snapshots, unmatched_fills, dropped_diffs, checks,
+       ignored_checks, check_diffs, dropped_suspects);
+  }
 };
 
 // What the reconciler reads and changes: the kernel's state and its venue event path.
@@ -327,6 +334,8 @@ private:
     model::ReconciliationDiff diff;
     std::optional<model::VenueOrderId> venue_order_id;
     std::uint32_t seen = 0; // checks in a row
+
+    template <typename Ar> void state(Ar& ar) { ar(diff, venue_order_id, seen); }
   };
 
   [[nodiscard]] static const Suspect* find_suspect(const core::FixedVector<Suspect>& list,
@@ -451,6 +460,8 @@ private:
   struct Candidate {
     std::uint32_t index = kNoIndex;
     model::ClientOrderId id;
+
+    template <typename Ar> void state(Ar& ar) { ar(index, id); }
   };
 
   template <typename H> void collect_candidates(const H& host) noexcept {
@@ -944,6 +955,16 @@ private:
   core::FixedVector<Suspect> suspects_; // seen by the last check
   core::FixedVector<Suspect> next_;     // scratch for the current one
   ReconcileStats stats_;
+
+public:
+  // Snapshot encoding (core/state.hpp). The held account state keeps its balances apart (its
+  // spans stay empty); scratch vectors are empty between steps and are kept only for their
+  // shape.
+  template <typename Ar> void state(Ar& ar) {
+    ar(phase_, held_, replay_, candidates_, balances_, currencies_, account_.account_id,
+       account_.account_type, account_.base_currency, account_.is_reported, account_.event_id,
+       account_.ts_event, account_.ts_init, account_held_, suspects_, next_, stats_);
+  }
 };
 
 } // namespace jarvis::execution

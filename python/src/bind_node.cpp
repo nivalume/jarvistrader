@@ -274,6 +274,8 @@ public:
     context_ptr_ = nb::inst_ptr<PyContext>(context_);
     context_ptr_->views = &views_;
     idle_ = nb::getattr(strategy_, "on_idle", nb::none());
+    save_ = nb::getattr(strategy_, "on_save", nb::none());
+    load_ = nb::getattr(strategy_, "on_load", nb::none());
   }
 
   PyStrategyHost(const PyStrategyHost&) = delete;
@@ -301,6 +303,48 @@ public:
                 << " in on_idle:\n"
                 << std::string_view{e.what()}.substr(0, 4096) << "\n";
     }
+  }
+
+  // EngineState snapshots (docs/architecture.md section 16.3): on_save(self) -> bytes and
+  // on_load(self, state), when the strategy defines both. They run outside any callback and get no
+  // context. A failure is printed; the snapshot is then not taken (or not restored).
+  [[nodiscard]] bool has_state() const { return !save_.is_none() && !load_.is_none(); }
+  Status save_state(jarvis::core::StateWriter& w) {
+    gil_->acquire();
+    try {
+      const nb::object out = save_();
+      if (!nb::isinstance<nb::bytes>(out)) {
+        std::cerr << "jarvis: strategy " << id_ << ": on_save must return bytes, not "
+                  << nb::type_name(out.type()).c_str() << "\n";
+        return Status::InvalidArgument;
+      }
+      const auto bytes = nb::cast<nb::bytes>(out);
+      w.u32(static_cast<std::uint32_t>(bytes.size()));
+      w.raw(std::as_bytes(std::span<const char>{bytes.c_str(), bytes.size()}));
+    } catch (nb::python_error& e) {
+      std::cerr << "jarvis: strategy " << id_ << " raised " << nb::type_name(e.type()).c_str()
+                << " in on_save:\n"
+                << std::string_view{e.what()}.substr(0, 4096) << "\n";
+      return Status::InvalidState;
+    }
+    return Status::Ok;
+  }
+  Status load_state(jarvis::core::StateReader& r) {
+    const std::uint32_t n = r.u32();
+    const std::span<const std::byte> bytes = r.raw(n);
+    if (!r.ok_state()) {
+      return r.status();
+    }
+    gil_->acquire();
+    try {
+      load_(nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size())); // NOLINT
+    } catch (nb::python_error& e) {
+      std::cerr << "jarvis: strategy " << id_ << " raised " << nb::type_name(e.type()).c_str()
+                << " in on_load:\n"
+                << std::string_view{e.what()}.substr(0, 4096) << "\n";
+      return Status::InvalidState;
+    }
+    return Status::Ok;
   }
 
 private:
@@ -525,6 +569,8 @@ private:
   nb::object callbacks_[kCallbackCount]; // NOLINT(cppcoreguidelines-avoid-c-arrays)
   nb::object context_;
   nb::object idle_;
+  nb::object save_;
+  nb::object load_;
   PyContext* context_ptr_ = nullptr;
   std::vector<nb::object> views_;
   std::vector<std::uint64_t> ts_;
@@ -617,12 +663,20 @@ struct HostVTable {
       return h.call(ctx, kOnReconciled, nb::cast(o, nb::rv_policy::copy));
     });
   }
+  static bool has_state(void* p) { return PyStrategyHost::self(p).has_state(); }
+  static Status save_state(void* p, jarvis::core::StateWriter& w) {
+    return PyStrategyHost::self(p).save_state(w);
+  }
+  static Status load_state(void* p, jarvis::core::StateReader& r) {
+    return PyStrategyHost::self(p).load_state(r);
+  }
 };
 
 const st::StrategyVTable PyStrategyHost::kVTable{
     &HostVTable::on_start,       &HostVTable::on_stop,           &HostVTable::on_data,
     &HostVTable::on_batch,       &HostVTable::on_timer,          &HostVTable::on_error,
-    &HostVTable::on_order_event, &HostVTable::on_position_event, &HostVTable::on_reconciled};
+    &HostVTable::on_order_event, &HostVTable::on_position_event, &HostVTable::on_reconciled,
+    &HostVTable::has_state,      &HostVTable::save_state,        &HostVTable::load_state};
 
 // ---- node setup -----------------------------------------------------------------------------
 
@@ -797,6 +851,8 @@ nb::dict summary_dict(const node::BacktestResult& r) {
   d["venue_answers"] = s.venue_answers;
   d["halted"] = s.halted;
   d["left_open"] = s.left_open;
+  d["snapshots"] = s.snapshots;
+  d["snapshot_failures"] = s.snapshot_failures;
   d["state"] = std::string{m::to_string(s.state)};
   d["first_ts"] = s.first_ts.value();
   d["last_ts"] = s.last_ts.value();
@@ -1041,15 +1097,18 @@ nb::dict run_node(const NodeSetup& setup, const nb::list& strategies,
 
 nb::dict replay_node(const NodeSetup& setup, const std::string& directory,
                      const nb::list& strategies, std::optional<std::uint64_t> until,
-                     bool dump_state) {
+                     bool dump_state, const std::optional<std::string>& from_snapshot) {
   Assembly assembly;
   assembly.build(strategies, setup.config, true);
   node::ReplayOptions options;
   options.until = until;
   options.dump_state = dump_state;
+  options.from_snapshot = from_snapshot;
   node::ReplayReport report;
   std::string error;
-  check(node::replay_run(directory, setup.config, *assembly.set, options, report, error), error);
+  // The call first: `error` is only filled in by it (argument order is unspecified).
+  const Status s = node::replay_run(directory, setup.config, *assembly.set, options, report, error);
+  check(s, error);
   nb::dict d;
   d["inputs"] = report.inputs;
   d["outputs"] = report.outputs;
@@ -1063,6 +1122,8 @@ nb::dict replay_node(const NodeSetup& setup, const std::string& directory,
     d["divergence"] = nb::none();
   }
   d["state"] = report.state;
+  d["snapshots_checked"] = report.snapshots_checked;
+  d["start_seq"] = report.start_seq;
   return d;
 }
 
@@ -1736,7 +1797,8 @@ void bind_node(nb::module_& mod) {
             args.overrides.sets = sets;
             NodeSetup setup;
             std::string error;
-            check(node::load_node_config(args, setup.config, setup.manifest, error), error);
+            const Status s = node::load_node_config(args, setup.config, setup.manifest, error);
+            check(s, error);
             return setup;
           },
           nb::arg("path"), nb::arg("env") = nb::none(),
@@ -1746,7 +1808,8 @@ void bind_node(nb::module_& mod) {
           [](const std::string& directory) {
             NodeSetup setup;
             std::string error;
-            check(node::load_run_config(directory, setup.config, error), error);
+            const Status s = node::load_run_config(directory, setup.config, error);
+            check(s, error);
             return setup;
           },
           nb::arg("directory"))
@@ -1773,6 +1836,7 @@ void bind_node(nb::module_& mod) {
            "`run_for` seconds.")
       .def("replay", &replay_node, nb::arg("directory"), nb::arg("strategies"),
            nb::arg("until") = nb::none(), nb::arg("dump_state") = false,
+           nb::arg("from_snapshot") = nb::none(),
            "Replays a run directory with `strategies` and returns the report.");
 
 #if defined(JARVIS_PY_LIVE)
@@ -1797,6 +1861,7 @@ void bind_node(nb::module_& mod) {
         out["until"] = parsed.until;
         out["run_for"] = parsed.run_for_s;
         out["dump_state"] = parsed.dump_state;
+        out["from_snapshot"] = parsed.from_snapshot;
         out["help"] = parsed.help;
         return out;
       },

@@ -65,6 +65,11 @@ public:
   [[nodiscard]] std::int64_t drawdown_raw() const noexcept { return drawdown_raw_; }
   [[nodiscard]] const MonitorLimits& limits() const noexcept { return limits_; }
 
+  // Snapshot encoding (core/state.hpp); the limits come from the configuration.
+  template <typename Ar> void state(Ar& ar) {
+    ar(day_, day_start_raw_, peak_raw_, daily_loss_raw_, drawdown_raw_);
+  }
+
 private:
   MonitorLimits limits_;
   std::optional<std::uint64_t> day_;

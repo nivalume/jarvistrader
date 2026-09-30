@@ -20,6 +20,7 @@
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instruments.hpp"
 #include "jarvis/model/order_events.hpp"
+#include "jarvis/model/wire.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 #include "jarvis/testkit/alloc.hpp"
@@ -205,6 +206,8 @@ struct Recorder {
     log->push_back("stop");
     return Status::Ok;
   }
+  // Snapshots: the feature id is this strategy's only state (the log belongs to the test).
+  template <typename Ar> void state(Ar& ar) { ar(feature); }
 };
 // NOLINTEND(readability-make-member-function-const)
 
@@ -529,6 +532,103 @@ TEST_SUITE("property") {
       run(b, ob);
       CHECK(a == b);
       REQUIRE(oa.size() == ob.size());
+    });
+  }
+
+  TEST_CASE("a snapshot taken between any two steps restores an engine that continues the same") {
+    using Engine = jarvis::engine::Engine<st::StaticStrategySet<Recorder, Recorder, Recorder>>;
+    // One step as the node takes it: due timers first, outputs encoded and cleared after each.
+    struct Stepper {
+      std::uint64_t seq = 0;
+      std::vector<std::vector<std::byte>> outputs;
+      Status step(Engine& engine, const md::Event& event) {
+        const UnixNanos ts = md::ts_init_of(event);
+        jarvis::core::FiredTimer due;
+        while (engine.next_timer(due) && due.deadline <= ts) {
+          const md::TimerFired fired{due.key, due.deadline, due.deadline};
+          const Status s = one(engine, EventKey{due.deadline, 9, ++seq}, md::Event{fired});
+          if (!jarvis::core::ok(s)) {
+            return s;
+          }
+        }
+        return one(engine, EventKey{ts, 0, ++seq}, event);
+      }
+      Status one(Engine& engine, const EventKey& key, const md::Event& event) {
+        const Status s = engine.step(key, event);
+        std::vector<std::byte> buffer(1U << 16U);
+        for (std::size_t i = 0; i < engine.outputs().size(); ++i) {
+          std::size_t written = 0;
+          REQUIRE(jarvis::model::wire::encode_output_record(
+                      EventKey{key.ts, static_cast<std::uint16_t>(i), key.seq}, engine.outputs()[i],
+                      buffer, written) == Status::Ok);
+          outputs.emplace_back(buffer.begin(),
+                               buffer.begin() + static_cast<std::ptrdiff_t>(written));
+        }
+        engine.clear_outputs();
+        engine.clear_failures();
+        return s;
+      }
+    };
+    jarvis::testkit::for_all([](Gen& gen) {
+      std::vector<md::Event> events{running(1)};
+      std::uint64_t ts = 1;
+      for (int i = 0; i < 120; ++i) {
+        ts += 1 + gen.below(400'000'000);
+        const std::string px =
+            std::to_string(100 + gen.below(5)) + "." + std::to_string(gen.below(10));
+        switch (gen.below(3)) {
+        case 0:
+          events.push_back(trade_at(ts, px));
+          break;
+        case 1:
+          events.push_back(quote_at(ts, px, px));
+          break;
+        default:
+          events.push_back(batch_end(ts));
+          break;
+        }
+      }
+      const std::size_t cut = gen.below(events.size() + 1);
+
+      Log la;
+      st::StaticStrategySet<Recorder, Recorder, Recorder> sa{
+          Recorder{"bars", &la}, Recorder{"feature", &la}, Recorder{"quotes:conflated", &la}};
+      Engine a{small_config(), sa};
+      Stepper pa;
+      for (std::size_t i = 0; i < cut; ++i) {
+        REQUIRE(pa.step(a, events[i]) == Status::Ok);
+      }
+      CHECK(a.snapshot_complete());
+      std::vector<std::byte> saved;
+      REQUIRE(a.save_state(saved) == Status::Ok);
+      const std::size_t log_at_cut = la.size();
+      const std::size_t outputs_at_cut = pa.outputs.size();
+
+      Log lb;
+      st::StaticStrategySet<Recorder, Recorder, Recorder> sb{
+          Recorder{"bars", &lb}, Recorder{"feature", &lb}, Recorder{"quotes:conflated", &lb}};
+      Engine b{small_config(), sb};
+      REQUIRE(b.load_state(saved) == Status::Ok);
+      std::vector<std::byte> again;
+      REQUIRE(b.save_state(again) == Status::Ok);
+      CHECK(again == saved); // a restored engine saves the same bytes
+
+      Stepper pb;
+      pb.seq = pa.seq;
+      for (std::size_t i = cut; i < events.size(); ++i) {
+        REQUIRE(pa.step(a, events[i]) == Status::Ok);
+        REQUIRE(pb.step(b, events[i]) == Status::Ok);
+      }
+      CHECK(Log(la.begin() + static_cast<std::ptrdiff_t>(log_at_cut), la.end()) == lb);
+      REQUIRE(pa.outputs.size() - outputs_at_cut == pb.outputs.size());
+      for (std::size_t i = 0; i < pb.outputs.size(); ++i) {
+        CHECK(pa.outputs[outputs_at_cut + i] == pb.outputs[i]);
+      }
+      std::vector<std::byte> end_a;
+      std::vector<std::byte> end_b;
+      REQUIRE(a.save_state(end_a) == Status::Ok);
+      REQUIRE(b.save_state(end_b) == Status::Ok);
+      CHECK(end_a == end_b);
     });
   }
 

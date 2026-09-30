@@ -38,6 +38,9 @@ struct TradeLogger {
   std::uint64_t trades = 0;
   std::uint64_t volume_raw = 0;
 
+  // What a snapshot keeps (docs/architecture.md section 16.3): the counts so far.
+  template <typename Ar> void state(Ar& ar) { ar(trades, volume_raw); }
+
   static Status create(const jarvis::node::StrategyParams& p, TradeLogger& out) {
     std::string_view instrument = "BTCUSDT-PERP.BINANCE";
     Status s = p.get_or<std::string_view>("instrument", instrument, instrument);

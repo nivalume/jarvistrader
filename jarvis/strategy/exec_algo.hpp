@@ -83,11 +83,15 @@ inline constexpr std::size_t kAlgoChildren = 4; // children working at once
 
 struct AlgoParams {
   std::array<std::int64_t, kAlgoParams> values{};
+
+  template <typename Ar> void state(Ar& ar) { ar(values); }
 };
 
 struct AlgoChild {
   model::ClientOrderId id;
   std::uint64_t leaves_raw = 0;
+
+  template <typename Ar> void state(Ar& ar) { ar(id, leaves_raw); }
 };
 
 // One parent order.
@@ -108,6 +112,11 @@ struct AlgoState {
   bool active = false;
   bool canceling = false;
   bool finished = false;
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(parent_id, parent_seq, intent, kind, params, strategy, slot, filled_raw, reserved_raw,
+       children, child_count, scratch, wake_ns, active, canceling, finished);
+  }
 
   [[nodiscard]] std::uint64_t remaining_raw() const noexcept {
     const std::uint64_t q = intent.quantity.raw();
@@ -253,6 +262,8 @@ private:
     std::uint64_t buy_raw = 0;
     std::uint64_t sell_raw = 0;
     std::uint32_t quoting = 0; // active parents that hear quotes
+
+    template <typename Ar> void state(Ar& ar) { ar(buy_raw, sell_raw, quoting); }
   };
 
   // Recomputes parent i's reserved quantity and moves the instrument totals by the difference.
@@ -274,6 +285,10 @@ private:
 
   core::FixedVector<AlgoState> parents_;
   core::FixedVector<Reserve> reserved_; // by instrument slot
+
+public:
+  // Snapshot encoding (core/state.hpp).
+  template <typename Ar> void state(Ar& ar) { ar(parents_, reserved_); }
 };
 
 // A parent order as strategies see it (ctx.parent).
@@ -294,6 +309,8 @@ struct ParentView {
 struct AlgoTop {
   model::Price bid;
   model::Price ask;
+
+  template <typename Ar> void state(Ar& ar) { ar(bid, ask); }
 };
 
 struct AlgoQuote { // the top moved (algorithms for which wants_quotes)

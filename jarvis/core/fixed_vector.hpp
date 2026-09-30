@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <utility>
 #include <vector>
@@ -90,6 +91,45 @@ public:
 
   [[nodiscard]] std::span<T> span() noexcept { return std::span<T>{items_}; }
   [[nodiscard]] std::span<const T> span() const noexcept { return std::span<const T>{items_}; }
+
+  // Snapshot encoding (core/state.hpp): the capacity, the length, the elements. A vector built
+  // empty (capacity 0) takes the saved capacity: those are sized on first use, from data.
+  template <typename Ar> void state(Ar& ar) {
+    if constexpr (Ar::kReading) {
+      const std::uint32_t capacity = ar.u32();
+      if (capacity != capacity_) {
+        if (capacity_ != 0 || capacity > (1U << 28U)) {
+          ar.fail(Status::CapacityExceeded);
+          return;
+        }
+        items_ = std::vector<T>{};
+        items_.reserve(capacity);
+        capacity_ = capacity;
+      }
+      const std::uint32_t n = ar.u32();
+      if (n > capacity_ || !ar.ok_state()) {
+        ar.fail(Status::CapacityExceeded);
+        return;
+      }
+      items_.clear();
+      // GCC 13 at -O3 warns that resizing a vector of bytes writes past a zero-size allocation
+      // (-Wstringop-overflow); the reserve above makes that impossible.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+      items_.resize(n);
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+    } else {
+      ar.u32(static_cast<std::uint32_t>(capacity_));
+      ar.u32(static_cast<std::uint32_t>(items_.size()));
+    }
+    for (T& item : items_) {
+      ar(item);
+    }
+  }
 
 private:
   std::vector<T> items_;

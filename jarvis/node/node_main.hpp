@@ -122,6 +122,9 @@ int node_main_with(int argc, char** argv, const Runner& runner) {
     ReplayOptions options;
     options.until = parsed.until;
     options.dump_state = parsed.dump_state;
+    if (!parsed.from_snapshot.empty()) {
+      options.from_snapshot = parsed.from_snapshot;
+    }
     ReplayReport report;
     if (!core::ok(replay_run(parsed.replay, config, set, options, report, error))) {
       std::cerr << program << ": " << error << "\n";

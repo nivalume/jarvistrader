@@ -24,6 +24,11 @@ struct OrderIntent {
   bool reduce_only = false;                   // one-way mode only
   std::optional<core::UnixNanos> expire_time; // GTD only
 
+  template <typename Ar> void state(Ar& ar) {
+    ar(instrument_id, side, type, quantity, price, time_in_force, post_only, reduce_only,
+       expire_time);
+  }
+
   [[nodiscard]] static OrderIntent limit(const model::InstrumentId& id, model::OrderSide side,
                                          model::Quantity quantity, model::Price price,
                                          model::TimeInForce tif = model::TimeInForce::Gtc,

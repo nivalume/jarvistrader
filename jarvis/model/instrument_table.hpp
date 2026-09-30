@@ -15,6 +15,8 @@ namespace jarvis::model {
 struct InstrumentSlot {
   std::uint32_t value = 0;
 
+  template <typename Ar> void state(Ar& ar) { ar(value); }
+
   friend constexpr bool operator==(InstrumentSlot, InstrumentSlot) noexcept = default;
 };
 
@@ -109,6 +111,10 @@ private:
   core::FixedVector<InstrumentId> ids_;
   core::FixedVector<std::uint32_t> buckets_;
   std::size_t mask_;
+
+public:
+  // Snapshot encoding (core/state.hpp); the bucket array follows the capacity.
+  template <typename Ar> void state(Ar& ar) { ar(ids_, buckets_); }
 };
 
 } // namespace jarvis::model

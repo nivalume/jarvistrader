@@ -1,8 +1,12 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -10,12 +14,14 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/engine/snapshot_schedule.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/event_log.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/node/state_text.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -25,12 +31,20 @@
 // difference is a ReplayDivergence at that input's seq. Recorded StrategyError inputs of kind
 // Exception must match the failures the replay reproduces; Overrun errors come from wall-clock
 // measurements and are taken from the log as they are.
+//
+// EngineState snapshots (section 16.3): the replay takes a snapshot at the same points as the
+// node (engine/snapshot_schedule.hpp, persistence.snapshot_every) and compares it with the
+// snapshot file of that seq when the run directory has one; a different state is a divergence.
+// With `from_snapshot` the replay starts from that snapshot file instead of the first input: the
+// engine is restored from it and the log is replayed from the next input on.
 
 namespace jarvis::node {
 
 struct ReplayOptions {
   std::optional<std::uint64_t> until; // stop after the input with this seq and its outputs
   bool dump_state = false;
+  bool check_snapshots = true;
+  std::optional<std::string> from_snapshot; // a snapshot file of this run
 };
 
 struct Divergence {
@@ -43,7 +57,9 @@ struct ReplayReport {
   std::uint64_t inputs = 0;
   std::uint64_t outputs = 0;
   std::optional<Divergence> divergence;
-  std::string state; // kernel_state_text after the last step, when dump_state
+  std::string state;                   // kernel_state_text after the last step, when dump_state
+  std::uint64_t snapshots_checked = 0; // snapshot files that matched the replayed state
+  std::uint64_t start_seq = 0;         // with from_snapshot: the snapshot's seq
 };
 
 namespace detail {
@@ -108,10 +124,40 @@ namespace detail {
 template <strategy::StrategySet SS> class Replayer {
 public:
   Replayer(const NodeConfig& config, SS& strategies, const ReplayOptions& options,
-           ReplayReport& report)
+           ReplayReport& report, std::string directory)
       : engine_{kernel_config(config), strategies, error_policy(config)}, options_{&options},
-        report_{&report} {
+        report_{&report}, directory_{std::move(directory)},
+        snapshots_{config.persistence.snapshot_every} {
     name_strategies(config, engine_.kernel());
+  }
+
+  // Restores the engine from a snapshot file of this run; the replay then starts after its seq.
+  [[nodiscard]] core::Status restore(const std::string& path, std::string& error) {
+    std::vector<std::byte> file;
+    core::Status s = read_file_bytes(path, file);
+    model::wire::LogHeader header;
+    SnapshotInfo info;
+    std::span<const std::byte> body;
+    if (core::ok(s)) {
+      s = decode_snapshot(file, header, info, body);
+    }
+    if (core::ok(s)) {
+      s = engine_.load_state(body);
+    }
+    if (!core::ok(s)) {
+      error = path + ": cannot restore the snapshot: " + std::string{core::to_string(s)};
+      return s;
+    }
+    if (!info.complete) {
+      error = path + ": the snapshot lacks the state of a strategy that does not describe it";
+      return core::Status::InvalidState;
+    }
+    lifecycle_.restore(engine_.kernel().node_state);
+    snapshots_.resume_after(info.seq);
+    skip_until_ = info.seq;
+    last_seq_ = info.seq;
+    report_->start_seq = info.seq;
+    return core::Status::Ok;
   }
 
   [[nodiscard]] core::Status run(EventLogReader& reader, std::string& error) {
@@ -126,6 +172,9 @@ public:
         error = "unreadable record after seq " + std::to_string(last_seq_) + ": " +
                 std::string{core::to_string(s)};
         return s;
+      }
+      if (record.header.seq <= skip_until_) {
+        continue; // before the snapshot the replay started from
       }
       const core::Status handled = record.header.kind >= model::wire::kFirstOutputKind
                                        ? on_output(record, error)
@@ -205,6 +254,9 @@ private:
                std::string{model::to_string(from)};
       }
     }
+    if (std::holds_alternative<model::RunStart>(event)) {
+      lifecycle_.restore(model::NodeState::Init); // a continued run's lifecycle starts over
+    }
     return std::nullopt;
   }
 
@@ -227,6 +279,44 @@ private:
     engine_.clear_failures();
     last_seq_ = record.header.seq;
     ++report_->inputs;
+    if (snapshots_.due(record.header.seq, std::holds_alternative<model::BatchEnd>(event))) {
+      check_snapshot(record.header.seq);
+    }
+  }
+
+  // The state here against the node's snapshot file of this seq, if the directory has it.
+  void check_snapshot(std::uint64_t seq) {
+    if (!options_->check_snapshots || directory_.empty()) {
+      return;
+    }
+    std::vector<std::byte> file;
+    if (!core::ok(read_file_bytes(directory_ + "/" + snapshot_name(seq), file))) {
+      return; // not written (or removed): nothing to compare
+    }
+    model::wire::LogHeader header;
+    SnapshotInfo info;
+    std::span<const std::byte> body;
+    if (!core::ok(decode_snapshot(file, header, info, body))) {
+      diverge(seq, "an unreadable snapshot file " + snapshot_name(seq), "a snapshot");
+      return;
+    }
+    std::vector<std::byte> state;
+    if (!core::ok(engine_.save_state(state))) {
+      diverge(seq, "a snapshot", "no snapshot: saving the state failed");
+      return;
+    }
+    if (state.size() != body.size() || !std::equal(state.begin(), state.end(), body.begin())) {
+      std::size_t at = 0;
+      while (at < state.size() && at < body.size() && state[at] == body[at]) {
+        ++at;
+      }
+      diverge(seq,
+              "snapshot " + snapshot_name(seq) + " (" + std::to_string(body.size()) + " bytes)",
+              "a state differing from byte " + std::to_string(at) + " (" +
+                  std::to_string(state.size()) + " bytes)");
+      return;
+    }
+    ++report_->snapshots_checked;
   }
 
   // End of the log: every computed output and failure must have been recorded.
@@ -245,6 +335,9 @@ private:
   engine::Lifecycle lifecycle_;
   const ReplayOptions* options_;
   ReplayReport* report_;
+  std::string directory_;
+  engine::SnapshotSchedule snapshots_;
+  std::uint64_t skip_until_ = 0;
   OutputBuffer computed_;
   ErrorCheck errors_;
   std::size_t matched_ = 0;
@@ -265,7 +358,13 @@ template <strategy::StrategySet SS>
     error = directory + ": cannot open the run log: " + std::string{core::to_string(s)};
     return s;
   }
-  detail::Replayer<SS> replayer{config, strategies, options, report};
+  detail::Replayer<SS> replayer{config, strategies, options, report, directory};
+  if (options.from_snapshot) {
+    const core::Status restored = replayer.restore(*options.from_snapshot, error);
+    if (!core::ok(restored)) {
+      return restored;
+    }
+  }
   const core::Status r = replayer.run(reader, error);
   if (!core::ok(r)) {
     error = directory + ": " + error;

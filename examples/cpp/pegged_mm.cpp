@@ -48,6 +48,10 @@ struct PeggedMM {
   std::optional<m::ClientOrderId> bid;
   std::optional<m::ClientOrderId> ask;
 
+  // What a snapshot keeps (docs/architecture.md section 16.3): the working orders. The rest
+  // comes from the parameters.
+  template <typename Ar> void state(Ar& ar) { ar(bid, ask); }
+
   static Status create(const jarvis::node::StrategyParams& p, PeggedMM& out) {
     std::string_view instrument = "BTCUSDT-PERP.BINANCE";
     std::string_view size = "0.010";

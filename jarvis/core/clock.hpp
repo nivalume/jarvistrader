@@ -44,6 +44,8 @@ struct TimerKey {
   std::uint32_t owner = 0;
   std::uint32_t id = 0;
 
+  template <typename Ar> void state(Ar& ar) { ar(owner, id); }
+
   friend constexpr bool operator==(TimerKey, TimerKey) noexcept = default;
 };
 
@@ -139,14 +141,21 @@ public:
 
   [[nodiscard]] std::size_t active() const noexcept { return slots_.size(); }
 
+  // Snapshot encoding: the timers, the heap with its stale entries, and the arming counter.
+  template <typename Ar> void state(Ar& ar) { ar(slots_, heap_, seq_); }
+
 private:
   struct Slot {
     TimerKey key;
     DurationNanos period;
     std::uint64_t armed_seq = 0;
+
+    template <typename Ar> void state(Ar& ar) { ar(key, period, armed_seq); }
   };
   struct Entry {
     TimerHandle handle;
+
+    template <typename Ar> void state(Ar& ar) { ar(handle); }
   };
 
   [[nodiscard]] Status arm(TimerHandle handle, UnixNanos deadline) noexcept {

@@ -82,6 +82,8 @@ using KernelEvent = std::variant<model::OrderEvent, model::PositionEvent>;
 struct PendingEvent {
   StrategyIndex strategy = 0;
   KernelEvent event;
+
+  template <typename Ar> void state(Ar& ar) { ar(strategy, event); }
 };
 
 struct TradingStats {
@@ -97,6 +99,12 @@ struct TradingStats {
   std::uint64_t dropped_events = 0; // kernel events lost to a full queue (position events)
   std::uint64_t parents = 0;        // parents accepted by Gate A
   std::uint64_t children = 0;       // child orders submitted by execution algorithms
+
+  template <typename Ar> void state(Ar& ar) {
+    ar(submitted, denied, modifies, cancels, venue_events, unknown_order_events,
+       refused_order_events, stale_order_events, duplicate_fills, dropped_events, parents,
+       children);
+  }
 };
 
 // A copy of one order, for strategies (ctx.order, ctx.open_orders).
@@ -994,6 +1002,13 @@ public:
   core::FixedVector<std::optional<AlgoTop>> tops; // by instrument slot, for the algorithms
   bool algo_wake_changed = false;                 // the engine re-arms its algorithm timer
   TradingStats stats;
+
+  // Snapshot encoding (core/state.hpp). The trader and account ids come from the configuration;
+  // the strategy ids are checked (a snapshot restores into the same strategies).
+  template <typename Ar> void state(Ar& ar) {
+    ar(oms, definitions, ids, strategy_ids, events, portfolio, risk, algos, reconciler, tops,
+       algo_wake_changed, stats);
+  }
 
 private:
   // Calls f with the built-in algorithm of `kind`.

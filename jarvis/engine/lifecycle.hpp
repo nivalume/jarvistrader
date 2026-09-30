@@ -107,6 +107,10 @@ public:
     return core::Status::Ok;
   }
 
+  // The state a restored snapshot left the node in (KernelServices::node_state), for a replay
+  // that starts there.
+  constexpr void restore(NodeState state) noexcept { state_ = state; }
+
 private:
   NodeState state_ = NodeState::Init;
 };

@@ -16,6 +16,7 @@
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/log_source.hpp"
 #include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 
@@ -44,6 +45,18 @@ public:
   }
   [[nodiscard]] core::Status emit(const core::EventKey& key, const model::Output& output) {
     return writer_->append_output(key, output);
+  }
+  // An EngineState snapshot after the input `key` (a BatchEnd), from the driver.
+  template <typename Engine>
+  [[nodiscard]] core::Status snapshot(Engine& engine, const core::EventKey& key) {
+    std::vector<std::byte> body;
+    const core::Status s = engine.save_state(body);
+    if (!core::ok(s)) {
+      return s;
+    }
+    const SnapshotInfo info{key.seq, key.ts.value(), engine.snapshot_complete(),
+                            static_cast<std::uint16_t>(engine.strategy_count())};
+    return writer_->write_snapshot(info, std::move(body));
   }
 
 private:
@@ -194,6 +207,7 @@ template <strategy::StrategySet SS, InputHook Hook>
     options.start = config.data.range->start;
     options.end = config.data.range->end;
   }
+  options.snapshot_every = config.persistence.snapshot_every;
   Preamble preamble;
   s = load_preamble(config, preamble, error);
   if (!core::ok(s)) {

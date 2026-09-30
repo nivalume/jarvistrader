@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "jarvis/core/clock.hpp"
@@ -78,6 +79,22 @@ public:
     return visit(i, [&](auto& s) { return invoke_position_event(s, ctx, e); });
   }
 
+  // Snapshots (section 16.3): whether strategy i describes its state, and saving or restoring it.
+  [[nodiscard]] bool has_state(StrategyIndex i) {
+    bool out = false;
+    static_cast<void>(visit(i, [&](auto& s) {
+      out = strategy::has_state<std::remove_cvref_t<decltype(s)>>();
+      return core::Status::Ok;
+    }));
+    return out;
+  }
+  core::Status save_state(StrategyIndex i, core::StateWriter& w) {
+    return visit(i, [&](auto& s) { return invoke_save(s, w); });
+  }
+  core::Status load_state(StrategyIndex i, core::StateReader& r) {
+    return visit(i, [&](auto& s) { return invoke_load(s, r); });
+  }
+
 private:
   template <std::size_t I = 0, typename F> core::Status visit(StrategyIndex i, F&& f) {
     if constexpr (I == sizeof...(S)) {
@@ -104,6 +121,10 @@ struct StrategyVTable {
   core::Status (*on_order_event)(void* self, Context& ctx, const model::OrderEvent& event);
   core::Status (*on_position_event)(void* self, Context& ctx, const model::PositionEvent& event);
   core::Status (*on_reconciled)(void* self, Context& ctx, const model::ReconcileOutcome& outcome);
+  // Snapshots (section 16.3).
+  bool (*has_state)(void* self);
+  core::Status (*save_state)(void* self, core::StateWriter& w);
+  core::Status (*load_state)(void* self, core::StateReader& r);
 };
 
 template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexcept {
@@ -131,6 +152,9 @@ template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexc
       [](void* self, Context& ctx, const model::ReconcileOutcome& outcome) {
         return invoke_reconciled(*static_cast<S*>(self), ctx, outcome);
       },
+      [](void* /*self*/) { return strategy::has_state<S>(); },
+      [](void* self, core::StateWriter& w) { return invoke_save(*static_cast<S*>(self), w); },
+      [](void* self, core::StateReader& r) { return invoke_load(*static_cast<S*>(self), r); },
   };
 }
 
@@ -177,6 +201,16 @@ public:
   }
   core::Status on_position_event(StrategyIndex i, Context& ctx, const model::PositionEvent& e) {
     return entries_[i].vtable->on_position_event(entries_[i].self, ctx, e);
+  }
+
+  [[nodiscard]] bool has_state(StrategyIndex i) {
+    return entries_[i].vtable->has_state(entries_[i].self);
+  }
+  core::Status save_state(StrategyIndex i, core::StateWriter& w) {
+    return entries_[i].vtable->save_state(entries_[i].self, w);
+  }
+  core::Status load_state(StrategyIndex i, core::StateReader& r) {
+    return entries_[i].vtable->load_state(entries_[i].self, r);
   }
 
 private:

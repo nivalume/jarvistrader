@@ -13,6 +13,7 @@
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/engine/snapshot_schedule.hpp"
 #include "jarvis/engine/sync_gate.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -37,6 +38,12 @@
 // matches on, a command arriving), the next timer and the next kernel input (delayed market
 // data, a venue answer), in that order on a tie, and hands the commands of every step to the
 // venue loop.
+//
+// EngineState snapshots (DriverOptions::snapshot_every, section 16.3): at each point of the
+// SnapshotSchedule the driver hands the engine to the recorder's snapshot(engine, key), when the
+// recorder has one; the key is the BatchEnd input's. A snapshot that fails (a strategy's own
+// state that cannot be saved, a file that cannot be written) is counted, and the run goes on:
+// the log, not the snapshot, is the record.
 //
 // Every input the driver steps is recorded first, with the key (ts, source_id, seq): seq is the
 // driver's own counter from 1, source_id is the data source's id, or kKernelSource for the
@@ -94,6 +101,11 @@ struct DriverOptions {
   // until no order is open or `drain_for` has passed.
   std::optional<model::ShutdownMode> shutdown;
   core::DurationNanos drain_for{10'000'000'000};
+  std::uint64_t snapshot_every = 0; // persistence.snapshot_every; 0: no snapshots
+  // Live (sections 4.1 and 16.3): the RunStart input, stamped at the start, is the first one,
+  // before the lifecycle starts; seq continues after its prior_seq (a run that continues an
+  // earlier run whose state the engine was restored to).
+  std::optional<model::RunStart> run_start;
 };
 
 struct RunSummary {
@@ -107,6 +119,8 @@ struct RunSummary {
   std::uint64_t venue_answers = 0; // order events from the simulated venue
   bool halted = false;             // a strategy error stopped the node (ErrorPolicy::HaltNode)
   std::uint32_t left_open = 0;     // orders still open when the node stopped
+  std::uint64_t snapshots = 0;     // EngineState snapshots taken
+  std::uint64_t snapshot_failures = 0;
   model::NodeState state = model::NodeState::Init;
   core::UnixNanos first_ts;
   core::UnixNanos last_ts;
@@ -118,7 +132,7 @@ class Driver {
 public:
   Driver(engine::Engine<SS>& engine, Source& source, Rec& recorder, DriverOptions options = {})
       : engine_{&engine}, source_{&source}, recorder_{&recorder}, options_{options},
-        failures_{engine.kernel().failures.capacity()} {}
+        failures_{engine.kernel().failures.capacity()}, snapshots_{options.snapshot_every} {}
 
   [[nodiscard]] core::Status run(RunSummary& out) {
     summary_ = RunSummary{};
@@ -305,6 +319,16 @@ private:
   // Init -> Running at ts0, with the preamble stepped while Syncing.
   core::Status start(core::UnixNanos ts0) {
     summary_.first_ts = ts0;
+    if (options_.run_start) {
+      seq_ = options_.run_start->prior_seq;
+      snapshots_.resume_after(seq_);
+      model::RunStart run_start = *options_.run_start;
+      run_start.ts_init = ts0;
+      const core::Status s = feed(core::EventKey{ts0, kKernelSource, 0}, model::Event{run_start});
+      if (!core::ok(s)) {
+        return s;
+      }
+    }
     for (const auto reason :
          {model::LifecycleReason::Configured, model::LifecycleReason::RunRequested,
           model::LifecycleReason::Started}) {
@@ -530,6 +554,12 @@ private:
       static_cast<void>(failures_.push_back(f));
     }
     engine_->clear_failures();
+    if (snapshots_.due(key.seq, std::holds_alternative<model::BatchEnd>(event))) {
+      if constexpr (requires { recorder_->snapshot(*engine_, key); }) {
+        ++(core::ok(recorder_->snapshot(*engine_, key)) ? summary_.snapshots
+                                                        : summary_.snapshot_failures);
+      }
+    }
     for (std::size_t i = 0; i < failures_.size(); ++i) {
       const strategy::StrategyFailure f = failures_[i];
       ++summary_.strategy_errors;
@@ -548,6 +578,7 @@ private:
   DriverOptions options_;
   engine::Lifecycle lifecycle_;
   core::FixedVector<strategy::StrategyFailure> failures_;
+  engine::SnapshotSchedule snapshots_;
   RunSummary summary_;
   std::uint64_t seq_ = 0;
   bool gating_ = false;      // after start: every input may move the lifecycle

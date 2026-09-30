@@ -226,6 +226,7 @@ TEST_SUITE("unit") {
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::OrderFilled) == 35);
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::Shutdown) == 54);
     CHECK(static_cast<std::uint16_t>(wire::RecordKind::AdminCommand) == 57);
+    CHECK(static_cast<std::uint16_t>(wire::RecordKind::RunStart) == 58);
     CHECK(wire::kind_name(wire::RecordKind::OrderBookDeltas) == "OrderBookDeltas");
     CHECK(wire::known_kind(40));
     CHECK_FALSE(wire::known_kind(0));
@@ -780,8 +781,8 @@ params = { spread = 0.5 }
     namespace fs = std::filesystem;
     const TempDir dir{"creds"};
     fs::create_directories(dir.str());
-    const fs::perms owner = fs::perms::owner_read | fs::perms::owner_write;
-    const auto write = [owner](const std::string& path, std::string_view text) {
+    static constexpr fs::perms owner = fs::perms::owner_read | fs::perms::owner_write;
+    const auto write = [](const std::string& path, std::string_view text) {
       std::ofstream{path} << text;
       fs::permissions(path, owner);
     };
