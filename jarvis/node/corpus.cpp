@@ -549,12 +549,24 @@ struct CorpusMakers {
   }
 
   static Status admin(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
-    event = m::AdminCommand{static_cast<m::AdminAction>(g.draw(93) % 5U), g.ts_};
+    event = m::AdminCommand{static_cast<m::AdminAction>(g.draw(93) % 6U), g.ts_};
     return Status::Ok;
   }
 
   static Status run_start(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
     event = m::RunStart{1 + g.draw(94) % 1000U, g.draw(95) % 1'000'000U, g.ts_};
+    return Status::Ok;
+  }
+
+  static Status param_update(CorpusGenerator& g, const Perp& /*inst*/, m::Event& event) {
+    m::ParamUpdate p;
+    p.strategy_index = static_cast<std::uint16_t>(g.draw(96) % 4U);
+    static_cast<void>(m::ParamKey::from("spread_bps", p.key));
+    p.kind = static_cast<m::ParamKind>(g.draw(97) % 3U);
+    p.integer = static_cast<std::int64_t>(g.draw(98) % 1000U);
+    static_cast<void>(m::ParamText::from(std::to_string(p.integer), p.text));
+    p.ts_init = g.ts_;
+    event = p;
     return Status::Ok;
   }
 
@@ -686,8 +698,8 @@ struct CorpusMakers {
 
   // A market-data-heavy mix in which every kind has at least 0.9%, so a few hundred events cover
   // all of them. Same order as model::Event.
-  static constexpr std::array<Weighted, 41> kMix = {{
-      {180, &trade},         {175, &quote},         {70, &deltas},          {35, &bar},
+  static constexpr std::array<Weighted, 42> kMix = {{
+      {180, &trade},         {166, &quote},         {70, &deltas},          {35, &bar},
       {43, &mark},           {26, &index},          {17, &funding},         {9, &status},
       {10, &close},          {9, &liquidation},     {34, &initialized},     {10, &denied},
       {10, &emulated},       {10, &released},       {10, &submitted},       {17, &accepted},
@@ -697,7 +709,7 @@ struct CorpusMakers {
       {26, &timer},          {17, &batch_end},      {9, &lifecycle},        {9, &strategy_error},
       {10, &shutdown},       {9, &pair_def},        {9, &perpetual_def},    {9, &future_def},
       {9, &rate_limit},      {9, &connection},      {9, &venue_snapshot},   {9, &admin},
-      {9, &run_start},
+      {9, &run_start},       {9, &param_update},
   }};
 };
 

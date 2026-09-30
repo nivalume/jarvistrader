@@ -4,9 +4,10 @@
 
 // When a node takes an EngineState snapshot (docs/architecture.md section 16.3): right after
 // stepping a BatchEnd input, once at least `every` inputs have been stepped since the last
-// snapshot point (the first point counts from the start). Taken there, the state is between two
-// batches with every output flushed; replay applies the same rule to the recorded inputs, so
-// both take their snapshots after the same inputs.
+// snapshot point (the first point counts from the start), or once an admin snapshot command
+// (a recorded AdminCommand input) asked for one. Taken there, the state is between two batches
+// with every output flushed; replay applies the same rule to the recorded inputs, so both take
+// their snapshots after the same inputs.
 
 namespace jarvis::engine {
 
@@ -17,12 +18,16 @@ public:
 
   // After the step of input `seq`; true when a snapshot is taken now.
   [[nodiscard]] constexpr bool due(std::uint64_t seq, bool batch_end) noexcept {
-    if (every_ == 0 || !batch_end || seq < next_) {
+    if (!batch_end || (!requested_ && (every_ == 0 || seq < next_))) {
       return false;
     }
     next_ = seq + every_;
+    requested_ = false;
     return true;
   }
+
+  // An admin snapshot command: one at the next batch end.
+  constexpr void request() noexcept { requested_ = true; }
 
   // Continues from a snapshot taken after input `seq`.
   constexpr void resume_after(std::uint64_t seq) noexcept { next_ = seq + every_; }
@@ -32,6 +37,7 @@ public:
 private:
   std::uint64_t every_;
   std::uint64_t next_;
+  bool requested_ = false;
 };
 
 } // namespace jarvis::engine

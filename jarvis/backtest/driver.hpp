@@ -557,6 +557,10 @@ private:
       static_cast<void>(failures_.push_back(f));
     }
     engine_->clear_failures();
+    if (const auto* admin = std::get_if<model::AdminCommand>(&event);
+        admin != nullptr && admin->action == model::AdminAction::Snapshot) {
+      snapshots_.request();
+    }
     if (snapshots_.due(key.seq, std::holds_alternative<model::BatchEnd>(event))) {
       if constexpr (requires { recorder_->snapshot(*engine_, key); }) {
         ++(core::ok(recorder_->snapshot(*engine_, key)) ? summary_.snapshots

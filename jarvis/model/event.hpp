@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "jarvis/core/clock.hpp"
+#include "jarvis/core/fixed_string.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/model/account.hpp"
@@ -63,6 +64,14 @@ enum class AdminAction : std::uint8_t {
   Resume = 2,    // TradingState back to Active (what monitors or light checks lowered)
   CancelAll = 3, // cancel every open order of every strategy
   Shutdown = 4,  // stop the node ([node] shutdown decides how)
+  Snapshot = 5,  // an EngineState snapshot at the next batch end
+};
+
+// How a ParamUpdate's value reads.
+enum class ParamKind : std::uint8_t {
+  Text = 0, // anything else, as given
+  Bool = 1, // true or false
+  Int = 2,  // a signed decimal integer
 };
 
 // Which connection a ConnectionStatus reports (docs/architecture.md section 4.4).
@@ -147,6 +156,8 @@ enum class RateLimitKind : std::uint8_t {
     return "CANCEL_ALL";
   case AdminAction::Shutdown:
     return "SHUTDOWN";
+  case AdminAction::Snapshot:
+    return "SNAPSHOT";
   }
   return "";
 }
@@ -205,7 +216,7 @@ enum class RateLimitKind : std::uint8_t {
   return core::Status::Ok;
 }
 [[nodiscard]] constexpr core::Status from_value(std::uint8_t v, AdminAction& out) noexcept {
-  if (v > static_cast<std::uint8_t>(AdminAction::Shutdown)) {
+  if (v > static_cast<std::uint8_t>(AdminAction::Snapshot)) {
     return core::Status::OutOfRange;
   }
   out = static_cast<AdminAction>(v);
@@ -266,6 +277,40 @@ struct Shutdown {
   core::UnixNanos ts_init;
 };
 
+[[nodiscard]] constexpr std::string_view to_string(ParamKind v) noexcept {
+  switch (v) {
+  case ParamKind::Text:
+    return "TEXT";
+  case ParamKind::Bool:
+    return "BOOL";
+  case ParamKind::Int:
+    return "INT";
+  }
+  return "UNKNOWN";
+}
+[[nodiscard]] constexpr core::Status from_value(std::uint8_t v, ParamKind& out) noexcept {
+  if (v > static_cast<std::uint8_t>(ParamKind::Int)) {
+    return core::Status::OutOfRange;
+  }
+  out = static_cast<ParamKind>(v);
+  return core::Status::Ok;
+}
+
+using ParamKey = core::FixedString<32>;
+using ParamText = core::FixedString<64>;
+
+// A strategy parameter an operator set (admin set_param, docs/architecture.md section 19.3),
+// recorded like any input: the strategy's on_params_changed receives it, in the node and in a
+// replay alike.
+struct ParamUpdate {
+  std::uint16_t strategy_index = 0;
+  ParamKey key;
+  ParamKind kind = ParamKind::Text;
+  std::int64_t integer = 0; // Bool (0 or 1) and Int
+  ParamText text;           // the value as given
+  core::UnixNanos ts_init;
+};
+
 // An operator's command from the admin socket, recorded like any input so it replays.
 struct AdminCommand {
   AdminAction action = AdminAction::Halt;
@@ -317,7 +362,7 @@ using Event =
                  OrderUpdated, OrderFilled, OrderFillVoided, AccountState, TimerFired, BatchEnd,
                  NodeLifecycle, StrategyError, Shutdown, CurrencyPair, CryptoPerpetual,
                  CryptoFuture, RateLimitFeedback, ConnectionStatus, VenueSnapshot, AdminCommand,
-                 RunStart>;
+                 RunStart, ParamUpdate>;
 
 // ts_init of any input event (order events keep it in their header). Not noexcept: std::visit
 // may throw bad_variant_access, which cannot happen for these types.

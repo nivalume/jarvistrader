@@ -274,6 +274,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   std::unique_ptr<AdminServer> admin;
   if (const std::string path = node::admin_socket_path(config); !path.empty()) {
     admin = std::make_unique<AdminServer>(path);
+    admin->set_strategies(strategy_names(engine.kernel()));
     s = admin->start(error);
   }
   if (core::ok(s)) {

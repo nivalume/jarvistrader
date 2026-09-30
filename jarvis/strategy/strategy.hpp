@@ -42,6 +42,7 @@
 //                                                 closed, adjusted (funding)
 //   on_timer(ctx, TimerKey, UnixNanos deadline)
 //   on_error(ctx, StrategyError)                  this strategy failed
+//   on_params_changed(ctx, ParamUpdate)           an operator set a parameter (admin set_param)
 //
 // A strategy that keeps state of its own describes it for EngineState snapshots (section 16.3)
 // with one member template, used to save and to restore it:
@@ -126,6 +127,15 @@ core::Status invoke_timer(S& s, Context& ctx, core::TimerKey key, core::UnixNano
 template <typename S> core::Status invoke_error(S& s, Context& ctx, const model::StrategyError& e) {
   if constexpr (requires { s.on_error(ctx, e); }) {
     return detail::status_of([&] { return s.on_error(ctx, e); });
+  } else {
+    return core::Status::Ok;
+  }
+}
+
+template <typename S>
+core::Status invoke_params_changed(S& s, Context& ctx, const model::ParamUpdate& p) {
+  if constexpr (requires { s.on_params_changed(ctx, p); }) {
+    return detail::status_of([&] { return s.on_params_changed(ctx, p); });
   } else {
     return core::Status::Ok;
   }

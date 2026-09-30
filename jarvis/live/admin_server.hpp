@@ -5,11 +5,13 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/spsc_ring.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/generated/enums.hpp"
+#include "jarvis/node/admin_protocol.hpp"
 
 // The admin socket's server (docs/architecture.md section 19.3; the protocol is in
 // node/admin_protocol.hpp). Its own thread accepts one command per connection on a Unix domain
@@ -49,7 +51,9 @@ public:
   [[nodiscard]] core::Status start(std::string& error);
   void stop(); // joins the thread and removes the socket file
 
-  [[nodiscard]] SpscRing<model::AdminAction>& commands() noexcept; // admin -> core
+  // The node's strategy ids by index, for set_param; before start().
+  void set_strategies(std::vector<std::string> ids);
+  [[nodiscard]] SpscRing<node::AdminRequest>& commands() noexcept; // admin -> core
   [[nodiscard]] NodeStatus& status() noexcept;
   [[nodiscard]] std::uint64_t accepted() const noexcept; // commands handed to the core
   [[nodiscard]] const std::string& path() const noexcept;

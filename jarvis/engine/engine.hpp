@@ -304,6 +304,8 @@ private:
       return on_admin(e);
     } else if constexpr (std::is_same_v<T, model::RunStart>) {
       return on_run_start(e);
+    } else if constexpr (std::is_same_v<T, model::ParamUpdate>) {
+      return on_param_update(e);
     } else {
       return core::Status::Ok;
     }
@@ -976,6 +978,8 @@ private:
     case model::AdminAction::Shutdown:
       k_.stop_requested = true;
       return core::Status::Ok;
+    case model::AdminAction::Snapshot:
+      return core::Status::Ok; // the node, and a replay, take it at the next batch end
     }
     return core::Status::InvalidArgument;
   }
@@ -1151,6 +1155,24 @@ private:
         emit_countdown(slot.value);
       }
     }
+  }
+
+  // An operator's parameter for one strategy; a strategy that has not started, has stopped or
+  // was halted does not get it (the input is still recorded).
+  core::Status on_param_update(const model::ParamUpdate& e) {
+    if (e.strategy_index >= ss_->size()) {
+      return core::Status::InvalidArgument;
+    }
+    const auto s = static_cast<StrategyIndex>(e.strategy_index);
+    if (!started_ || k_.stopped || k_.is_disabled(s)) {
+      return core::Status::Ok;
+    }
+    strategy::Context ctx{k_, s};
+    const core::Status status = ss_->on_params_changed(s, ctx, e);
+    if (!core::ok(status)) {
+      k_.fail(s, status);
+    }
+    return core::Status::Ok;
   }
 
   core::Status on_strategy_error(const model::StrategyError& e) {

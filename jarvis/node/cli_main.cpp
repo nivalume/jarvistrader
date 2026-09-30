@@ -11,7 +11,7 @@
 //   jarvis snapshot FILE
 //   jarvis trace-export LOG_DIR --spec NAME --out DIR
 //   jarvis report RUN_DIR [--out FILE]
-//   jarvis admin SOCKET COMMAND | jarvis admin --config FILE COMMAND
+//   jarvis admin SOCKET COMMAND [ARGS] | jarvis admin --config FILE COMMAND [ARGS]
 //
 // Exit status: 0 success, 1 failure or difference, 2 usage error, 3 replay divergence.
 
@@ -76,7 +76,7 @@ constexpr std::string_view kUsageText =
     "  jarvis trace-export LOG_DIR --spec NAME --out DIR\n"
     "  jarvis report RUN_DIR [--out FILE]\n"
     "  jarvis config FILE [--env ENV] [--set path=value]... [--out FILE]\n"
-    "  jarvis admin SOCKET COMMAND | jarvis admin --config FILE COMMAND\n"
+    "  jarvis admin SOCKET COMMAND [ARGS] | jarvis admin --config FILE COMMAND [ARGS]\n"
     "    COMMAND: halt | reduce | resume | cancel_all | shutdown | status\n";
 
 // Positional arguments and --options of one subcommand. Every option takes a value except
@@ -463,9 +463,9 @@ int cmd_config(const Args& args) {
 // A running node's admin socket (section 19.3): sends one command, prints the reply.
 int cmd_admin(const Args& args) {
   std::string path;
-  std::string_view command;
+  std::size_t first = 0;
   if (const auto file = args.option("--config")) {
-    if (args.positional.size() != 1) {
+    if (args.positional.empty()) {
       return usage("admin --config FILE needs one command");
     }
     node::NodeConfig config;
@@ -475,13 +475,19 @@ int cmd_admin(const Args& args) {
       return kFailed;
     }
     path = node::admin_socket_path(config);
-    command = args.positional[0];
+    first = 0;
   } else {
-    if (args.positional.size() != 2) {
+    if (args.positional.size() < 2) {
       return usage("admin needs a socket and one command");
     }
     path = std::string{args.positional[0]};
-    command = args.positional[1];
+    first = 1;
+  }
+  // The command and its arguments (set_param <strategy> <key> <value>) as one line.
+  std::string command;
+  for (std::size_t i = first; i < args.positional.size(); ++i) {
+    command += (i == first ? "" : " ");
+    command += args.positional[i];
   }
   if (path.empty()) {
     std::cerr << "jarvis: the configuration has no [admin] socket\n";

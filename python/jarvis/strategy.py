@@ -20,6 +20,8 @@ Callbacks::
                                            adjusted (funding)
     on_reconciled(ctx, outcome)            the account was reconciled with the venue (live: at
                                            start, before on_start, and after each reconnect)
+    on_params_changed(ctx, key, value)     an operator set a parameter (admin ``set_param``):
+                                           value is a bool, an int or the text as given
 
 Orders: ``ctx.submit(ctx.limit(iid, side, qty, price))`` returns the ClientOrderId; the outcome
 (submitted or denied, then the venue's answers) arrives in ``on_order_event``. ``ctx.modify``,
@@ -86,6 +88,7 @@ CALLBACKS = (
     "on_order_event",
     "on_position_event",
     "on_reconciled",
+    "on_params_changed",
 )
 
 

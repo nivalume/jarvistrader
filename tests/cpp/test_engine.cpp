@@ -16,6 +16,7 @@
 #include "jarvis/core/time.hpp"
 #include "jarvis/engine/engine.hpp"
 #include "jarvis/engine/lifecycle.hpp"
+#include "jarvis/engine/snapshot_schedule.hpp"
 #include "jarvis/execution/order_fsm.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/instruments.hpp"
@@ -922,6 +923,10 @@ struct Trader {
   Script* script = nullptr;
   std::vector<std::string>* log = nullptr;
   int trades = 0;
+
+  void on_params_changed(st::Context& /*ctx*/, const md::ParamUpdate& p) {
+    log->push_back("PARAM " + std::string{p.key.view()} + "=" + std::to_string(p.integer));
+  }
 
   Status on_start(st::Context& ctx) {
     REQUIRE(ctx.subscribe_trades(iid("BTCUSDT-PERP.BINANCE")) == Status::Ok);
@@ -1976,6 +1981,54 @@ TEST_SUITE("zero-alloc") {
     CHECK(engine.failures().empty());
     CHECK(events > 1500);
     CHECK(engine.kernel().trading.stats.refused_order_events == 0);
+  }
+
+  TEST_CASE("a parameter reaches its strategy once it runs, and never a halted one") {
+    std::vector<std::string> log;
+    Script script = [](st::Context& /*ctx*/, int step) -> Status {
+      return step == 1 ? Status::InvalidState : Status::Ok; // the first trade fails it
+    };
+    st::StaticStrategySet<Trader> set{Trader{&script, &log}};
+    jarvis::engine::Engine engine{small_config(), set};
+    const auto param = [](std::uint64_t ts, std::int64_t value) {
+      md::ParamUpdate p;
+      p.strategy_index = 0;
+      REQUIRE(md::ParamKey::from("size", p.key) == Status::Ok);
+      p.kind = md::ParamKind::Int;
+      p.integer = value;
+      p.ts_init = UnixNanos{ts};
+      return md::Event{p};
+    };
+    std::uint64_t seq = 0;
+    REQUIRE(drive(engine, {perpetual_definition(1), param(1, 1), running(2), param(3, 2)}, seq) ==
+            Status::Ok);
+    CHECK(log == std::vector<std::string>{"PARAM size=2"}); // not before on_start
+    REQUIRE(drive(engine, {trade_at(4, "100.0")}, seq) == Status::Ok);
+    REQUIRE(engine.failures().size() == 1);
+    const md::Event error{md::StrategyError{0, md::StrategyErrorKind::Exception, 1, UnixNanos{4}}};
+    REQUIRE(engine.step(EventKey{UnixNanos{4}, 0, ++seq}, error) == Status::Ok);
+    engine.clear_outputs();
+    REQUIRE(drive(engine, {param(5, 3)}, seq) == Status::Ok);
+    CHECK(log == std::vector<std::string>{"PARAM size=2"}); // halted
+    md::ParamUpdate stray;
+    stray.strategy_index = 7;
+    CHECK(engine.step(EventKey{UnixNanos{6}, 0, ++seq}, md::Event{stray}) ==
+          Status::InvalidArgument);
+  }
+
+  TEST_CASE("an admin snapshot request is taken at the next batch end") {
+    jarvis::engine::SnapshotSchedule schedule{100};
+    CHECK_FALSE(schedule.due(5, true));
+    schedule.request();
+    CHECK_FALSE(schedule.due(6, false)); // not inside a batch
+    CHECK(schedule.due(7, true));
+    CHECK_FALSE(schedule.due(8, true)); // once
+    CHECK_FALSE(schedule.due(106, true));
+    CHECK(schedule.due(107, true)); // the regular schedule counts from the requested point
+    jarvis::engine::SnapshotSchedule never{0};
+    CHECK_FALSE(never.due(1'000'000, true));
+    never.request();
+    CHECK(never.due(1'000'001, true));
   }
 }
 // NOLINTEND(readability-make-member-function-const,readability-convert-member-functions-to-static)

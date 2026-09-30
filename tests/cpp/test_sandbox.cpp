@@ -25,6 +25,7 @@
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/replay.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 #include "support/http_get.hpp"
@@ -94,6 +95,13 @@ struct Tapper {
   int cancels = 0;
   bool bought = false;
   md::ClientOrderId resting;
+  std::vector<std::string> params; // what on_params_changed received: key=text (kind)
+
+  void on_params_changed(st::Context& /*ctx*/, const md::ParamUpdate& p) {
+    params.push_back(std::string{p.key.view()} + "=" + std::string{p.text.view()} + " (" +
+                     std::string{md::to_string(p.kind)} + ")");
+  }
+
   // Set once it has seen all the streaming test sends: three quotes, two trades, three book
   // updates (the snapshot and two diffs), and its resting order canceled.
   std::atomic<bool>* stop = nullptr;
@@ -201,6 +209,7 @@ TEST_SUITE("unit") {
     const TempDir dir;
     const std::string path = dir.file("admin.sock");
     live::AdminServer server{path};
+    server.set_strategies({"tap-001", "mm-002"});
     std::string error;
     REQUIRE(server.start(error) == Status::Ok);
     CHECK((fs::status(path).permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
@@ -210,11 +219,39 @@ TEST_SUITE("unit") {
     CHECK(reply == "ok");
     REQUIRE(node::admin_request(path, "bogus", reply, error) == Status::Ok);
     CHECK(reply.starts_with("error unknown command"));
-    md::AdminAction action{};
-    REQUIRE(server.commands().try_pop(action));
-    CHECK(action == md::AdminAction::Halt);
-    CHECK_FALSE(server.commands().try_pop(action));
+    node::AdminRequest request;
+    REQUIRE(server.commands().try_pop(request));
+    CHECK(request.action == md::AdminAction::Halt);
+    CHECK_FALSE(request.is_param);
+    CHECK_FALSE(server.commands().try_pop(request));
     CHECK(server.accepted() == 1);
+
+    // set_param names a strategy by id; the value is typed when it can be.
+    REQUIRE(node::admin_request(path, "set_param mm-002 spread_bps 3", reply, error) == Status::Ok);
+    CHECK(reply == "ok");
+    REQUIRE(node::admin_request(path, "set_param tap-001 mode \"aggressive now\"", reply, error) ==
+            Status::Ok);
+    CHECK(reply == "ok");
+    REQUIRE(node::admin_request(path, "set_param nobody x 1", reply, error) == Status::Ok);
+    CHECK(reply == "error no strategy \"nobody\" in this node");
+    REQUIRE(node::admin_request(path, "set_param mm-002 x", reply, error) == Status::Ok);
+    CHECK(reply == "error set_param needs a strategy id, a key and a value");
+    REQUIRE(node::admin_request(path, "snapshot", reply, error) == Status::Ok);
+    CHECK(reply == "ok");
+    REQUIRE(server.commands().try_pop(request));
+    CHECK(request.is_param);
+    CHECK(request.param.strategy_index == 1);
+    CHECK(request.param.key.view() == "spread_bps");
+    CHECK(request.param.kind == md::ParamKind::Int);
+    CHECK(request.param.integer == 3);
+    REQUIRE(server.commands().try_pop(request));
+    CHECK(request.param.strategy_index == 0);
+    CHECK(request.param.kind == md::ParamKind::Text);
+    CHECK(request.param.text.view() == "aggressive now");
+    REQUIRE(server.commands().try_pop(request));
+    CHECK_FALSE(request.is_param);
+    CHECK(request.action == md::AdminAction::Snapshot);
+    CHECK(server.accepted() == 4);
 
     REQUIRE(node::admin_request(path, "status", reply, error) == Status::Ok);
     CHECK(reply.find(R"("ready":false,"alive":false)") != std::string::npos); // nothing published
@@ -277,6 +314,10 @@ TEST_SUITE("unit") {
       std::string reply;
       std::string error;
       replies.push_back(wait_for(R"("state":"RUNNING")"));
+      static_cast<void>(node::admin_request(socket, "set_param tap-001 size 5", reply, error));
+      replies.push_back(reply);
+      static_cast<void>(node::admin_request(socket, "snapshot", reply, error));
+      replies.push_back(reply);
       static_cast<void>(node::admin_request(socket, "halt", reply, error));
       replies.push_back(reply);
       replies.push_back(wait_for(R"("trading":"HALTED")"));
@@ -293,29 +334,41 @@ TEST_SUITE("unit") {
     INFO(error);
     REQUIRE(s == Status::Ok);
     CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{15});
-    REQUIRE(replies.size() == 4);
+    REQUIRE(replies.size() == 6);
     CHECK(replies[0].find(R"("ready":true,"alive":true)") != std::string::npos);
-    CHECK(replies[1] == "ok");
-    CHECK_FALSE(replies[2].empty());
-    CHECK(replies[3] == "ok");
-    CHECK(result.admin_commands == 2);
+    CHECK(replies[1] == "ok"); // set_param
+    CHECK(replies[2] == "ok"); // snapshot
+    CHECK(replies[3] == "ok"); // halt
+    CHECK_FALSE(replies[4].empty());
+    CHECK(replies[5] == "ok");
+    CHECK(result.admin_commands == 4);
     CHECK(result.summary.state == md::NodeState::Stopped);
+    CHECK(set.get<0>().params == std::vector<std::string>{"size=5 (INT)"});
+    // The requested snapshot (snapshot_every is far off): written at the next batch end.
+    CHECK(result.summary.snapshots == 1);
+    CHECK(node::list_snapshots(result.directory).size() == 1);
 
-    // Both commands are recorded inputs, and the session replays with the same outputs.
+    // The commands are recorded inputs, and the session replays with the same outputs, the same
+    // parameter and the same snapshot.
     node::EventLogReader reader;
     REQUIRE(reader.open(result.directory) == Status::Ok);
     wire::RecordView v;
     int admins = 0;
+    int params = 0;
     while (reader.next(v) == Status::Ok) {
       admins += v.header.kind == static_cast<std::uint16_t>(wire::RecordKind::AdminCommand) ? 1 : 0;
+      params += v.header.kind == static_cast<std::uint16_t>(wire::RecordKind::ParamUpdate) ? 1 : 0;
     }
-    CHECK(admins == 2);
+    CHECK(admins == 3);
+    CHECK(params == 1);
     st::StaticStrategySet<Tapper> fresh{Tapper{}};
     node::ReplayReport report;
     REQUIRE(node::replay_run(result.directory, config, fresh, node::ReplayOptions{}, report,
                              error) == Status::Ok);
     CHECK_FALSE(report.divergence.has_value());
     CHECK(report.outputs == result.summary.outputs);
+    CHECK(report.snapshots_checked == 1);
+    CHECK(fresh.get<0>().params == set.get<0>().params);
   }
 
   TEST_CASE("the market feed records its stream connection going down and back up") {

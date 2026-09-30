@@ -1,7 +1,9 @@
 #include "jarvis/node/admin_protocol.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <cstring>
 
 #include <poll.h>
@@ -50,12 +52,13 @@ std::string admin_socket_path(const NodeConfig& config) {
 }
 
 std::optional<model::AdminAction> admin_action(std::string_view word) noexcept {
-  constexpr std::array<std::pair<std::string_view, model::AdminAction>, 5> kWords{{
+  constexpr std::array<std::pair<std::string_view, model::AdminAction>, 6> kWords{{
       {"halt", model::AdminAction::Halt},
       {"reduce", model::AdminAction::Reduce},
       {"resume", model::AdminAction::Resume},
       {"cancel_all", model::AdminAction::CancelAll},
       {"shutdown", model::AdminAction::Shutdown},
+      {"snapshot", model::AdminAction::Snapshot},
   }};
   for (const auto& [name, action] : kWords) {
     if (name == word) {
@@ -63,6 +66,87 @@ std::optional<model::AdminAction> admin_action(std::string_view word) noexcept {
     }
   }
   return std::nullopt;
+}
+
+namespace {
+
+std::string_view next_word(std::string_view& rest) {
+  const std::size_t start = rest.find_first_not_of(' ');
+  if (start == std::string_view::npos) {
+    rest = {};
+    return {};
+  }
+  rest.remove_prefix(start);
+  const std::size_t end = rest.find(' ');
+  const std::string_view word = rest.substr(0, end);
+  rest.remove_prefix(end == std::string_view::npos ? rest.size() : end);
+  return word;
+}
+
+// true/false, a signed decimal integer, or text (quotes around it are dropped).
+void typed_value(std::string_view text, model::ParamUpdate& out) {
+  if (text == "true" || text == "false") {
+    out.kind = model::ParamKind::Bool;
+    out.integer = text == "true" ? 1 : 0;
+    return;
+  }
+  std::int64_t v = 0;
+  const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), v);
+  if (!text.empty() && ec == std::errc{} && end == text.data() + text.size()) {
+    out.kind = model::ParamKind::Int;
+    out.integer = v;
+    return;
+  }
+  out.kind = model::ParamKind::Text;
+  out.integer = 0;
+}
+
+} // namespace
+
+std::string parse_admin_request(std::string_view line, std::span<const std::string> strategies,
+                                AdminRequest& out) {
+  out = AdminRequest{};
+  std::string_view rest = line;
+  const std::string_view word = next_word(rest);
+  if (word != "set_param") {
+    const std::optional<model::AdminAction> action = admin_action(word);
+    if (!action || !next_word(rest).empty()) {
+      return "unknown command \"" + std::string{line} +
+             "\" (halt, reduce, resume, cancel_all, shutdown, snapshot, set_param, status)";
+    }
+    out.action = *action;
+    return {};
+  }
+  const std::string_view id = next_word(rest);
+  const std::string_view key = next_word(rest);
+  const std::size_t start = rest.find_first_not_of(' ');
+  std::string_view value =
+      start == std::string_view::npos ? std::string_view{} : rest.substr(start);
+  if (id.empty() || key.empty() || value.empty()) {
+    return "set_param needs a strategy id, a key and a value";
+  }
+  const auto found = std::find(strategies.begin(), strategies.end(), id);
+  if (found == strategies.end()) {
+    return "no strategy \"" + std::string{id} + "\" in this node";
+  }
+  out.is_param = true;
+  out.param.strategy_index = static_cast<std::uint16_t>(found - strategies.begin());
+  if (!core::ok(model::ParamKey::from(key, out.param.key))) {
+    return "the key is longer than " + std::to_string(model::ParamKey::capacity()) + " bytes";
+  }
+  const bool quoted = value.size() >= 2 && value.front() == '"' && value.back() == '"';
+  if (quoted) {
+    value = value.substr(1, value.size() - 2);
+  }
+  if (!core::ok(model::ParamText::from(value, out.param.text))) {
+    return "the value is longer than " + std::to_string(model::ParamText::capacity()) + " bytes";
+  }
+  if (quoted) {
+    out.param.kind = model::ParamKind::Text;
+  } else {
+    typed_value(value, out.param);
+  }
+  return {};
 }
 
 Status admin_request(const std::string& path, std::string_view line, std::string& reply,

@@ -218,7 +218,8 @@ constexpr std::string_view kCallbackNames[] = { // NOLINT(cppcoreguidelines-avoi
     "on_error",
     "on_order_event",
     "on_position_event",
-    "on_reconciled"};
+    "on_reconciled",
+    "on_params_changed"};
 
 enum Callback : std::uint8_t {
   kOnStart,
@@ -242,6 +243,7 @@ enum Callback : std::uint8_t {
   kOnOrderEvent,
   kOnPositionEvent,
   kOnReconciled,
+  kOnParamsChanged,
   kCallbackCount
 };
 static_assert(std::size(kCallbackNames) == kCallbackCount);
@@ -663,6 +665,29 @@ struct HostVTable {
       return h.call(ctx, kOnReconciled, nb::cast(o, nb::rv_policy::copy));
     });
   }
+  // on_params_changed(ctx, key, value): value is a bool, an int or the text as given.
+  static Status on_params_changed(void* p, st::Context& ctx, const m::ParamUpdate& u) {
+    PyStrategyHost& h = PyStrategyHost::self(p);
+    if (!h.has(kOnParamsChanged)) {
+      return Status::Ok;
+    }
+    return guarded(h, ctx, kOnParamsChanged, [&] {
+      h.gil_->acquire();
+      nb::object value;
+      switch (u.kind) {
+      case m::ParamKind::Bool:
+        value = nb::bool_(u.integer != 0);
+        break;
+      case m::ParamKind::Int:
+        value = nb::int_(u.integer);
+        break;
+      case m::ParamKind::Text:
+        value = nb::str(u.text.view().data(), u.text.view().size());
+        break;
+      }
+      return h.call(ctx, kOnParamsChanged, std::string{u.key.view()}, value);
+    });
+  }
   static bool has_state(void* p) { return PyStrategyHost::self(p).has_state(); }
   static Status save_state(void* p, jarvis::core::StateWriter& w) {
     return PyStrategyHost::self(p).save_state(w);
@@ -673,10 +698,11 @@ struct HostVTable {
 };
 
 const st::StrategyVTable PyStrategyHost::kVTable{
-    &HostVTable::on_start,       &HostVTable::on_stop,           &HostVTable::on_data,
-    &HostVTable::on_batch,       &HostVTable::on_timer,          &HostVTable::on_error,
-    &HostVTable::on_order_event, &HostVTable::on_position_event, &HostVTable::on_reconciled,
-    &HostVTable::has_state,      &HostVTable::save_state,        &HostVTable::load_state};
+    &HostVTable::on_start,         &HostVTable::on_stop,           &HostVTable::on_data,
+    &HostVTable::on_batch,         &HostVTable::on_timer,          &HostVTable::on_error,
+    &HostVTable::on_order_event,   &HostVTable::on_position_event, &HostVTable::on_reconciled,
+    &HostVTable::has_state,        &HostVTable::save_state,        &HostVTable::load_state,
+    &HostVTable::on_params_changed};
 
 // ---- node setup -----------------------------------------------------------------------------
 

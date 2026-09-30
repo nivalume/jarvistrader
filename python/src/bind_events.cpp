@@ -255,7 +255,10 @@ void bind_kernel(nb::module_& mod) {
                    std::array{m::ShutdownMode::CancelAllThenExit, m::ShutdownMode::ExitKeepOrders});
   bind_kernel_enum(mod, "AdminAction",
                    std::array{m::AdminAction::Halt, m::AdminAction::Reduce, m::AdminAction::Resume,
-                              m::AdminAction::CancelAll, m::AdminAction::Shutdown});
+                              m::AdminAction::CancelAll, m::AdminAction::Shutdown,
+                              m::AdminAction::Snapshot});
+  bind_kernel_enum(mod, "ParamKind",
+                   std::array{m::ParamKind::Text, m::ParamKind::Bool, m::ParamKind::Int});
   bind_struct<m::TimerFired>(mod, "TimerFired", "A timer deadline reached (a recorded input).");
   bind_struct<m::BatchEnd>(mod, "BatchEnd", "End of one drained batch of inputs.");
   bind_struct<m::NodeLifecycle>(mod, "NodeLifecycle", "A node lifecycle transition.");
@@ -266,6 +269,8 @@ void bind_kernel(nb::module_& mod) {
       mod, "RunStart",
       "The first input of a live run: its ClientOrderId epoch, and the earlier "
       "run it continues, if any.");
+  bind_struct<m::ParamUpdate>(mod, "ParamUpdate",
+                              "A strategy parameter an operator set (admin set_param).");
   bind_kernel_enum(mod, "RateLimitKind",
                    std::array{m::RateLimitKind::Orders, m::RateLimitKind::RequestWeight});
   bind_struct<m::RateLimitFeedback>(mod, "RateLimitFeedback",

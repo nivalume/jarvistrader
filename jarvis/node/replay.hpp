@@ -316,6 +316,10 @@ private:
     engine_->clear_failures();
     last_seq_ = record.header.seq;
     ++report_->inputs;
+    if (const auto* admin = std::get_if<model::AdminCommand>(&event);
+        admin != nullptr && admin->action == model::AdminAction::Snapshot) {
+      snapshots_.request();
+    }
     if (snapshots_.due(record.header.seq, std::holds_alternative<model::BatchEnd>(event))) {
       check_snapshot(record.header.seq);
     }

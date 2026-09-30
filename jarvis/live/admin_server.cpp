@@ -41,20 +41,21 @@ std::string status_json(const NodeStatus& s) {
 } // namespace
 
 struct AdminServer::Impl {
-  Impl(std::string p, std::size_t slots) : path{std::move(p)}, ring{slots} {}
+  Impl(std::string p, std::size_t slots) : ring{slots}, path{std::move(p)} {}
 
-  std::string path;
-  SpscRing<model::AdminAction> ring;
-  NodeStatus status;
+  SpscRing<node::AdminRequest> ring;
   std::atomic<std::uint64_t> accepted{0};
-  std::atomic<bool> stopping{false};
-  int listener = -1;
   std::thread thread;
+  std::vector<std::string> strategies;
+  NodeStatus status;
+  std::string path;
+  int listener = -1;
+  std::atomic<bool> stopping{false};
 
   // One command: read a line (bounded in size and time), answer it.
   void serve(int fd) {
     std::string line;
-    std::array<char, 256> buffer{};
+    std::array<char, 512> buffer{};
     while (line.find('\n') == std::string::npos && line.size() < buffer.size()) {
       pollfd p{fd, POLLIN, 0};
       if (::poll(&p, 1, kReadMs) <= 0) {
@@ -72,16 +73,16 @@ struct AdminServer::Impl {
     static_cast<void>(::send(fd, reply.data(), reply.size(), MSG_NOSIGNAL));
   }
 
-  std::string answer(std::string_view word) {
-    if (word == "status") {
+  std::string answer(std::string_view line) {
+    if (line == "status") {
       return status_json(status);
     }
-    const std::optional<model::AdminAction> action = node::admin_action(word);
-    if (!action) {
-      return "error unknown command \"" + std::string{word} +
-             "\" (halt, reduce, resume, cancel_all, shutdown, status)";
+    node::AdminRequest request;
+    if (const std::string refused = node::parse_admin_request(line, strategies, request);
+        !refused.empty()) {
+      return "error " + refused;
     }
-    if (!ring.try_push(*action)) {
+    if (!ring.try_push(request)) {
       return "error busy: the core thread has not taken the earlier commands";
     }
     accepted.fetch_add(1, std::memory_order_relaxed);
@@ -156,7 +157,11 @@ void AdminServer::stop() {
   std::filesystem::remove(a.path, ec);
 }
 
-SpscRing<model::AdminAction>& AdminServer::commands() noexcept { return impl_->ring; }
+void AdminServer::set_strategies(std::vector<std::string> ids) {
+  impl_->strategies = std::move(ids);
+}
+
+SpscRing<node::AdminRequest>& AdminServer::commands() noexcept { return impl_->ring; }
 NodeStatus& AdminServer::status() noexcept { return impl_->status; }
 std::uint64_t AdminServer::accepted() const noexcept {
   return impl_->accepted.load(std::memory_order_relaxed);

@@ -30,7 +30,7 @@ concept StrategySet =
     requires(SS& ss, StrategyIndex i, Context& ctx, const DataView& data, const BatchView& batch,
              core::TimerKey key, core::UnixNanos ts, const model::StrategyError& error,
              const model::OrderEvent& order_event, const model::PositionEvent& position_event,
-             const model::ReconcileOutcome& outcome) {
+             const model::ReconcileOutcome& outcome, const model::ParamUpdate& param) {
       { ss.size() } -> std::convertible_to<std::size_t>;
       { ss.on_start(i, ctx) } -> std::same_as<core::Status>;
       { ss.on_stop(i, ctx) } -> std::same_as<core::Status>;
@@ -41,6 +41,7 @@ concept StrategySet =
       { ss.on_error(i, ctx, error) } -> std::same_as<core::Status>;
       { ss.on_order_event(i, ctx, order_event) } -> std::same_as<core::Status>;
       { ss.on_position_event(i, ctx, position_event) } -> std::same_as<core::Status>;
+      { ss.on_params_changed(i, ctx, param) } -> std::same_as<core::Status>;
     };
 
 template <Strategy... S> class StaticStrategySet {
@@ -77,6 +78,9 @@ public:
   }
   core::Status on_position_event(StrategyIndex i, Context& ctx, const model::PositionEvent& e) {
     return visit(i, [&](auto& s) { return invoke_position_event(s, ctx, e); });
+  }
+  core::Status on_params_changed(StrategyIndex i, Context& ctx, const model::ParamUpdate& p) {
+    return visit(i, [&](auto& s) { return invoke_params_changed(s, ctx, p); });
   }
 
   // Snapshots (section 16.3): whether strategy i describes its state, and saving or restoring it.
@@ -125,6 +129,7 @@ struct StrategyVTable {
   bool (*has_state)(void* self);
   core::Status (*save_state)(void* self, core::StateWriter& w);
   core::Status (*load_state)(void* self, core::StateReader& r);
+  core::Status (*on_params_changed)(void* self, Context& ctx, const model::ParamUpdate& param);
 };
 
 template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexcept {
@@ -155,6 +160,9 @@ template <Strategy S> [[nodiscard]] constexpr StrategyVTable make_vtable() noexc
       [](void* /*self*/) { return strategy::has_state<S>(); },
       [](void* self, core::StateWriter& w) { return invoke_save(*static_cast<S*>(self), w); },
       [](void* self, core::StateReader& r) { return invoke_load(*static_cast<S*>(self), r); },
+      [](void* self, Context& ctx, const model::ParamUpdate& param) {
+        return invoke_params_changed(*static_cast<S*>(self), ctx, param);
+      },
   };
 }
 
@@ -201,6 +209,9 @@ public:
   }
   core::Status on_position_event(StrategyIndex i, Context& ctx, const model::PositionEvent& e) {
     return entries_[i].vtable->on_position_event(entries_[i].self, ctx, e);
+  }
+  core::Status on_params_changed(StrategyIndex i, Context& ctx, const model::ParamUpdate& p) {
+    return entries_[i].vtable->on_params_changed(entries_[i].self, ctx, p);
   }
 
   [[nodiscard]] bool has_state(StrategyIndex i) {

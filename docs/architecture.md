@@ -854,6 +854,7 @@ C++ 的 `Strategy` concept 要求以下成员函数中的任意子集，未实�
 | `on_position_event(ctx, PositionEvent)` | 仓位开、变、平、调整 |
 | `on_timer(ctx, TimerKey, ts)` | 定时器 |
 | `on_error(ctx, StrategyError)` | 本策略的错误 |
+| `on_params_changed(ctx, ParamUpdate)` | 运维用 admin `set_param` 设置了本策略的参数 |
 
 Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 
@@ -867,7 +868,7 @@ Python 的 `jarvis.Strategy` 基类提供同名方法，默认实现为空。
 | 订阅 | `subscribe_trades / quotes / book / bars / mark_price / funding(iid, cadence)`、`unsubscribe(...)`、`feature(spec, cadence)` |
 | 下单 | `submit(intent)`、`submit_parent(algo, intent, params?)`、`parent(id)`、`modify(cid, qty?, price?)`、`cancel(cid)`、`cancel_all(iid?)` |
 | 查询（返回拷贝） | `instrument(iid)`、`book(iid)`、`position(iid)`、`orders(filter)`、`account()`、`exposure(iid)`、`trading_state()` |
-| 参数 | `params()`；`ParamUpdate` 控制面事件更新后触发 `on_params_changed` |
+| 参数 | 构造时的 `[[strategies]]` 参数；admin `set_param` 产生记录的 `ParamUpdate` 输入，触发 `on_params_changed(ctx, ParamUpdate)` |
 
 订单意图 `OrderIntent` 由 `ctx.limit(iid, side, qty, price, tif, post_only=False, reduce_only=False)`、`ctx.market(...)` 等工厂方法构造，`ClientOrderId` 由内核分配。
 
@@ -1728,8 +1729,9 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
   - `[admin] socket`（`unix://` 路径，可含 `{node_id}`）设置后，sandbox 与 live 节点启动 admin 线程（`jarvis/live/admin_server.hpp`）。socket 文件权限为 0600，只有属主能发命令；启动时替换遗留的 socket 文件，停止时删除。每个连接一条命令、一行回复（协议见 `jarvis/node/admin_protocol.hpp`）。
   - `halt`、`reduce`、`resume`、`cancel_all`、`shutdown` 回复 `ok`，经 SPSC 环交给 core 线程；泵在每一轮最先取它们（先于账户环与行情环），变成记录的 `AdminCommand` 输入，回放时复现。内核的处理：`halt` 与 `reduce` 把 TradingState 的基础状态设为 `Halted` 或 `Reducing`，`resume` 恢复为 `Active`（清除监控与轻量对账造成的降级；同步与降级保持不受影响）；`cancel_all` 撤销全部未完成订单（KillSwitch，不改变状态）；`shutdown` 让 driver 按 `[node] shutdown` 停止节点，与信号相同。
   - `status` 回复一行 JSON：Node 状态、TradingState、最后步进的 `seq`、`ready`（Node 处于 `Running`，即已同步且没有连接处于 down）、`alive`（core 线程 5 秒内发布过状态；它每一轮都发布，空闲时也是）。`status` 不产生输入。
-  - 命令行：`jarvis admin <socket> <command>` 或 `jarvis admin --config <file> <command>`；回复以 `error` 开头时退出码为 1。
-  - `set_param` 与 `snapshot` 尚未实现（随 `ParamUpdate` 与 `EngineState` 快照）。
+  - 命令行：`jarvis admin <socket> <command> [参数]` 或 `jarvis admin --config <file> <command> [参数]`；回复以 `error` 开头时退出码为 1。
+  - `set_param <strategy_id> <key> <value>`（M5-K）：admin 线程按节点的策略 id 找到策略序号（找不到时回复 `error`），把值按 `true`/`false`、十进制整数或文本（行的其余部分，外层引号去掉）分类，变成记录的输入 `ParamUpdate{strategy_index, key, kind, integer, text}`（记录种类 59）。内核把它交给该策略的 `on_params_changed(ctx, ParamUpdate)`（Python：`on_params_changed(ctx, key, value)`，value 为 bool、int 或 str）；策略尚未启动、已停止或被停用时不投递，输入照样记录。参数改变的是策略自己的状态，所以要进入快照，策略须在 `state(ar)`（或 `on_save`）中包含它。
+  - `snapshot`（M5-K）：记录为 `AdminCommand{Snapshot}`；节点与回放都在下一个 `BatchEnd` 之后取快照，然后常规的 `snapshot_every` 从这一点重新计数（`SnapshotSchedule::request`）。
 
 ### 19.4 关停
 
