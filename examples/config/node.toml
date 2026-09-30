@@ -61,3 +61,12 @@ jsonl = true
 
 [admin]
 socket = "unix:///run/jarvis/{node_id}.sock"
+
+# Sandbox and live on Linux: where the threads run (docs/architecture.md 19.6). Without the
+# section no thread is pinned.
+# [threads]
+# busy_poll = true # the market data and venue-io threads never sleep
+# core_cpu = 2
+# market_cpu = 3
+# venue_cpu = 4
+# numa_node = 0    # the other threads run on this node's CPUs

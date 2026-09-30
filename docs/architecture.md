@@ -211,7 +211,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - **报错方式。** 所有错误一次性报告，每条带路径与行号，例如 `node.toml:7: venues[0].oms: must be hedging when account_mode is hedge`。
 - **不允许浮点。** 任何位置出现 TOML 浮点都报错，小数一律写成字符串（`size = "0.010"`），这样它们能精确解析为定点数。时间戳同理，写成带引号的 RFC 3339 字符串。
 - **覆盖语法。** 先应用 `--env`，再按顺序应用每个 `--set`。路径段可以是表的键、数组下标，或者按 `id` 选中数组中的表（`--set strategies.mm-001.params.size=0.020`）。值能解析为 TOML 的字符串、整数、布尔、数组或内联表时按 TOML 解释；否则（裸词、小数、时间戳）按原文字符串处理。
-- **hash 的范围。** 规范形式是每个字段一行 `path = value`，包含默认值，顺序固定，策略参数按键排序；因此显式写出默认值与省略它得到同一个 hash，文件中键的顺序也不影响 hash。hash 只覆盖影响内核计算结果的字段：`[node]` 的 id、seed、strict_determinism、capacity，venue 的 id、kind、account_mode、oms、sim，`[[strategies]]`，`[risk]`，`[python]`。`node.env`、`[data]`、venue 的 endpoint 与凭据引用、`[persistence]`、`[telemetry]`、`[admin]` 不进 hash：它们决定输入从哪里来、输出写到哪里，而输入本身已经记录在事件日志中。这样 sandbox 录制在 backtest 中回放时 hash 仍然相同（4.6 节的环境等价测试依赖这一点）。`jarvis config <file>` 打印两部分规范形式与 hash。
+- **hash 的范围。** 规范形式是每个字段一行 `path = value`，包含默认值，顺序固定，策略参数按键排序；因此显式写出默认值与省略它得到同一个 hash，文件中键的顺序也不影响 hash。hash 只覆盖影响内核计算结果的字段：`[node]` 的 id、seed、strict_determinism、capacity，venue 的 id、kind、account_mode、oms、sim，`[[strategies]]`，`[risk]`，`[python]`。`node.env`、`[data]`、venue 的 endpoint 与凭据引用、`[persistence]`、`[telemetry]`、`[admin]`、`[threads]` 不进 hash：它们决定输入从哪里来、输出写到哪里，而输入本身已经记录在事件日志中。这样 sandbox 录制在 backtest 中回放时 hash 仍然相同（4.6 节的环境等价测试依赖这一点）。`jarvis config <file>` 打印两部分规范形式与 hash。
 - **凭据。** `credentials` 只能是引用（`env:NAME` 或 `file:PATH`），写入明文密钥会被拒绝。
 
 ```toml
@@ -292,6 +292,13 @@ jsonl = true                      # telemetry.jsonl 写在运行目录中
 
 [admin]
 socket = "unix:///run/jarvis/{node_id}.sock"   # sandbox 与 live；不设置则没有 admin socket
+
+[threads]                         # sandbox 与 live，只支持 Linux（19.6 节）；不设置则不绑核
+busy_poll = false                 # 行情线程与 venue-io 线程从不休眠
+core_cpu = 2                      # core 线程的 CPU；不设置则不绑
+market_cpu = 3                    # 行情线程
+venue_cpu = 4                     # venue-io 线程
+numa_node = 0                     # 其余线程在这个节点的 CPU 上运行；绑定的 CPU 也须在它上面
 ```
 
 ### 4.3 组成
@@ -650,9 +657,13 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - 每个 md-io 线程拥有一个或多个行情连接，在本线程完成 TLS、WebSocket 解帧、`Codec` 解码，推入环的是归一化后的定点事件。全部行情连接打开时它记录 `ConnectionStatus(MarketData, up)`，任一连接关闭时记录 down（同步闸门据此降级，第 4.4 节）。
 - order-sender 线程拥有 WS API 连接。它从出站环取命令发出，并把回执与错误码推入自己的回执环。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
-- core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
+- core 线程绑核，空闲时 busy-poll 入站环（M5-Q：`[threads] core_cpu`，第 19.6 节）。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
-- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<QueuedCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<QueuedCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则无事可做的一轮最多等 1 ms，等到一个 handler（网络事件或唤醒）为止；core 推入命令后调用 `VenueIo::wake()` 结束这次等待（M5-Q，见下一条）。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
+- venue-io 线程的唤醒（M5-Q）：
+  - `network::Waker` 是 IO 线程的 `IoContext` 监听的一个描述符（Linux 上是 eventfd，其他平台是 pipe）。core 只对它做一次 `write(2)`，不加锁、不分配内存；IO 线程上的 handler 把它读空后重新监听。
+  - IO 线程在等待之前、core 在推入命令之后，各自交换同一个原子标志 `sleeping`。两次交换总有一次读到另一次的结果：要么 core 看到 IO 线程在等待并写描述符，要么 IO 线程看到命令而不等待，唤醒不会丢。
+  - 一次等待只唤醒一次，同一批的后续命令不再付系统调用；`busy_poll` 时不唤醒。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。
 - persist 线程（M5-I1，`jarvis/live/persist.hpp` 的 `Persister`）：sandbox 与 live 中 core 不再自己写日志，而是把编码好的记录写入一个 SPSC 字节环（默认 64 MiB），persist 线程取出后按段追加并 `fdatasync`，写出的字节与 core 线程上的 `EventLogWriter` 完全相同（测试逐字节比对）。环满时 core 等待并计数（`stalls`），从不丢记录；写入或同步失败后 persist 线程不再取记录，core 的下一次追加返回 `IoError`，运行随之停止。backtest 仍由 core 线程同步写日志（1 MiB 缓冲），从不 `fdatasync`。
 
@@ -1569,8 +1580,14 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 
 - 只报告的基准：完整回测吞吐、Python 端到端回放、对账耗时、启动耗时。
 - 延迟基准（M5-P，`benchmarks/report/bench_latency.cpp`，可执行文件 `bench_latency`，只报告）：实盘节点对本地模拟交易所（回环 TLS，`tests/cpp/support` 的服务端）运行，行情连接每毫秒推送一条 `bookTicker`，策略对每条报价发一个命令（挂一张远离市场的单，下一条报价撤掉它）。数字取自节点自己的遥测直方图（第 19.2 节），百分位报告为所在桶的上界：`tick_to_command`（行情帧到达 feed 线程到命令进入 venue-io 命令环）与 `command_to_socket`（命令在环中等待到交给 WS API 连接）。`JARVIS_LATENCY_QUOTES` 设定报价数（默认 5000）。
-  - 实测（本仓库开发用的 4 核虚拟机，Release，未绑核，默认不 busy-poll）：`tick_to_command` p50 ≤ 10 µs、p90 ≤ 20 µs、p99 ≤ 50 µs；`command_to_socket` p50 ≤ 1 ms、p90 ≤ 2 ms、p99 ≤ 5 ms。后者主要是 venue-io 线程两轮网络处理之间最长 1 ms 的休眠（第 7.1 节），busy-poll 与绑核见第 19.6 节。
-  - 目标（据实测设定，在同类机器上）：`tick_to_command` p50 ≤ 20 µs、p99 ≤ 100 µs；`command_to_socket` 不 busy-poll 时 p99 ≤ 5 ms。
+  - 基准有两个变体：`latency/live/busy_poll:0`（默认，IO 线程等待网络事件，core 推入命令后唤醒 venue-io 线程）与 `latency/live/busy_poll:1`（`[threads] busy_poll = true`）。
+  - 实测（本仓库开发用的 4 核虚拟机，Release，未绑核）：
+    - 默认：`tick_to_command` p50 ≤ 20 µs、p90 ≤ 50 µs、p99 ≤ 100 µs；`command_to_socket` p50 ≤ 100 µs、p90 ≤ 200 µs、p99 ≤ 500 µs（偶尔 ≤ 1 ms）。
+    - busy-poll：`tick_to_command` p50 ≤ 5–10 µs、p90 ≤ 20 µs、p99 ≤ 50 µs；`command_to_socket` p50 ≤ 20–50 µs、p90 ≤ 50–100 µs、p99 ≤ 200 µs（偶尔 ≤ 500 µs）。
+    - M5-P 时 venue-io 线程还不能被唤醒，`command_to_socket` 为 p50 ≤ 1 ms、p99 ≤ 5 ms，主要是两轮网络处理之间最长 1 ms 的休眠。唤醒把它降到约十分之一，代价是 core 线程每次唤醒一次 `write(2)`，内核在其中唤醒等待的 IO 线程（`tick_to_command` 的计时包含它，p50 从 ≤ 10 µs 到 ≤ 20 µs）。busy-poll 省掉这次系统调用，代价是 IO 线程各占满一个核（第 19.6 节）。
+  - 目标（据实测设定，在同类机器上）：
+    - 默认：`tick_to_command` p50 ≤ 20 µs、p99 ≤ 100 µs；`command_to_socket` p99 ≤ 1 ms。
+    - busy-poll：`tick_to_command` p50 ≤ 10 µs、p99 ≤ 50 µs；`command_to_socket` p99 ≤ 500 µs。
 - **对比方法**：`tools/bench_compare.py base.json head.json --thresholds benchmarks/thresholds.toml`。阈值文件为每个基准定义 `max_regression_pct`、`gating`、`abs_floor_ns`（绝对值低于该下限的变化忽略）。取 `--benchmark_repetitions=10 --benchmark_min_time=0.5s --benchmark_enable_random_interleaving=true` 的中位数比较。
 - **降噪**：从不与另一台虚拟机产生的 JSON 比较。PR job 用 `git worktree` 同时构建 merge-base 与 head，在同一台 runner 上用 `taskset` 绑核交替运行；回归必须在三轮 A/B 中复现两轮才判定。GitHub 托管 runner 上阈值为 10%；自托管 runner（`isolcpus`、performance 调速器、关闭 SMT）就绪后，核心路径阈值 3%，其他 5%。`main` 分支的基准结果归档为构件，只用于趋势图。
 
@@ -1794,6 +1811,32 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 ### 19.6 部署
 
 生产实盘只支持 Linux；macOS 支持开发、回测与 testnet。建议：core 线程绑定到 `isolcpus` 隔离的核；IO 线程与 core 位于同一 NUMA 节点；关闭透明大页的自动合并；网卡中断绑到非 core 核；chrony 同步时钟，服务器时间偏移作为指标监控；以 systemd 管理进程，`SIGTERM` 超时后才 `SIGKILL`。
+
+线程放置（M5-Q，`[threads]`，`jarvis/live/cpu_affinity.hpp`）：
+
+- 运维参数，不进配置 hash。整节不设置时节点不绑任何线程，由系统调度。
+- `core_cpu`、`market_cpu`、`venue_cpu` 把 core 线程、行情线程、venue-io 线程各绑到一个 CPU。其余线程（venue-io 的 REST 线程、persist、telemetry、admin）以及没有自己 CPU 的 IO 线程在"池"上运行：`numa_node` 的 CPU（不设置则为进程可用的 CPU），减去 core 的 CPU；`busy_poll` 时再减去忙轮询的 IO 线程的 CPU。池为空时启动失败。
+- `numa_node` 设置而 `core_cpu` 不设置时，core 线程限制在该节点的 CPU 上。
+- 检查分两步。解析配置时：
+  - 编号须在 0–1023；
+  - 行情线程与 venue-io 线程不能用 core 的 CPU，因为 core 线程轮询入站环、从不休眠；
+  - `busy_poll` 时两个 IO 线程不能共用一个 CPU。
+- 启动时：
+  - 每个绑定的 CPU 须在进程可用的 CPU 内（`sched_getaffinity`）；
+  - 设置 `numa_node` 时，绑定的 CPU 还须在该节点上（`/sys/devices/system/node/node<N>/cpulist`）；
+  - 不满足时节点不启动，报错写明是哪个键、哪个 CPU、可用的 CPU 列表。
+- 各线程启动后由启动它的线程用 `pthread_setaffinity_np` 绑定，失败时停止该线程并返回错误。core 线程是调用 `run_live`（或 `run_sandbox`）的线程，在其余线程都启动之后才绑定（此前它启动的线程会继承它的 CPU），退出时恢复原来的 CPU（Python 进程里它是解释器的线程）。在 Python 策略里新开的线程会继承 core 的 CPU。
+- `busy_poll`：
+  - 行情线程用 `IoContext::poll()` 循环；
+  - venue-io 线程在两轮之间只 `yield`，不再等待网络事件，core 也不再唤醒它；
+  - core 线程无论是否设置都轮询它的入站环（空转时 `yield`）。
+  - 忙轮询的线程应当绑到独占的核，否则它们与其他线程争抢 CPU，延迟反而变差。
+- 非 Linux 平台上 `[threads]` 只要绑定了任何 CPU，节点就不启动。
+- 测试：
+  - `test_node`：配置解析与报错；
+  - `test_network`：`Waker` 结束另一个线程上的 `run_one_for`，等待之前的通知不丢；
+  - `test_cpu_affinity.cpp`：CPU 列表解析、池的计算、Linux 上线程确实运行在绑定的 CPU、core 线程恢复原 CPU；
+  - `test_live_node`：主用例多一个 `busy_poll = true` 并绑定 core 的子用例。
 
 ---
 

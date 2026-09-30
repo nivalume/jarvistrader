@@ -21,6 +21,7 @@
 #include "jarvis/live/admin_pump.hpp"
 #include "jarvis/live/admin_server.hpp"
 #include "jarvis/live/clock.hpp"
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/persist.hpp"
@@ -109,6 +110,7 @@ struct LivePlan {
   VenueIoConfig venue; // identity strategies are filled from the engine
   adapter::binance::StartupReport startup;
   std::uint64_t epoch = 0;
+  ThreadPlacement threads; // [threads], applied to the feed and venue configurations
 };
 
 [[nodiscard]] core::Status plan_live(const LiveRequest& request, core::UnixNanos now, LivePlan& out,
@@ -200,14 +202,15 @@ private:
   TelemetrySources sources_;
 };
 
-// A recorder that also hands the venue commands to the venue-io thread. A full command ring is
-// waited out (a command is never dropped) unless the node is stopping. With a barrier (the
-// persist thread in barrier mode) each command carries the log position after its own record.
+// A recorder that also hands the venue commands to the venue-io thread, and wakes that thread if
+// it is waiting for network work. A full command ring is waited out (a command is never dropped)
+// unless the node is stopping. With a barrier (the persist thread in barrier mode) each command
+// carries the log position after its own record.
 template <typename Rec> class CommandRouter {
 public:
-  CommandRouter(Rec& inner, SpscRing<QueuedCommand>& commands, const std::atomic<bool>* stop,
+  CommandRouter(Rec& inner, VenueIo& venue, const std::atomic<bool>* stop,
                 const Persister* barrier = nullptr)
-      : inner_{&inner}, commands_{&commands}, stop_{stop}, barrier_{barrier} {}
+      : inner_{&inner}, venue_{&venue}, stop_{stop}, barrier_{barrier} {}
 
   [[nodiscard]] core::Status record(const core::EventKey& key, const model::Event& event) {
     return inner_->record(key, event);
@@ -242,17 +245,18 @@ public:
 private:
   core::Status send(const VenueCommand& c) {
     const QueuedCommand q{c, barrier_ != nullptr ? barrier_->position() : 0, steady_now_ns()};
-    while (!commands_->try_push(q)) {
+    while (!venue_->commands().try_push(q)) {
       if (stop_ != nullptr && stop_->load(std::memory_order_relaxed)) {
         return core::Status::IoError;
       }
       std::this_thread::yield();
     }
+    venue_->wake();
     return core::Status::Ok;
   }
 
   Rec* inner_;
-  SpscRing<QueuedCommand>* commands_;
+  VenueIo* venue_;
   const std::atomic<bool>* stop_;
   const Persister* barrier_;
 };
@@ -296,7 +300,9 @@ template <strategy::StrategySet SS>
   if (!core::ok(s)) {
     return s;
   }
-  persister = std::make_unique<Persister>(persist_config(config));
+  PersistConfig pc = persist_config(config);
+  pc.cpus = plan.threads.others;
+  persister = std::make_unique<Persister>(pc);
   s = persister->open(result.directory, header, error);
   if (!core::ok(s)) {
     return s;
@@ -327,7 +333,7 @@ live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const Live
           const std::atomic<bool>* stop, const Persister* barrier, Telemetry* telemetry,
           const MonotonicClock& clock, LiveResult& result, std::string& error) {
   const std::uint64_t prior_seq = result.recovery.last_seq;
-  CommandRouter<Recorder> command_router{recorder, venue.commands(), stop, barrier};
+  CommandRouter<Recorder> command_router{recorder, venue, stop, barrier};
   TelemetryRecorder<CommandRouter<Recorder>> router{command_router, telemetry, clock};
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
@@ -394,11 +400,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   MarketFeed feed{anchor, plan.feed};
   VenueIo venue{anchor, plan.venue};
   std::unique_ptr<AdminServer> admin;
-  if (const std::string path = node::admin_socket_path(config); !path.empty()) {
-    admin = std::make_unique<AdminServer>(path);
-    admin->set_strategies(strategy_names(engine.kernel()));
-    s = admin->start(error);
-  }
+  s = start_admin(config, strategy_names(engine.kernel()), plan.threads.others, admin, error);
   if (core::ok(s)) {
     s = feed.start(error);
   }
@@ -419,7 +421,13 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   pump.attach_admin(admin.get(), &engine.kernel());
   std::unique_ptr<Telemetry> telemetry;
   if (core::ok(s)) {
-    s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error);
+    s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error,
+                        plan.threads.others);
+  }
+  // The core thread last: a thread it starts inherits its CPUs until pinned itself.
+  ScopedPin core_pin;
+  if (core::ok(s)) {
+    s = core_pin.pin(plan.threads.core, error);
   }
   if (!core::ok(s)) {
     venue.stop();

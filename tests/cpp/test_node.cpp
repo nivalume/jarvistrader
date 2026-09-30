@@ -765,6 +765,7 @@ params = { spread = 0.5 }
     CHECK(hash_with({}, "sandbox") == h);
     CHECK(hash_with({"venues.0.endpoint=testnet", "persistence.mode=barrier",
                      "data.catalog=elsewhere", "telemetry.jsonl=false"}) == h);
+    CHECK(hash_with({"threads.busy_poll=true", "threads.core_cpu=2", "threads.numa_node=0"}) == h);
     // Writing a default explicitly is the same as omitting it.
     CHECK(hash_with({"node.capacity.timers=256"}) == h);
     // Behavioural settings do.
@@ -772,6 +773,59 @@ params = { spread = 0.5 }
     CHECK(hash_with({"strategies.mm-001.params.spread_bps=3"}) != h);
     CHECK(hash_with({"risk.initial_state=halted"}) != h);
     CHECK(hash_with({"venues.0.sim.latency.out_ns=1"}) != h);
+  }
+
+  TEST_CASE("[threads] names CPUs, and the core thread's CPU is its own") {
+    node::NodeConfig c;
+    REQUIRE(parse("[node]\nid = \"mm01\"\n", c).empty());
+    CHECK_FALSE(c.threads.busy_poll);
+    CHECK_FALSE(c.threads.core_cpu.has_value());
+    CHECK(node::canonical_operational_text(c).find("threads.core_cpu = none\n") !=
+          std::string::npos);
+
+    REQUIRE(parse(R"toml(
+[node]
+id = "mm01"
+[threads]
+busy_poll = true
+core_cpu = 2
+market_cpu = 3
+venue_cpu = 1
+numa_node = 0
+)toml",
+                  c)
+                .empty());
+    CHECK(c.threads.busy_poll);
+    CHECK(c.threads.core_cpu == 2U);
+    CHECK(c.threads.market_cpu == 3U);
+    CHECK(c.threads.venue_cpu == 1U);
+    CHECK(c.threads.numa_node == 0U);
+    const std::string text = node::canonical_operational_text(c);
+    CHECK(text.find("threads.busy_poll = true\nthreads.core_cpu = 2\nthreads.market_cpu = 3\n"
+                    "threads.venue_cpu = 1\nthreads.numa_node = 0\n") != std::string::npos);
+
+    node::NodeConfig bad;
+    auto errors = parse(R"toml(
+[node]
+id = "mm01"
+[threads]
+core_cpu = 2
+market_cpu = 2
+venue_cpu = -1
+numa_node = 1024
+pool = 3
+)toml",
+                        bad);
+    CHECK(has_error(errors, "threads.market_cpu", "core thread's CPU"));
+    CHECK(has_error(errors, "threads.venue_cpu", "from 0 to 1023"));
+    CHECK(has_error(errors, "threads.numa_node", "from 0 to 1023"));
+    CHECK(has_error(errors, "threads.pool", "unknown key"));
+    // Two busy-polling IO threads on one CPU would take turns.
+    errors = parse("[node]\nid = \"mm01\"\n[threads]\nbusy_poll = true\nmarket_cpu = 1\n"
+                   "venue_cpu = 1\n",
+                   bad);
+    CHECK(has_error(errors, "threads.venue_cpu", "each needs its own"));
+    CHECK(parse("[node]\nid = \"mm01\"\n[threads]\nmarket_cpu = 1\nvenue_cpu = 1\n", bad).empty());
   }
 
   TEST_CASE("key order and formatting in the file do not change the canonical form") {

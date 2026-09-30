@@ -321,7 +321,7 @@ struct LatencyRun {
   bool ok = false;
 };
 
-LatencyRun run_latency(std::size_t quotes) {
+LatencyRun run_latency(std::size_t quotes, bool busy_poll) {
   LatencyRun out;
   QuoteVenue venue;
   const TempDir dir;
@@ -359,7 +359,10 @@ dir = ")" + dir.file("runs") +
 [telemetry]
 prometheus = "127.0.0.1:0"
 jsonl = false
-)";
+
+[threads]
+busy_poll = )" + std::string{busy_poll ? "true" : "false"} +
+                           "\n";
   node::NodeConfig config;
   std::vector<node::ConfigError> errors;
   if (!jarvis::core::ok(node::parse_config(text, "latency.toml", {}, config, errors))) {
@@ -391,6 +394,8 @@ jsonl = false
   return out;
 }
 
+// Argument 0: the IO threads wait for network work (the core wakes the venue-io thread when it
+// queues a command); 1: they busy-poll ([threads] busy_poll).
 void live_latency(benchmark::State& state) {
   std::size_t quotes = 5'000;
   if (const char* n = std::getenv("JARVIS_LATENCY_QUOTES")) {
@@ -398,7 +403,7 @@ void live_latency(benchmark::State& state) {
   }
   LatencyRun run;
   for ([[maybe_unused]] auto _ : state) {
-    run = run_latency(quotes);
+    run = run_latency(quotes, state.range(0) != 0);
   }
   if (!run.ok) {
     state.SkipWithError("the live node did not run");
@@ -419,6 +424,9 @@ void live_latency(benchmark::State& state) {
 
 BENCHMARK(live_latency)
     ->Name("latency/live")
+    ->ArgName("busy_poll")
+    ->Arg(0)
+    ->Arg(1)
     ->Iterations(1)
     ->UseRealTime()
     ->Unit(benchmark::kMillisecond);

@@ -17,6 +17,7 @@
 #include "jarvis/live/admin_pump.hpp"
 #include "jarvis/live/admin_server.hpp"
 #include "jarvis/live/clock.hpp"
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/persist.hpp"
@@ -70,14 +71,23 @@ struct SandboxResult {
 [[nodiscard]] core::Status start_telemetry(const node::NodeConfig& config,
                                            const std::string& directory,
                                            std::atomic<std::uint16_t>* port,
-                                           std::unique_ptr<Telemetry>& out, std::string& error);
+                                           std::unique_ptr<Telemetry>& out, std::string& error,
+                                           std::span<const int> cpus = {});
+
+// Starts the admin thread when [admin] socket is set (`out` stays empty otherwise), on `cpus`.
+[[nodiscard]] core::Status start_admin(const node::NodeConfig& config,
+                                       std::vector<std::string> strategies,
+                                       std::span<const int> cpus, std::unique_ptr<AdminServer>& out,
+                                       std::string& error);
 
 // What is built before the loop starts: the instruments (exchangeInfo), the preamble (their
-// definitions and the simulated account, stamped `now`), and the feed configuration.
+// definitions and the simulated account, stamped `now`), the feed configuration and where the
+// threads run ([threads], applied to the feed).
 struct SandboxPlan {
   std::vector<adapter::binance::PerpetualDefinition> instruments;
   node::Preamble preamble;
   MarketFeedConfig feed;
+  ThreadPlacement threads;
 };
 
 [[nodiscard]] core::Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now,
@@ -261,7 +271,9 @@ template <strategy::StrategySet SS, node::InputHook Hook>
     if (!core::ok(s)) {
       return s;
     }
-    persister = std::make_unique<Persister>(persist_config(config));
+    PersistConfig pc = persist_config(config);
+    pc.cpus = plan.threads.others;
+    persister = std::make_unique<Persister>(pc);
     s = persister->open(result.directory, node::run_header(config, request.extras), error);
     if (!core::ok(s)) {
       return s;
@@ -272,11 +284,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   MarketFeed feed{anchor, plan.feed};
   std::unique_ptr<AdminServer> admin;
-  if (const std::string path = node::admin_socket_path(config); !path.empty()) {
-    admin = std::make_unique<AdminServer>(path);
-    admin->set_strategies(strategy_names(engine.kernel()));
-    s = admin->start(error);
-  }
+  s = start_admin(config, strategy_names(engine.kernel()), plan.threads.others, admin, error);
   if (core::ok(s)) {
     s = feed.start(error);
   }
@@ -292,7 +300,13 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   SandboxPump<Hook> pump{clock, feed, source, hook, request.stop, deadline};
   pump.attach_admin(admin.get(), &engine.kernel());
   std::unique_ptr<Telemetry> telemetry;
-  s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error);
+  s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error,
+                      plan.threads.others);
+  // The core thread last: a thread it starts inherits its CPUs until pinned itself.
+  ScopedPin core_pin;
+  if (core::ok(s)) {
+    s = core_pin.pin(plan.threads.core, error);
+  }
   if (!core::ok(s)) {
     feed.stop();
     return s;

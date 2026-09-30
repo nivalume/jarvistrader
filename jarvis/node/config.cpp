@@ -625,6 +625,40 @@ bool valid_listen(std::string_view text) {
   return ec == std::errc{} && end == digits.data() + digits.size() && port <= 65535;
 }
 
+// A CPU or NUMA node number (below CPU_SETSIZE on Linux).
+void cpu_number(TableReader& r, std::string_view key, std::optional<std::uint32_t>& out) {
+  constexpr std::int64_t kMaxCpus = 1024;
+  const toml::node* node = r.take(key);
+  if (node == nullptr) {
+    return;
+  }
+  const auto* i = node->as_integer();
+  if (i == nullptr || i->get() < 0 || i->get() >= kMaxCpus) {
+    r.errors().add(r.path_of(key), node, "must be an integer from 0 to 1023");
+    return;
+  }
+  out = static_cast<std::uint32_t>(i->get());
+}
+
+void read_threads(TableReader& r, const toml::table& t, ThreadsSection& out) {
+  r.boolean("busy_poll", out.busy_poll);
+  cpu_number(r, "core_cpu", out.core_cpu);
+  cpu_number(r, "market_cpu", out.market_cpu);
+  cpu_number(r, "venue_cpu", out.venue_cpu);
+  cpu_number(r, "numa_node", out.numa_node);
+  // The core thread polls its rings without sleeping; so does a busy-polling IO thread.
+  if (out.core_cpu && out.market_cpu == out.core_cpu) {
+    r.errors().add("threads.market_cpu", &t, "is the core thread's CPU");
+  }
+  if (out.core_cpu && out.venue_cpu == out.core_cpu) {
+    r.errors().add("threads.venue_cpu", &t, "is the core thread's CPU");
+  }
+  if (out.busy_poll && out.market_cpu && out.venue_cpu == out.market_cpu) {
+    r.errors().add("threads.venue_cpu", &t,
+                   "is the market data thread's CPU; with busy_poll each needs its own");
+  }
+}
+
 void read_operations(TableReader& root, NodeConfig& c) {
   if (const toml::table* t = root.table("persistence")) {
     TableReader r{*t, "persistence", root.errors()};
@@ -650,6 +684,11 @@ void read_operations(TableReader& root, NodeConfig& c) {
   if (const toml::table* t = root.table("admin")) {
     TableReader r{*t, "admin", root.errors()};
     r.string("socket", c.admin.socket);
+    r.finish();
+  }
+  if (const toml::table* t = root.table("threads")) {
+    TableReader r{*t, "threads", root.errors()};
+    read_threads(r, *t, c.threads);
     r.finish();
   }
 }
@@ -820,6 +859,9 @@ public:
   }
   void num(std::string_view path, std::uint64_t value) { raw(path, std::to_string(value)); }
   void flag(std::string_view path, bool value) { raw(path, value ? "true" : "false"); }
+  void cpu(std::string_view path, std::optional<std::uint32_t> value) {
+    raw(path, value ? std::to_string(*value) : std::string{"none"});
+  }
   void ids(std::string_view path, const std::vector<m::InstrumentId>& ids) {
     std::string v = "[";
     for (const m::InstrumentId& id : ids) {
@@ -1074,6 +1116,11 @@ std::string canonical_operational_text(const NodeConfig& config) {
   c.str("telemetry.prometheus", config.telemetry.prometheus);
   c.flag("telemetry.jsonl", config.telemetry.jsonl);
   c.str("admin.socket", config.admin.socket);
+  c.flag("threads.busy_poll", config.threads.busy_poll);
+  c.cpu("threads.core_cpu", config.threads.core_cpu);
+  c.cpu("threads.market_cpu", config.threads.market_cpu);
+  c.cpu("threads.venue_cpu", config.threads.venue_cpu);
+  c.cpu("threads.numa_node", config.threads.numa_node);
   return c.take();
 }
 

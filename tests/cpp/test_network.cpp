@@ -34,6 +34,7 @@
 #include "jarvis/network/io.hpp"
 #include "jarvis/network/signer.hpp"
 #include "jarvis/network/url.hpp"
+#include "jarvis/network/waker.hpp"
 #include "jarvis/network/ws_client.hpp"
 #include "jarvis/network/ws_frame.hpp"
 #include "support/tls_test.hpp"
@@ -75,6 +76,39 @@ template <typename Stream> std::pair<unsigned, std::string> read_client_frame(St
 } // namespace
 
 TEST_SUITE("unit") {
+  TEST_CASE("a waker ends another thread's wait for one handler") {
+    using Clock = std::chrono::steady_clock;
+    net::IoContext io;
+    net::Waker waker{io};
+    waker.notify(); // nothing before start
+    std::string error;
+    REQUIRE(waker.start(error) == jarvis::core::Status::Ok);
+    // Notifications before the wait are not lost; several collapse into one handler.
+    waker.notify();
+    waker.notify();
+    CHECK(io.run_one_for(std::chrono::milliseconds{5'000}) == 1);
+    CHECK(io.poll() == 0);
+
+    std::atomic<bool> waiting{false};
+    std::size_t handlers = 0;
+    Clock::duration waited{};
+    std::thread loop{[&] {
+      waiting = true;
+      const auto t0 = Clock::now();
+      handlers = io.run_one_for(std::chrono::milliseconds{5'000});
+      waited = Clock::now() - t0;
+    }};
+    while (!waiting) {
+      std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    waker.notify();
+    loop.join();
+    CHECK(handlers == 1);
+    CHECK(waited < std::chrono::seconds{4});
+    waker.stop();
+  }
+
   TEST_CASE("URLs split into scheme, host, port and target") {
     net::Endpoint e;
     REQUIRE(net::parse_url("wss://fstream.binance.com/stream?streams=a/b", e) == Status::Ok);

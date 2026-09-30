@@ -148,8 +148,14 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
   }
   const node::VenueConfig& venue = config.venues.front();
   out = SandboxPlan{};
+  Status s = place_threads(config.threads, out.threads, error);
+  if (!core::ok(s)) {
+    return s;
+  }
+  out.feed.cpus = out.threads.market;
+  out.feed.busy_poll = out.threads.busy_poll;
   std::vector<std::string> symbols;
-  Status s = feed_streams(config, symbols, out.feed.streams, error);
+  s = feed_streams(config, symbols, out.feed.streams, error);
   if (!core::ok(s)) {
     return s;
   }
@@ -182,10 +188,24 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
   return Status::Ok;
 }
 
+Status start_admin(const node::NodeConfig& config, std::vector<std::string> strategies,
+                   std::span<const int> cpus, std::unique_ptr<AdminServer>& out,
+                   std::string& error) {
+  const std::string path = node::admin_socket_path(config);
+  if (path.empty()) {
+    return Status::Ok;
+  }
+  out = std::make_unique<AdminServer>(path);
+  out->set_strategies(std::move(strategies));
+  out->set_cpus({cpus.begin(), cpus.end()});
+  return out->start(error);
+}
+
 Status start_telemetry(const node::NodeConfig& config, const std::string& directory,
                        std::atomic<std::uint16_t>* port, std::unique_ptr<Telemetry>& out,
-                       std::string& error) {
+                       std::string& error, std::span<const int> cpus) {
   TelemetryConfig t;
+  t.cpus.assign(cpus.begin(), cpus.end());
   t.listen = config.telemetry.prometheus;
   if (config.telemetry.jsonl && !directory.empty()) {
     t.jsonl_path = directory + "/telemetry.jsonl";

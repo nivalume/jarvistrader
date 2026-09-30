@@ -8,6 +8,7 @@
 #include "jarvis/adapter/binance/rest_codec.hpp"
 #include "jarvis/adapter/binance/streams.hpp"
 #include "jarvis/adapter/binance/ws_api.hpp"
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/network/backoff.hpp"
 #include "jarvis/network/timer.hpp"
@@ -281,7 +282,11 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
 
   void run() {
     while (!stopping.load()) {
-      io.run_for(std::chrono::milliseconds{50});
+      if (!config.busy_poll) {
+        io.run_for(std::chrono::milliseconds{50});
+      } else if (io.poll() == 0) {
+        std::this_thread::yield();
+      }
       io.restart();
     }
     // Let the closes go out.
@@ -317,7 +322,11 @@ Status MarketFeed::start(std::string& error) {
   }
   m.open_connections();
   m.thread = std::thread{[&m] { m.run(); }};
-  return Status::Ok;
+  const Status s = pin_thread(m.thread, m.config.cpus, error);
+  if (!core::ok(s)) {
+    stop();
+  }
+  return s;
 }
 
 void MarketFeed::stop() {

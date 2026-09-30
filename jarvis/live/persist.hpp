@@ -7,6 +7,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "jarvis/core/event_key.hpp"
 #include "jarvis/core/status.hpp"
@@ -48,6 +49,7 @@ struct PersistConfig {
   bool barrier = false;
   std::chrono::milliseconds sync_every{100}; // async; 0: after every batch, as barrier does
   bool truncate = false; // after each complete snapshot, remove what only precedes it
+  std::vector<int> cpus; // the persist thread's CPUs (cpu_affinity.hpp); empty: any
 };
 
 struct PersistStats {

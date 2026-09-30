@@ -168,6 +168,18 @@ struct AdminSection {
   std::string socket;
 };
 
+// Sandbox and live: where the node's threads run (docs/architecture.md 19.6). A CPU left unset
+// is not pinned; with nothing set the node leaves thread placement to the system.
+struct ThreadsSection {
+  bool busy_poll = false;                  // the market data and venue-io threads never sleep
+  std::optional<std::uint32_t> core_cpu;   // the core thread (the caller of run_live)
+  std::optional<std::uint32_t> market_cpu; // the market data thread
+  std::optional<std::uint32_t> venue_cpu;  // the venue-io thread
+  // The node's other threads (and an IO thread without its own CPU) run on this node's CPUs; the
+  // pinned CPUs must be on it too.
+  std::optional<std::uint32_t> numa_node;
+};
+
 struct NodeConfig {
   NodeSection node;
   DataSection data;
@@ -178,6 +190,7 @@ struct NodeConfig {
   PersistenceSection persistence;
   TelemetrySection telemetry;
   AdminSection admin;
+  ThreadsSection threads;
 };
 
 struct ConfigError {
@@ -207,9 +220,9 @@ struct ConfigOverrides {
 // Canonical form: one "path = value" line per field, defaults included, fixed order, strategy
 // parameters sorted. The hashed part covers everything that can change what the kernel computes.
 // The operational part (node.env, [data], venue endpoints and credential references,
-// [persistence], [telemetry], [admin]) is left out of the hash: it says where inputs come from
-// and where outputs go, and the inputs themselves are recorded in the event log. This is what
-// lets a sandbox recording replay in backtest under the same hash (section 4.6).
+// [persistence], [telemetry], [admin], [threads]) is left out of the hash: it says where inputs
+// come from and where outputs go, and the inputs themselves are recorded in the event log. This is
+// what lets a sandbox recording replay in backtest under the same hash (section 4.6).
 [[nodiscard]] std::string canonical_hashed_text(const NodeConfig& config);
 [[nodiscard]] std::string canonical_operational_text(const NodeConfig& config);
 [[nodiscard]] core::Sha256::Digest config_hash(const NodeConfig& config);

@@ -24,6 +24,7 @@
 #include <utility>
 
 #include "jarvis/core/fixed_string.hpp"
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/persist.hpp"
 #include "jarvis/live/spsc_ring.hpp"
@@ -899,7 +900,11 @@ Status Telemetry::start(std::string& error) {
     return s;
   }
   t.thread = std::thread{[&t] { t.run(); }};
-  return Status::Ok;
+  const Status pinned = pin_thread(t.thread, t.config.cpus, error);
+  if (!core::ok(pinned)) {
+    stop();
+  }
+  return pinned;
 }
 
 void Telemetry::stop() {

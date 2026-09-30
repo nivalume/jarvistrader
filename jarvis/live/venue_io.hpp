@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include "jarvis/adapter/binance/order_tracker.hpp"
 #include "jarvis/adapter/binance/user_stream_session.hpp"
@@ -49,7 +50,8 @@
 // reconciliation.
 //
 // The IO thread polls the command ring between rounds of network work: with busy_poll it never
-// sleeps; otherwise a round lasts at most a millisecond.
+// sleeps; otherwise a round with nothing to do waits for network work up to a millisecond, and
+// wake() (the core, after pushing a command) ends that wait.
 //
 // persistence.mode = "barrier" (section 16.2): each queued command carries the event log position
 // just past its own record, and the IO thread sends it only once the persist thread's durable
@@ -95,6 +97,8 @@ struct VenueIoConfig {
   std::size_t command_slots = 4096;
   std::uint16_t source_id = 2;
   bool busy_poll = false;
+  std::vector<int> cpus;      // the IO thread's CPUs (cpu_affinity.hpp); empty: any
+  std::vector<int> rest_cpus; // the REST thread's
   std::chrono::milliseconds snapshot_retry{2'000};
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
@@ -144,6 +148,8 @@ public:
 
   [[nodiscard]] SpscByteRing& ring() noexcept;                // venue -> core
   [[nodiscard]] SpscRing<QueuedCommand>& commands() noexcept; // core -> venue
+  // After a push to commands(): ends the IO thread's wait for network work, if it is waiting.
+  void wake() noexcept;
   [[nodiscard]] VenueIoStats stats() const noexcept;
   // Time from a command's queueing to its hand-off to the connection (telemetry).
   [[nodiscard]] HistogramData command_latency() const noexcept;

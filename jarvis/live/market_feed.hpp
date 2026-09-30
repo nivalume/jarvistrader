@@ -48,6 +48,8 @@ struct MarketFeedConfig {
   std::size_t max_levels = 2000; // per book side
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
+  bool busy_poll = false; // the thread never sleeps: it polls its connections in a loop
+  std::vector<int> cpus;  // the CPUs the thread runs on (cpu_affinity.hpp); empty: any
 };
 
 struct MarketFeedStats {

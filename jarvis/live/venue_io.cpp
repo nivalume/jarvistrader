@@ -13,9 +13,11 @@
 #include "jarvis/adapter/binance/snapshot.hpp"
 #include "jarvis/adapter/binance/user_stream.hpp"
 #include "jarvis/adapter/binance/ws_api.hpp"
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/network/timer.hpp"
+#include "jarvis/network/waker.hpp"
 
 namespace jarvis::live {
 
@@ -89,6 +91,7 @@ public:
     wake_.notify_all();
   }
   binance::RestClient& client() noexcept { return rest_; } // before start only
+  std::thread& thread() noexcept { return thread_; }
 
 private:
   struct Entry {
@@ -179,6 +182,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   std::unique_ptr<binance::UserStreamSession> stream;
   std::unique_ptr<network::Timer> retry;
   std::unique_ptr<network::Timer> check_timer;
+  std::unique_ptr<network::Waker> waker; // the core's wake(): ends a wait for network work
   bool head_held = false; // the command at the head of the ring waits for the persist thread
   RawFrameWriter raw;
   bool recording = false;
@@ -188,6 +192,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   bool checking = false;        // a light check is being read
   std::uint64_t seed = 0;
   std::atomic<bool> stopping{false};
+  std::atomic<bool> sleeping{false}; // waiting for network work: wake() ends the wait
   std::thread thread;
   mutable std::mutex error_mutex;
   std::string error;
@@ -639,7 +644,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
         if (config.busy_poll || held) {
           std::this_thread::yield();
         } else {
-          io.run_for(std::chrono::milliseconds{1});
+          wait_for_work();
         }
       }
       io.restart();
@@ -650,9 +655,22 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     io.run_for(std::chrono::milliseconds{200}); // let them and the closes go out
   }
 
+  // Waits up to a millisecond for one handler: network work, or the waker's. Both this and
+  // wake() swap `sleeping`, so one of the two swaps reads the other's: either the core sees
+  // `sleeping` set and notifies the waker, or this thread sees the command the core pushed before
+  // its swap, and does not wait.
+  void wait_for_work() {
+    sleeping.exchange(true);
+    if (commands.front() == nullptr) {
+      io.run_one_for(std::chrono::milliseconds{1});
+    }
+    sleeping.store(false, std::memory_order_relaxed);
+  }
+
   void close_all() const {
     retry->cancel();
     check_timer->cancel();
+    waker->stop();
     stream->stop();
     api->stop();
   }
@@ -675,11 +693,22 @@ Status VenueIo::start(std::string& error) {
     }
     v.recording = true;
   }
+  v.waker = std::make_unique<network::Waker>(v.io);
+  if (const Status s = v.waker->start(error); !core::ok(s)) {
+    return s;
+  }
   v.open();
   v.thread = std::thread{[&v] { v.run(); }};
   v.rest.start([&v](binance::RestClient& client) { v.key_tick(client); });
   v.rest.post([&v](binance::RestClient& client) { v.key_tick(client); }); // the key at once
-  return Status::Ok;
+  Status s = pin_thread(v.thread, v.config.cpus, error);
+  if (core::ok(s)) {
+    s = pin_thread(v.rest.thread(), v.config.rest_cpus, error);
+  }
+  if (!core::ok(s)) {
+    stop();
+  }
+  return s;
 }
 
 void VenueIo::stop() {
@@ -701,6 +730,15 @@ void VenueIo::stop() {
 
 SpscByteRing& VenueIo::ring() noexcept { return impl_->ring; }
 SpscRing<QueuedCommand>& VenueIo::commands() noexcept { return impl_->commands; }
+
+void VenueIo::wake() noexcept {
+  Impl& v = *impl_;
+  // A busy-polling thread never waits. Otherwise one notification per wait: the batch's later
+  // commands find `sleeping` cleared.
+  if (!v.config.busy_poll && v.waker && v.sleeping.exchange(false)) {
+    v.waker->notify();
+  }
+}
 std::uint16_t VenueIo::source_id() const noexcept { return impl_->config.source_id; }
 
 std::string VenueIo::last_error() const {

@@ -53,6 +53,8 @@ public:
 
   // The node's strategy ids by index, for set_param; before start().
   void set_strategies(std::vector<std::string> ids);
+  // The CPUs the thread runs on (cpu_affinity.hpp); before start(). Empty: any.
+  void set_cpus(std::vector<int> cpus);
   [[nodiscard]] SpscRing<node::AdminRequest>& commands() noexcept; // admin -> core
   [[nodiscard]] NodeStatus& status() noexcept;
   [[nodiscard]] std::uint64_t accepted() const noexcept; // commands handed to the core

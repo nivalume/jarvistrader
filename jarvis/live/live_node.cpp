@@ -134,9 +134,18 @@ Status plan_live(const LiveRequest& request, core::UnixNanos now, LivePlan& out,
     return Status::InvalidArgument;
   }
   out = LivePlan{};
+  Status s = place_threads(config.threads, out.threads, error);
+  if (!core::ok(s)) {
+    return s;
+  }
+  out.feed.cpus = out.threads.market;
+  out.feed.busy_poll = out.threads.busy_poll;
+  out.venue.cpus = out.threads.venue;
+  out.venue.rest_cpus = out.threads.others;
+  out.venue.busy_poll = out.threads.busy_poll;
   node::ApiCredentials creds;
   network::Signer signer;
-  Status s = credentials_of(request, venue, creds, signer, error);
+  s = credentials_of(request, venue, creds, signer, error);
   if (!core::ok(s)) {
     return s;
   }

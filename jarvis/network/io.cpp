@@ -17,6 +17,9 @@ void IoContext::run() { impl_->io.run(); }
 std::size_t IoContext::run_for(std::chrono::milliseconds duration) {
   return impl_->io.run_for(duration);
 }
+std::size_t IoContext::run_one_for(std::chrono::milliseconds duration) {
+  return impl_->io.run_one_for(duration);
+}
 std::size_t IoContext::poll() { return impl_->io.poll(); }
 void IoContext::stop() { impl_->io.stop(); }
 void IoContext::restart() { impl_->io.restart(); }

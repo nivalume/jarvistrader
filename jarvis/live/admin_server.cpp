@@ -13,6 +13,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/network/io.hpp"
 #include "jarvis/node/admin_protocol.hpp"
 
@@ -47,6 +48,7 @@ struct AdminServer::Impl {
   std::atomic<std::uint64_t> accepted{0};
   std::thread thread;
   std::vector<std::string> strategies;
+  std::vector<int> cpus;
   NodeStatus status;
   std::string path;
   int listener = -1;
@@ -141,7 +143,11 @@ Status AdminServer::start(std::string& error) {
   }
   a.stopping.store(false);
   a.thread = std::thread{[&a] { a.run(); }};
-  return Status::Ok;
+  const Status pinned = pin_thread(a.thread, a.cpus, error);
+  if (!core::ok(pinned)) {
+    stop();
+  }
+  return pinned;
 }
 
 void AdminServer::stop() {
@@ -160,6 +166,8 @@ void AdminServer::stop() {
 void AdminServer::set_strategies(std::vector<std::string> ids) {
   impl_->strategies = std::move(ids);
 }
+
+void AdminServer::set_cpus(std::vector<int> cpus) { impl_->cpus = std::move(cpus); }
 
 SpscRing<node::AdminRequest>& AdminServer::commands() noexcept { return impl_->ring; }
 NodeStatus& AdminServer::status() noexcept { return impl_->status; }

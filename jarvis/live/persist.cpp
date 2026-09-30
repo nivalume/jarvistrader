@@ -6,6 +6,7 @@
 #include <thread>
 #include <vector>
 
+#include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/live/spsc_ring.hpp"
 
 namespace jarvis::live {
@@ -212,7 +213,11 @@ Status Persister::open(const std::string& directory, const wire::LogHeader& head
     return s;
   }
   p.thread = std::thread{[&p] { p.run(); }};
-  return Status::Ok;
+  const Status pinned = pin_thread(p.thread, p.config.cpus, error);
+  if (!core::ok(pinned)) {
+    static_cast<void>(close());
+  }
+  return pinned;
 }
 
 Status Persister::append(const core::EventKey& key, const model::Event& event) {

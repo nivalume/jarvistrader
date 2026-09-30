@@ -323,14 +323,26 @@ dir = ")" +
 TEST_SUITE("unit") {
   TEST_CASE("a live node syncs, trades, and its recording replays with the same outputs") {
     // Once with the default persistence, once with every command waiting for its record.
+    // And once with the IO threads busy-polling and the core thread on a CPU of its own.
     std::string mode = "async";
+    std::string threads;
+    std::vector<int> cpus;
+    std::string error;
+    const bool placeable = live::allowed_cpus(cpus, error) == Status::Ok; // Linux
     SUBCASE("async") {}
     SUBCASE("barrier") { mode = "barrier"; }
+    SUBCASE("pinned") {
+      threads = "\n[threads]\nbusy_poll = true\n";
+      if (placeable && cpus.size() >= 2) {
+        threads += "core_cpu = " + std::to_string(cpus.back()) + "\n";
+      }
+    }
     CAPTURE(mode);
+    CAPTURE(threads);
     MockVenue venue{first_run_answers()};
     const TempDir dir;
     const std::string text =
-        config_text(dir, mode) + "\n[telemetry]\nprometheus = \"127.0.0.1:0\"\n";
+        config_text(dir, mode) + "\n[telemetry]\nprometheus = \"127.0.0.1:0\"\n" + threads;
     node::NodeConfig config;
     std::vector<node::ConfigError> errors;
     REQUIRE(node::parse_config(text, "live.toml", {}, config, errors) == Status::Ok);
@@ -346,11 +358,16 @@ TEST_SUITE("unit") {
 
     st::StaticStrategySet<Buyer> set{Buyer{&stop}};
     live::LiveResult result;
-    std::string error;
     node::NoHook hook;
     const Status s = live::run_live(request, set, result, error, hook);
     INFO(error);
     REQUIRE(s == Status::Ok);
+    // The core thread has its CPUs back.
+    std::vector<int> after;
+    if (placeable) {
+      REQUIRE(live::allowed_cpus(after, error) == Status::Ok);
+      CHECK(after == cpus);
+    }
     CHECK(result.epoch == 5);
     CHECK(result.startup.passed());
     // The shutdown cancels the rest of the order; the strategy, stopped, hears only of the

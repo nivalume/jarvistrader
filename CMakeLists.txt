@@ -205,6 +205,7 @@ if(JARVIS_BUILD_LIVE)
     jarvis/network/io.cpp
     jarvis/network/signer.cpp
     jarvis/network/timer.cpp
+    jarvis/network/waker.cpp
     jarvis/network/url.cpp
     jarvis/network/ws_client.cpp
     jarvis/network/ws_frame.cpp
@@ -246,7 +247,7 @@ if(JARVIS_BUILD_LIVE)
                           jarvis/live/redecode.cpp jarvis/live/sandbox_node.cpp
                           jarvis/live/venue_io.cpp jarvis/live/live_node.cpp
                           jarvis/live/admin_server.cpp jarvis/live/persist.cpp
-                          jarvis/live/telemetry.cpp)
+                          jarvis/live/telemetry.cpp jarvis/live/cpu_affinity.cpp)
   add_library(jarvis::live ALIAS jarvis_live)
   target_link_libraries(jarvis_live PUBLIC jarvis::kernel jarvis::shell jarvis::network jarvis::adapter)
 

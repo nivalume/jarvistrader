@@ -21,7 +21,8 @@ public:
 
   void run(); // until stop() or no work is left
   std::size_t run_for(std::chrono::milliseconds duration);
-  std::size_t poll(); // ready handlers only
+  std::size_t run_one_for(std::chrono::milliseconds duration); // until one handler has run
+  std::size_t poll();                                          // ready handlers only
   void stop();
   void restart();
   void post(std::function<void()> fn);   // thread-safe

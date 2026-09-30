@@ -201,6 +201,7 @@ struct TelemetryConfig {
   std::chrono::milliseconds alive_within{5'000};
   double maker_rate = 0.0002; // for the fee estimate (binance_usdm_vip0 unless [venues.sim])
   double taker_rate = 0.0005;
+  std::vector<int> cpus; // the telemetry thread's CPUs (cpu_affinity.hpp); empty: any
 };
 
 class MarketFeed;
