@@ -780,7 +780,7 @@ M2 的实测值（本仓库的云端开发容器，单核，Release 构建；`be
 - 成交按 `(symbol, orderId, tradeId)` 去重。
 - `TRADE_LITE` 比 `ORDER_TRADE_UPDATE` 更早到达，但不含手续费与已实现盈亏。第一条到达的回报产生 `OrderFilled` 并更新仓位与敞口；同一 `tradeId` 的第二条回报只补充手续费、`rp` 与累计数量，不重复记成交。
 - 订单状态回报按 `(orderId, updateTime)` 单调推进，旧于当前状态的回报丢弃并计数。
-- 实现（M4-D）：适配器的 `OrderTracker`（`jarvis/adapter/binance/order_tracker.hpp`）按 `(orderId, tradeId)` 记住每笔成交是 Lite 还是完整回报。`TRADE_LITE` 先到时发出带 `FillInfo::Lite`、没有手续费的 `OrderFilled`；同一笔成交的 `ORDER_TRADE_UPDATE` 再作为带手续费的 `OrderFilled` 转发一次；之后的回报丢弃。内核的 OMS 在成交记录上标记"手续费待到"，重复成交（`DuplicateFill`）若是这笔 Lite 成交的完整回报，由 `Portfolio::on_commission` 只记一次手续费，不重复记成交。
+- 实现（M4-D）：适配器的 `OrderTracker`（`jarvis/adapter/binance/order_tracker.hpp`）按 `(orderId, tradeId)` 记住每笔成交是 Lite 还是完整回报。比订单上次更新更早的回报丢弃，但成交回报例外（M5-P）：交易所可能乱序送达同一订单的回报，成交无论何时到达都按成交号计一次，与内核 OMS 的规则相同。`TRADE_LITE` 先到时发出带 `FillInfo::Lite`、没有手续费的 `OrderFilled`；同一笔成交的 `ORDER_TRADE_UPDATE` 再作为带手续费的 `OrderFilled` 转发一次；之后的回报丢弃。内核的 OMS 在成交记录上标记"手续费待到"，重复成交（`DuplicateFill`）若是这笔 Lite 成交的完整回报，由 `Portfolio::on_commission` 只记一次手续费，不重复记成交。
 
 ### 8.4 ClientOrderId
 
@@ -1300,7 +1300,7 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 - 实现（M4-D）：`jarvis/adapter/binance/requests.hpp` 不做 I/O，把内核命令变成请求参数，再变成签名的 REST 查询串或 WS API 请求；应答变成 `PlaceAck`、`RequestError` 与 `RateLimitFeedback`。
   - 订单参数：post-only 限价单用 `GTX`；`newOrderRespType=ACK`，成交只从用户数据流得到；`order.modify` 需要 side，命令里没有，由调用方传入（`OrderTracker` 记录了每个订单的方向）；撤单按 client order id。
   - 签名：REST 对实际发送的查询串签名（HMAC-SHA256 为十六进制，Ed25519 为 base64 再做百分号编码）；WS API 的 `session.logon` 对按名排序的 `k=v&...` 签名，logon 之后的请求不再签名。
-  - `RestClient`（`rest_client.hpp`）是阻塞式的，每个线程一个（启动线程、下单线程）。`sync_time` 以往返中点估计偏移，之后签名请求的 `timestamp` 用交易所时钟。
+  - `RestClient`（`rest_client.hpp`）是阻塞式的，每个线程一个（启动线程、下单线程）。`sync_time` 取偏移的下界（`serverTime` 减去应答到达时的本地时钟；M5-P 之前取往返中点），之后签名请求的 `timestamp` 用交易所时钟。本地对交易所时钟的估计因此从不超前：快照的 `T_s` 若超前，交易所在 `T_s` 之后不久打上时间的事件（例如对账刚结束后的撤单确认）会被当作已经反映在快照中而作为过期事件丢弃，订单停在 `PENDING_CANCEL`；估计落后只会让这类事件再施加一次，而再施加是幂等的。混沌测试在 TSan 构建下（往返更慢）发现了这个问题。
   - REST 下单结果分三种：带回执的 `Ok`；带拒绝码的 `Ok`（HTTP 4xx 且有 `code`，交给 `OrderTracker::on_request_error` 产生 `OrderRejected` 等事件）；结果未知的 `IoError`（5xx、超时、无法解析），订单留在 in-flight 集合，由对账确定结局。5xx 不能当作拒绝：交易所可能已经接受了订单。
   - `WsApiSession`（`ws_api.hpp`）运行在 order-sender 的 IoContext 上。Ed25519 key 用 `session.logon` 登录，之后请求不再签名；其他 key 逐条签名。请求按 id 与应答配对，订单请求只有三种结局：已确认、被拒（带交易所错误码）、未知（超时未答，或连接断开时仍在途）。未知的订单留给对账；超时后才到的应答照常报告，由 `OrderTracker` 幂等处理。
   - 24 小时轮换是先建后拆：到期前开第二个连接并登录，新请求改走新连接，旧连接上的请求答完后才关闭，计划内的轮换不会让下单中断。意外断线按退避重连；登录被拒（key 错误或被吊销）不重连，报告后停止。
@@ -1400,11 +1400,12 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 
 适配器一侧（M5-C1，`jarvis/adapter/binance/snapshot.hpp`）按上述约束用 REST 组装快照：
 
-1. `T_s` 取第一次调用前交易所的时钟（本地时钟加上测得的偏移）。
+1. `T_s` 取第一次调用前交易所的时钟（本地时钟加上测得偏移的下界，所以不晚于交易所的真实时钟，见第 13 节 `RestClient`）。
 2. `GET /fapi/v1/openOrders`；对 `OrderTracker` 尚未见到关闭、又不在列表中的订单逐个 `GET /fapi/v1/order`（`-2013` 表示交易所不认识，留给内核判 LOST）。
+2b. 按订单补读成交（M5-P）：交易所报告的已成交量（`openOrders` 或逐单查询的 `executedQty`）大于适配器已知成交之和的订单，用 `userTrades?orderId=` 读出它的全部成交。这种订单的某条成交回报丢了或被后到的回报超过，而第 3 步按品种的读取从见到的最大成交号之后开始，可能已经越过它。`OrderTracker` 为每个订单记下回报中最大的累计成交量 `z` 与已知成交的数量之和，前者更大的订单即使已经关闭也列入快照要查询的订单。
 3. 一致读：先 `userTrades`（按品种，从上次见到的成交号之后开始，没有时从节点启动时间开始），再 `/fapi/v3/balance` 与 `/fapi/v3/positionRisk`，再读一次 `userTrades`。第二次读到新成交时重读余额与仓位，最多三轮；读不稳定时放弃，稍后重试。这样仓位与余额反映的每一笔成交都在成交报告中，且报告之后没有它们不反映的成交。
 
-成交报告按已知的交易所订单号补上 `ClientOrderId`；未知品种与非内置币种的条目计数后跳过。内核对账之后，`OrderTracker::absorb` 吸收快照所示的交易所订单号、确认、关闭与成交，之后同一订单或成交的回报按正常规则去重。
+同一笔成交在第 2b 步与第 3 步都读到时只报告一次。成交报告按已知的交易所订单号补上 `ClientOrderId`；未知品种与非内置币种的条目计数后跳过。内核对账之后，`OrderTracker::absorb` 吸收快照所示的交易所订单号、确认、关闭与成交，之后同一订单或成交的回报按正常规则去重。
 
 测试：`tests/cpp/test_reconciliation.cpp` 为每一步写了单元用例，并有一个性质测试：随机生成交易所历史（开单、逐笔成交、撤单、断线、重连、重排与重复投递、快照与对账交错），每一步检查规约的 `HaltedUntilSynced`、`CountedOnce`、`NoPhantom`，最终检查 `Converged`（成交量、开闭状态与确切状态）。变异检验：去掉成交报告、不回放暂存、断线不停止交易都会被抓到。
 
@@ -1540,6 +1541,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - **golden trace**：每个 `tests/golden/<case>/case.toml` 是一组命令加上要逐字节比较的产物，`expected.sha256` 防止期望文件被手工改动；`just golden-update` 重新生成，变更在 review 中可见。M2 的回放用例（`replay_trade`、`replay_batch`、`replay_quote`、`replay_book`、`replay_bar`、`replay_feature`、`example_trade_logger`）由测试专用程序 `golden_node`（`tests/cpp/golden_node.cpp`）生成确定的数据目录，运行一个按 `plan` 参数订阅的策略，比较运行日志的文本转储，并用 `--replay` 核对输出可重算。数据生成对编译器无关：每条语句只取一次随机数，避免函数实参求值顺序在 GCC 与 Clang 之间不同。
 - **mock venue**：适配器的连接层对回环服务端测试，证书在测试时生成。`ScriptedHttpsServer` 按顺序回放 HTTP 响应并记录请求；`ScriptedWssServer`（`tests/cpp/support/ws_test.hpp`）每个连接一个线程，按脚本回复客户端消息，也可以主动推送、正常关闭或直接断开，用来覆盖登录、超时、断线、24 小时轮换与重复事件。
 - **环境等价测试**：sandbox 录制 → 同一策略文件的 backtest 回放，命令流逐字节相同（第 4.6 节）。
+- **混沌测试**（M5-P，`tests/cpp/test_chaos.cpp`，ctest `chaos.unit`）：实盘节点对一个有自己账簿的模拟交易所运行。交易所按路径回答 REST（启动检查、listenKey、`countdownCancelAll`、快照的各项读取，`HandlerHttpsServer`），经 WS API 下单与撤单，后台线程随机逐手成交；用户流消息经过按种子随机的故障：丢失、重复、延后到下一条之后（乱序），并约每秒断开一次用户流连接（在途与断线期间的消息丢失）。这对应 `Reconciliation` 规约的网络模型，外加在线时丢消息。故障阶段之后停止故障与成交，再断开一次，等对账完成后关停。要求：每笔成交只计一次，策略看到的成交号集合等于交易所的，策略仓位等于交易所仓位，没有遗留的挂单，录制回放输出一致。默认两个种子，`JARVIS_CHAOS_SEEDS` 指定更多（nightly）。它发现并修正了三个适配器问题：按品种读成交的起点取见到的最大成交号，丢失的成交回报因此再也读不到（第 15.2 节第 2b 步）；`OrderTracker` 把比订单上次更新更早的成交回报当作过期丢弃；时钟偏移取往返中点，快照的 `T_s` 可能超前交易所时钟，对账后不久的撤单确认因此被当作过期事件丢弃（TSan 构建下出现，现在取偏移的下界）。故障阶段持续到至少 3 次断线与 10 笔成交（慢构建需要更久）；`JARVIS_CHAOS_KEEP=<目录>` 把失败种子的运行目录复制出来以便检查。
 - **确定性指纹**：CI 的 determinism job 比较 `rel` 与 `det-o0` 两个构建写出的语料日志（`tools/fingerprint_gate.sh`）；golden 用例在 dev（GCC、Clang）、rel 与 det-o0 构建上产出相同的文本。里程碑验收在真实数据上重复这项比较（`tools/m2_acceptance.sh`）。
 - **sanitizer**：现有 `dev` preset（ASan + UBSan）× gcc-13 / clang-18 / AppleClang 矩阵；新增 `tsan` preset 覆盖 shell 中的环与 IO 线程；新增 `fuzz` preset（`-fsanitize=fuzzer`）覆盖 Codec、WebSocket 帧层、HTTP 解析，语料入库，PR 中每个目标 60 秒，nightly 10 分钟。
 - **零分配门**：debug 构建替换 `operator new` 计数，`step` 内发生任何分配即测试失败。

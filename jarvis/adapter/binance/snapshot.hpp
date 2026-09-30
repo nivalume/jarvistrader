@@ -23,6 +23,9 @@
 //      before it (the caller's part);
 //   2. openOrders, then GET /fapi/v1/order for every order the adapter has not seen close and
 //      openOrders does not list (the venue not knowing one is left for the kernel to call lost);
+//   2b. userTrades by order for every order whose reported filled quantity exceeds the trades
+//      the adapter knows of: a report of one of its trades was lost or overtaken, and the trade
+//      id the per-symbol read starts from (the largest seen, plus one) may be past it;
 //   3. userTrades per symbol, then balances and positions, then userTrades again: when new
 //      trades turned up, balances and positions are read again, so every trade a position or
 //      balance reflects is among the fill reports and none after them (the kernel sets the
@@ -63,6 +66,7 @@ struct AccountSnapshot {
   std::map<std::string, std::uint64_t> next_trade; // by symbol, after the fills reported
   std::size_t skipped = 0;                         // entries of unknown symbols or assets
   std::uint32_t rounds = 0;                        // balance and position reads
+  std::uint32_t gap_reads = 0;                     // orders whose trades were read by order
   std::uint32_t requests = 0;
   bool check = false; // a light check (VenueSnapshot::check)
 

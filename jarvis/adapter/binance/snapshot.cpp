@@ -30,6 +30,9 @@ public:
     out_->ts_snapshot = venue_now();
     Status s = orders();
     if (core::ok(s)) {
+      s = gaps();
+    }
+    if (core::ok(s)) {
       s = consistent_read();
     }
     if (core::ok(s)) {
@@ -101,6 +104,53 @@ private:
     return s;
   }
 
+  // Step 2b: every trade of the orders whose venue-reported filled quantity exceeds what the
+  // adapter knows of them.
+  Status gaps() {
+    for (const TrackedOrder& t : request_->orders) {
+      const auto report = std::find_if(
+          out_->orders.begin(), out_->orders.end(), [&t](const model::OrderStatusReport& r) {
+            return r.client_order_id && r.client_order_id->view() == t.client_order_id;
+          });
+      if (report == out_->orders.end() || report->filled_qty.raw() <= t.filled_raw) {
+        continue;
+      }
+      std::uint64_t order_id = 0;
+      const std::string_view vid = report->venue_order_id.view();
+      if (std::from_chars(vid.data(), vid.data() + vid.size(), order_id).ec != std::errc{}) {
+        continue;
+      }
+      std::string body;
+      ++out_->requests;
+      ++out_->gap_reads;
+      Status s = rest_->order_trades(t.symbol, order_id, body, *error_);
+      std::vector<model::FillReport> fills;
+      std::uint64_t last = 0;
+      std::size_t count = 0;
+      if (core::ok(s)) {
+        s = decode_user_trades(body, context(), fills, last, count, *error_);
+      }
+      if (!core::ok(s)) {
+        return s;
+      }
+      add_unique(fills);
+    }
+    return Status::Ok;
+  }
+
+  // Fills not already among the reports (a trade read by order may come again per symbol).
+  void add_unique(const std::vector<model::FillReport>& fills) {
+    for (const model::FillReport& f : fills) {
+      const bool known =
+          std::any_of(out_->fills.begin(), out_->fills.end(), [&f](const model::FillReport& g) {
+            return g.trade_id == f.trade_id && g.venue_order_id == f.venue_order_id;
+          });
+      if (!known) {
+        out_->fills.push_back(f);
+      }
+    }
+  }
+
   // Step 3: trades, balances and positions, then trades again until none turned up.
   Status consistent_read() {
     bool more = false;
@@ -147,14 +197,16 @@ private:
         ++out_->requests;
         Status s = rest_->user_trades(symbol, from, request_->trades_since_ms, request_->trade_page,
                                       body, *error_);
+        std::vector<model::FillReport> fills;
         std::uint64_t last = 0;
         std::size_t count = 0;
         if (core::ok(s)) {
-          s = decode_user_trades(body, context(), out_->fills, last, count, *error_);
+          s = decode_user_trades(body, context(), fills, last, count, *error_);
         }
         if (!core::ok(s)) {
           return s;
         }
+        add_unique(fills);
         if (count == 0) {
           break;
         }

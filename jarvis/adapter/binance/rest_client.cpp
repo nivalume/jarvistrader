@@ -134,7 +134,6 @@ Status RestClient::json_call(std::string_view method, std::string_view path, Par
 }
 
 Status RestClient::sync_time(std::string& error) {
-  const std::int64_t before = now_ms();
   RestResponse r;
   const Status called = json_call("GET", "/fapi/v1/time", {}, Security::None, r, error);
   const std::int64_t after = now_ms();
@@ -148,7 +147,13 @@ Status RestClient::sync_time(std::string& error) {
     error = "serverTime missing";
     return Status::ParseError;
   }
-  offset_ms_ = server - (before + after) / 2; // the venue's clock at the round trip's middle
+  // The venue read its clock during the call, before `after` (local time), so server - after is
+  // a lower bound of the offset. The lower bound: a local estimate of the venue's clock
+  // (a snapshot's T_s above all) must never run ahead of it, or events the venue stamps just
+  // after T_s would count as already in the snapshot and be dropped as stale; one that runs
+  // behind only applies such events again, which is idempotent. Signed requests stay within
+  // recvWindow either way.
+  offset_ms_ = server - after;
   return Status::Ok;
 }
 
@@ -370,6 +375,18 @@ Status RestClient::user_trades(std::string_view symbol, std::optional<std::uint6
   } else {
     params.emplace_back("startTime", std::to_string(start_ms));
   }
+  RestResponse r;
+  const Status s =
+      json_call("GET", "/fapi/v1/userTrades", std::move(params), Security::Signed, r, error);
+  if (core::ok(s)) {
+    body = std::move(r.body);
+  }
+  return s;
+}
+
+Status RestClient::order_trades(std::string_view symbol, std::uint64_t order_id, std::string& body,
+                                std::string& error) {
+  Params params{{"symbol", std::string{symbol}}, {"orderId", std::to_string(order_id)}};
   RestResponse r;
   const Status s =
       json_call("GET", "/fapi/v1/userTrades", std::move(params), Security::Signed, r, error);

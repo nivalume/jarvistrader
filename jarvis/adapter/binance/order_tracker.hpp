@@ -34,10 +34,14 @@
 // Fills are deduplicated by (order id, trade id): the first report of a trade is the fill; when
 // it was TRADE_LITE, the ORDER_TRADE_UPDATE of the same trade is passed on once more with its
 // commission, which the kernel books without counting the fill twice (Oms::take_pending_
-// commission); any further report is dropped. Reports older than the order's last update
-// (o.T) are dropped. Reports of orders this node did not send are counted and dropped
-// (reconciliation adopts or cancels them, section 15). ACCOUNT_UPDATE is merged into the full
-// balance table, which goes to the kernel as an AccountState (total = wallet balance).
+// commission); any further report is dropped. Other reports older than the order's last update
+// (o.T) are dropped; a fill is passed on whenever it arrives, since the venue may deliver an
+// order's reports out of order. Each order keeps the largest cumulative filled quantity reported
+// (z) and the quantity of the trades seen: when the first exceeds the second, a trade's report
+// was lost, and the next snapshot reads that order's trades. Reports of orders this node did not
+// send are counted and dropped (reconciliation adopts or cancels them, section 15). ACCOUNT_UPDATE
+// is merged into the full balance table, which goes to the kernel as an AccountState (total =
+// wallet balance).
 
 namespace jarvis::adapter::binance {
 
@@ -67,11 +71,14 @@ struct RequestError {
   std::uint64_t time_ms = 0;
 };
 
-// An order the adapter sent and has not seen close (what a reconciliation snapshot asks about).
+// An order a reconciliation snapshot asks about: one the adapter sent and has not seen close, or
+// one whose reported filled quantity exceeds the trades the adapter knows of (a report of a
+// trade was lost or overtaken).
 struct TrackedOrder {
   std::string symbol; // venue symbol
   std::string client_order_id;
   std::uint64_t venue_order_id = 0; // 0 when not acknowledged
+  std::uint64_t filled_raw = 0;     // the quantity of the trades the adapter knows of
 };
 
 // An order an earlier run of this node left open, restored by a resumed run (node/recovery.hpp):
@@ -151,6 +158,10 @@ private:
     bool closed = false;
     std::uint64_t last_update_ms = 0;
     std::map<std::uint64_t, TradeState> trades;
+    std::uint64_t cum_raw = 0;   // the largest cumulative filled quantity reported (z)
+    std::uint64_t known_raw = 0; // the quantity of the trades in `trades` (when known)
+
+    [[nodiscard]] bool gapped() const noexcept { return cum_raw > known_raw; }
   };
 
   [[nodiscard]] model::OrderEventHeader header(const Order& o, std::uint64_t ts_ms,
@@ -162,6 +173,7 @@ private:
                     std::string_view commission_asset, std::uint64_t ts_ms, core::UnixNanos recv,
                     EventEmitter& out);
   core::Status order_report(const OrderReport& r, core::UnixNanos recv, EventEmitter& out);
+  void note_cumulative(Order& o, std::string_view cum_qty) const;
   core::Status refusal(Order& o, const RequestError& e, core::UnixNanos recv, EventEmitter& out);
   core::Status account_report(const AccountReport& r, core::UnixNanos recv, EventEmitter& out);
   core::Status fail(core::Status s, std::string what) {

@@ -176,7 +176,9 @@ TEST_SUITE("unit") {
         http("[" + order_json("jarvis-000001-00000001", 11, "NEW", "0.000") + "]"),
         http(order_json("jarvis-000001-00000002", 12, "FILLED", "0.010")),
         http(R"({"code":-2013,"msg":"Order does not exist."})", 400),
-        http("[" + trade_json(501, 12, "0.010", 1'700'000'000'150) + "]"), // trades
+        // Order 12 filled 0.010 but the adapter knows none of its trades: read by order.
+        http("[" + trade_json(501, 12, "0.010", 1'700'000'000'150) + "]"),
+        http("[" + trade_json(501, 12, "0.010", 1'700'000'000'150) + "]"), // trades (again)
         http(kBalances), http(positions_json("0.010")),
         http("[]"), // trades again: none, so the read is consistent
     }};
@@ -198,21 +200,24 @@ TEST_SUITE("unit") {
     CHECK(snap.positions[0].position_side == m::PositionSide::Long);
     CHECK(snap.next_trade.at("BTCUSDT") == 502);
     CHECK(snap.rounds == 1);
-    CHECK(snap.requests == 7);
+    CHECK(snap.requests == 8);
+    CHECK(snap.gap_reads == 1);
     CHECK(snap.skipped == 2); // ZZZ, ETHUSDT
     CHECK(!(snap.orders[0].report_id == snap.orders[1].report_id));
 
     const std::vector<std::string> requests = host.requests();
-    REQUIRE(requests.size() == 7);
+    REQUIRE(requests.size() == 8);
     CHECK(target_of(requests[0]) == "/fapi/v1/openOrders");
     CHECK(target_of(requests[1]) == "/fapi/v1/order");
     CHECK(requests[1].find("origClientOrderId=jarvis-000001-00000002") != std::string::npos);
     CHECK(requests[2].find("origClientOrderId=jarvis-000001-00000003") != std::string::npos);
     CHECK(target_of(requests[3]) == "/fapi/v1/userTrades");
-    CHECK(requests[3].find("startTime=1699999000000") != std::string::npos);
-    CHECK(target_of(requests[4]) == "/fapi/v3/balance");
-    CHECK(target_of(requests[5]) == "/fapi/v3/positionRisk");
-    CHECK(requests[6].find("fromId=502") != std::string::npos);
+    CHECK(requests[3].find("orderId=12") != std::string::npos);
+    CHECK(target_of(requests[4]) == "/fapi/v1/userTrades");
+    CHECK(requests[4].find("startTime=1699999000000") != std::string::npos);
+    CHECK(target_of(requests[5]) == "/fapi/v3/balance");
+    CHECK(target_of(requests[6]) == "/fapi/v3/positionRisk");
+    CHECK(requests[7].find("fromId=502") != std::string::npos);
 
     const m::VenueSnapshot event = snap.event(UnixNanos{9});
     CHECK(event.orders.size() == 2);

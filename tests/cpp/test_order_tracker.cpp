@@ -175,27 +175,32 @@ TEST_SUITE("unit") {
                               out) == Status::Ok);
     CHECK(out.events.size() == 3);
 
-    // A report older than the order's last update is stale.
+    // A fill reported after a newer report of the order still counts (the venue may deliver an
+    // order's reports out of order); another report older than the order's last update is stale.
     REQUIRE(tracker.on_report(report(order_update("C-1", "TRADE", 43, 1790000000010)), UnixNanos{6},
                               out) == Status::Ok);
-    CHECK(out.events.size() == 3);
+    REQUIRE(out.events.size() == 4);
+    CHECK(std::get<model::OrderFilled>(out.events[3]).trade_id.view() == "43");
+    REQUIRE(tracker.on_report(report(order_update("C-1", "EXPIRED", 0, 1790000000010)),
+                              UnixNanos{6}, out) == Status::Ok);
+    CHECK(out.events.size() == 4);
 
     // A liquidation fill, then the cancel (once).
     REQUIRE(tracker.on_report(report(order_update("C-1", "CALCULATED", 44, 1790000000200)),
                               UnixNanos{7}, out) == Status::Ok);
-    const auto& liq = std::get<model::OrderFilled>(out.events.at(3));
+    const auto& liq = std::get<model::OrderFilled>(out.events.at(4));
     CHECK((liq.info_flags & static_cast<std::uint8_t>(model::FillInfo::Liquidation)) != 0);
     REQUIRE(tracker.on_report(report(order_update("C-1", "CANCELED", 0, 1790000000300)),
                               UnixNanos{8}, out) == Status::Ok);
     REQUIRE(tracker.on_report(report(order_update("C-1", "CANCELED", 0, 1790000000300)),
                               UnixNanos{9}, out) == Status::Ok);
-    REQUIRE(out.events.size() == 5);
-    CHECK(std::holds_alternative<model::OrderCanceled>(out.events[4]));
+    REQUIRE(out.events.size() == 6);
+    CHECK(std::holds_alternative<model::OrderCanceled>(out.events[5]));
 
     // Someone else's order.
     REQUIRE(tracker.on_report(report(order_update("OTHER", "NEW", 0, 1)), UnixNanos{10}, out) ==
             Status::Ok);
-    CHECK(out.events.size() == 5);
+    CHECK(out.events.size() == 6);
 
     const binance::TrackerStats& st = tracker.stats();
     CHECK(st.lite_fills == 1);

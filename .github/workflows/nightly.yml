@@ -30,6 +30,20 @@ jobs:
           cmake --build --preset tsan
           ctest --preset tsan
 
+  chaos:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install --yes ninja-build libssl-dev
+      - name: The live node against a faulty venue, 20 seeds
+        run: |
+          cmake --preset dev -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          cmake --build --preset dev --target test_chaos
+          JARVIS_CHAOS_SEEDS=20 build/dev/tests/test_chaos
+
   fuzz:
     runs-on: ubuntu-24.04
     steps:

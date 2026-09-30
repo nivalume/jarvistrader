@@ -144,4 +144,7 @@ if(TARGET jarvis_live)
                         cpp/test_telemetry.cpp
                         SUITES unit LIBS jarvis::live jarvis_asio)
   target_compile_definitions(test_live PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  # The live node against a faulty venue (tests/cpp/test_chaos.cpp); JARVIS_CHAOS_SEEDS runs more.
+  jarvis_add_layer_test(chaos SOURCES cpp/test_chaos.cpp SUITES unit LIBS jarvis::live jarvis_asio)
+  target_compile_definitions(test_chaos PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()

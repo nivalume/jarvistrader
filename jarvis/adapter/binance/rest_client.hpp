@@ -109,6 +109,9 @@ public:
                                          std::optional<std::uint64_t> from_id,
                                          std::int64_t start_ms, int limit, std::string& body,
                                          std::string& error);
+  // GET /fapi/v1/userTrades of one order (every trade of it).
+  [[nodiscard]] core::Status order_trades(std::string_view symbol, std::uint64_t order_id,
+                                          std::string& body, std::string& error);
 
   // POST /fapi/v1/countdownCancelAll: the venue cancels every open order of `symbol` unless this
   // is renewed within `countdown_ms`; 0 disarms it.

@@ -5,9 +5,11 @@
 
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -181,6 +183,86 @@ private:
   asio::ip::tcp::acceptor acceptor_{io_};
   std::vector<std::string> responses_;
   std::vector<std::string> requests_;
+  std::mutex mutex_;
+  std::string error_;
+  std::thread thread_;
+};
+
+// Answers each HTTPS request with `handler(request)` (the request line, headers and body), one
+// request per connection: every response closes it, so requests are served strictly in turn.
+// Serves until destroyed.
+class HandlerHttpsServer {
+public:
+  using Handler = std::function<std::string(const std::string& request)>;
+
+  HandlerHttpsServer(Handler handler, std::string cert, const std::string& key)
+      : ssl_{asio::ssl::context::tls_server}, handler_{std::move(handler)}, cert_{std::move(cert)} {
+    ssl_.use_certificate_chain_file(cert_);
+    ssl_.use_private_key_file(key, asio::ssl::context::pem);
+    acceptor_.open(asio::ip::tcp::v4());
+    acceptor_.bind({asio::ip::make_address("127.0.0.1"), 0});
+    acceptor_.listen();
+    thread_ = std::thread{[this] { serve(); }};
+  }
+  ~HandlerHttpsServer() {
+    stopping_ = true;
+    try { // wake the blocking accept
+      asio::io_context io;
+      asio::ip::tcp::socket s{io};
+      s.connect({asio::ip::make_address("127.0.0.1"), port()});
+    } catch (const std::exception&) { // NOLINT(bugprone-empty-catch): already stopped
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+  HandlerHttpsServer(const HandlerHttpsServer&) = delete;
+  HandlerHttpsServer& operator=(const HandlerHttpsServer&) = delete;
+
+  [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
+  [[nodiscard]] std::string url() const { return "https://localhost:" + std::to_string(port()); }
+  [[nodiscard]] std::string error() {
+    const std::lock_guard lock{mutex_};
+    return error_;
+  }
+
+private:
+  void serve() {
+    while (!stopping_) {
+      asio::ssl::stream<asio::ip::tcp::socket> s{io_, ssl_};
+      asio::error_code ec;
+      acceptor_.accept(s.lowest_layer(), ec);
+      if (ec || stopping_) {
+        break;
+      }
+      try {
+        s.handshake(asio::ssl::stream_base::server);
+        std::string request = read_head(s);
+        const std::string length = header_value(request, "Content-Length");
+        if (!length.empty() && std::stoul(length) > 0) {
+          std::string body(std::stoul(length), '\0');
+          asio::read(s, asio::buffer(body));
+          request += body;
+        }
+        const std::string response = handler_(request);
+        asio::write(s, asio::buffer(response));
+      } catch (const std::exception& e) {
+        // A client that gave up on a request (shutting down) is not an error of the server.
+        const std::lock_guard lock{mutex_};
+        if (error_.empty() && !stopping_) {
+          error_ = e.what();
+        }
+      }
+      s.lowest_layer().close(ec);
+    }
+  }
+
+  asio::io_context io_;
+  asio::ssl::context ssl_;
+  asio::ip::tcp::acceptor acceptor_{io_};
+  Handler handler_;
+  std::string cert_;
+  std::atomic<bool> stopping_{false};
   std::mutex mutex_;
   std::string error_;
   std::thread thread_;

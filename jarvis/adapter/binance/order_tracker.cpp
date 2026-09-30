@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <unordered_map>
 
 #include "jarvis/model/account.hpp"
 #include "jarvis/model/order_events.hpp"
@@ -75,13 +76,13 @@ void OrderTracker::restore(const RecoveredOrder& r) {
 std::vector<TrackedOrder> OrderTracker::unclosed() const {
   std::vector<TrackedOrder> out;
   for (const auto& [cid, o] : orders_) {
-    if (o.closed) {
+    if (o.closed && !o.gapped()) {
       continue;
     }
     std::uint64_t venue = 0;
     static_cast<void>(std::from_chars(o.venue_order_id.data(),
                                       o.venue_order_id.data() + o.venue_order_id.size(), venue));
-    out.push_back(TrackedOrder{symbols_->venue_symbol(o.symbol), cid, venue});
+    out.push_back(TrackedOrder{symbols_->venue_symbol(o.symbol), cid, venue, o.known_raw});
   }
   std::sort(out.begin(), out.end(), [](const TrackedOrder& a, const TrackedOrder& b) {
     return a.client_order_id < b.client_order_id;
@@ -127,7 +128,9 @@ void OrderTracker::absorb(const model::VenueSnapshot& snapshot) {
       o.closed = true;
     }
     o.last_update_ms = std::max(o.last_update_ms, r.ts_last.value() / 1'000'000);
+    o.cum_raw = std::max(o.cum_raw, r.filled_qty.raw());
   }
+  std::unordered_map<std::string, std::uint64_t> reported; // the fills' quantity by order
   for (const model::FillReport& f : snapshot.fills) {
     if (!f.client_order_id) {
       continue;
@@ -139,7 +142,21 @@ void OrderTracker::absorb(const model::VenueSnapshot& snapshot) {
         std::from_chars(text.data(), text.data() + text.size(), trade).ec != std::errc{}) {
       continue;
     }
-    it->second.trades[trade] = TradeState::Full;
+    Order& o = it->second;
+    reported[it->first] += f.last_qty.raw();
+    if (o.trades.emplace(trade, TradeState::Full).second) {
+      o.known_raw += f.last_qty.raw();
+    } else {
+      o.trades[trade] = TradeState::Full;
+    }
+  }
+  // An order whose trades the snapshot read in full (by order) is known completely; this also
+  // covers an order restored from an earlier run, whose trades' quantities were not kept.
+  for (auto& [cid, o] : orders_) {
+    const auto r = reported.find(cid);
+    if (r != reported.end() && r->second >= o.cum_raw) {
+      o.known_raw = std::max(o.known_raw, r->second);
+    }
   }
 }
 
@@ -298,9 +315,20 @@ Status OrderTracker::fill(Order& o, std::uint64_t trade_id, std::string_view qty
   }
   if (late) {
     ++stats_.late_commissions;
+  } else {
+    o.known_raw += f.last_qty.raw();
+    o.cum_raw = std::max(o.cum_raw, o.known_raw);
   }
   o.trades[trade_id] = lite ? TradeState::Lite : TradeState::Full;
   return out.event(model::Event{f});
+}
+
+void OrderTracker::note_cumulative(Order& o, std::string_view cum_qty) const {
+  model::Quantity q;
+  if (!cum_qty.empty() &&
+      core::ok(exact_quantity(cum_qty, (*symbols_)[o.symbol].size_precision, q))) {
+    o.cum_raw = std::max(o.cum_raw, q.raw());
+  }
 }
 
 Status OrderTracker::order_report(const OrderReport& r, core::UnixNanos recv, EventEmitter& out) {
@@ -308,19 +336,21 @@ Status OrderTracker::order_report(const OrderReport& r, core::UnixNanos recv, Ev
   if (o == nullptr) {
     return Status::Ok;
   }
-  if (r.order_time_ms < o->last_update_ms) {
-    ++stats_.stale_reports;
+  const std::string& x = r.execution_type;
+  const bool trade = x == "TRADE" || x == "CALCULATED";
+  note_cumulative(*o, r.cum_qty);
+  if (!trade && r.order_time_ms < o->last_update_ms) {
+    ++stats_.stale_reports; // an older state; a fill counts whenever it comes
     return Status::Ok;
   }
-  o->last_update_ms = r.order_time_ms;
+  o->last_update_ms = std::max(o->last_update_ms, r.order_time_ms);
   if (o->venue_order_id.empty()) {
     o->venue_order_id = decimal(r.order_id);
   }
-  const std::string& x = r.execution_type;
   if (x == "NEW") {
     return accepted(*o, r.transaction_time_ms, recv, out);
   }
-  if (x == "TRADE" || x == "CALCULATED") {
+  if (trade) {
     return fill(*o, r.trade_id, r.last_qty, r.last_price, r.maker, false, x == "CALCULATED",
                 r.commission, r.commission_asset, r.order_time_ms, recv, out);
   }
