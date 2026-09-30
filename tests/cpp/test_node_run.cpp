@@ -525,11 +525,32 @@ TEST_SUITE("unit") {
       cuts.push_back(size * i / 40);
     }
     int n = 0;
+    int torn = 0;       // cuts inside a record (or the header)
+    int torn_steps = 0; // cuts between an input and its outputs
     for (const std::uint64_t cut : cuts) {
       CAPTURE(cut);
       const std::string crashed = tmp.sub("crashed-" + std::to_string(n++));
       std::filesystem::copy(run.directory, crashed);
       std::filesystem::resize_file(crashed + "/" + node::segment_name(0), cut);
+      // A backtest writes its snapshots at once; a live node's persist thread only once the log
+      // holds everything before them. So, as a crash leaves it: no snapshot beyond what is left.
+      std::uint64_t next_input = 0;
+      {
+        node::EventLogReader left;
+        wire::RecordView record;
+        if (left.open(crashed, node::EventLogReadOptions{true}) == Status::Ok) {
+          while (left.next(record) == Status::Ok) {
+            if (record.header.kind < wire::kFirstOutputKind) {
+              next_input = record.header.seq;
+            }
+          }
+        }
+      }
+      for (const node::SnapshotEntry& e : node::list_snapshots(crashed)) {
+        if (e.seq + 1 > next_input) {
+          std::filesystem::remove(e.path);
+        }
+      }
 
       st::StaticStrategySet<Echo> set{make_echo(config.strategies[0])};
       EchoEngine engine{node::kernel_config(config), set, node::error_policy(config)};
@@ -539,7 +560,8 @@ TEST_SUITE("unit") {
       const Status s = node::recover_run(crashed, config, engine, report, error);
       INFO(error);
       REQUIRE(s == Status::Ok);
-      CHECK((report.torn_bytes != 0 || cut == size || report.last_seq == 0));
+      torn += report.torn_bytes != 0 ? 1 : 0;
+      torn_steps += report.torn_step ? 1 : 0;
 
       // The same state as replaying the whole run up to that input.
       st::StaticStrategySet<Echo> ref_set{make_echo(config.strategies[0])};
@@ -556,6 +578,8 @@ TEST_SUITE("unit") {
       CHECK(state_of(engine) == state_of(reference));
       CHECK(set.get<0>().heartbeats == ref_set.get<0>().heartbeats);
     }
+    CHECK(torn > 0);
+    CHECK(torn_steps > 0);
   }
 
   TEST_CASE("recovery refuses another configuration and strategies without a state") {

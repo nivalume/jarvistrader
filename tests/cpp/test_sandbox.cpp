@@ -91,6 +91,15 @@ struct Tapper {
   int cancels = 0;
   bool bought = false;
   md::ClientOrderId resting;
+  // Set once it has seen all the streaming test sends: three quotes, two trades, three book
+  // updates (the snapshot and two diffs), and its resting order canceled.
+  std::atomic<bool>* stop = nullptr;
+
+  void check_done() const {
+    if (stop != nullptr && quotes >= 3 && trades >= 2 && books >= 3 && cancels == 1) {
+      stop->store(true);
+    }
+  }
 
   static Status on_start(st::Context& ctx) {
     Status s = ctx.subscribe_quotes(btc());
@@ -104,6 +113,7 @@ struct Tapper {
   }
   Status on_quote(st::Context& ctx, const md::QuoteTick& /*q*/) {
     ++quotes;
+    check_done();
     if (bought) {
       return Status::Ok;
     }
@@ -113,11 +123,18 @@ struct Tapper {
     md::ClientOrderId id;
     return ctx.submit(ctx.market(btc(), md::OrderSide::Buy, qty), id);
   }
-  void on_trade(st::Context& /*ctx*/, const md::TradeTick& /*t*/) { ++trades; }
-  void on_book(st::Context& /*ctx*/, const jarvis::data::BookView& /*b*/) { ++books; }
+  void on_trade(st::Context& /*ctx*/, const md::TradeTick& /*t*/) {
+    ++trades;
+    check_done();
+  }
+  void on_book(st::Context& /*ctx*/, const jarvis::data::BookView& /*b*/) {
+    ++books;
+    check_done();
+  }
   Status on_order_event(st::Context& ctx, const md::OrderEvent& e) {
     if (std::holds_alternative<md::OrderCanceled>(e)) {
       ++cancels;
+      check_done();
     }
     if (!std::holds_alternative<md::OrderFilled>(e) || fills++ > 0) {
       return Status::Ok;
@@ -397,7 +414,11 @@ TEST_SUITE("unit") {
     endpoints.ws_api = server.url("/ws-fapi/v1");
     endpoints.tls.ca_file = server.ca_file();
     request.endpoints = endpoints;
-    request.run_for = std::chrono::milliseconds{3000};
+    // The strategy stops the node once it has seen everything below; the bound only ends a run
+    // that never gets there (under TSan the node starts slowly).
+    std::atomic<bool> stop{false};
+    request.stop = &stop;
+    request.run_for = std::chrono::seconds{30};
 
     // After the book syncs: more diffs in the chain, quotes and trades, as the venue streams.
     std::atomic<bool> pushed{false};
@@ -428,6 +449,7 @@ TEST_SUITE("unit") {
     }};
 
     Tapper tapper;
+    tapper.stop = &stop;
     st::StaticStrategySet<Tapper> set{tapper};
     live::SandboxResult result;
     std::string error;
