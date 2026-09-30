@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
+import sys
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -430,3 +434,84 @@ def test_run_for_is_a_node_argument() -> None:
     assert parsed["run_for"] == 30
     with pytest.raises(ValueError, match="run-for"):
         native.parse_args(["--replay", "run", "--run-for", "5"])
+
+
+# ---- native strategy plugins ------------------------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def _wheel_build() -> Path | None:
+    for build in sorted((REPO / "build" / "wheel").glob("*")):
+        if (build / "libjarvis_shell.a").exists() and (build / "compile_commands.json").exists():
+            return build
+    return None
+
+
+def _flags_of(entry: dict[str, Any]) -> list[str]:
+    """The compiler and the flags the wheel compiled one of its sources with."""
+    args = entry["arguments"] if "arguments" in entry else shlex.split(entry["command"])
+    keep = [args[0]]
+    skip_next = False
+    for arg in args[1:]:
+        if skip_next:
+            skip_next = False
+        elif arg in ("-o", "-c", "-MT", "-MF", "-MQ"):
+            skip_next = True
+        elif arg.startswith(("-I", "-D", "-std", "-f", "-O", "-m", "-g", "-isystem")):
+            keep.append(arg)
+    return keep
+
+
+@pytest.fixture(scope="module")
+def echo_plugin(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """tests/cpp/plugin/echo_plugin.cpp built as the wheel was, as a user's plugin would be."""
+    build = _wheel_build()
+    if build is None or sys.platform != "linux":
+        pytest.skip("needs the wheel's build directory (just install) on Linux")
+    commands = json.loads((build / "compile_commands.json").read_text())
+    entry = next(
+        (c for c in commands if c["file"].endswith("jarvis/node/strategy_registry.cpp")), None
+    )
+    if entry is None:
+        pytest.skip("the wheel's compile commands do not list the shell")
+    out = tmp_path_factory.mktemp("plugin") / "libecho_plugin.so"
+    subprocess.run(
+        [
+            *_flags_of(entry),
+            "-shared",
+            "-fPIC",
+            "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden",
+            str(REPO / "tests" / "cpp" / "plugin" / "echo_plugin.cpp"),
+            str(build / "libjarvis_shell.a"),
+            "-Wl,--exclude-libs,ALL",
+            "-o",
+            str(out),
+        ],
+        check=True,
+        cwd=entry.get("directory", str(build)),
+    )
+    return out
+
+
+def test_load_native_refuses_what_is_not_a_plugin(tmp_path: Path) -> None:
+    with pytest.raises(OSError, match="cannot load"):
+        jarvis.load_native(tmp_path / "libnothing.so")
+    if sys.platform == "linux":
+        with pytest.raises(ValueError, match="not a jarvis strategy plugin"):
+            jarvis.load_native("libm.so.6")
+
+
+def test_a_plugin_strategy_runs_in_a_python_node(echo_plugin: Path, tmp_path: Path) -> None:
+    assert jarvis.load_native(echo_plugin) == ["plugin.Echo"]
+    assert jarvis.load_native(echo_plugin) == ["plugin.Echo"]  # again: nothing new
+    assert "plugin.Echo" in jarvis.registered_strategies()
+    run = (
+        Node(_config(tmp_path), out=tmp_path / "run")
+        .add_native_strategy("plugin.Echo", {"scale": 3, "instrument": IID})
+        .run()
+    )
+    records = [r.event for r in log.read(run.directory) if r.kind == "StrategyRecord"]
+    assert [r.value for r in records if r.tag == "scale"] == [Decimal(3)]
+    assert len([r for r in records if r.tag == "px"]) == 40

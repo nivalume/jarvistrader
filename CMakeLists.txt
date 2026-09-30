@@ -167,6 +167,7 @@ add_library(
   jarvis/node/epoch_store.cpp
   jarvis/node/toml_impl.cpp
   jarvis/node/strategy_registry.cpp
+  jarvis/node/strategy_plugin.cpp
   jarvis/node/log_source.cpp
   jarvis/node/run_dir.cpp
   jarvis/node/snapshot_file.cpp
@@ -179,6 +180,9 @@ add_library(
 )
 add_library(jarvis::shell ALIAS jarvis_shell)
 target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)
+# dlopen for strategy plugins (jarvis/node/strategy_plugin.hpp).
+target_link_libraries(jarvis_shell PRIVATE ${CMAKE_DL_LIBS})
+include(cmake/StrategyPlugin.cmake)
 target_include_directories(jarvis_shell PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 jarvis_add_tomlplusplus()
 # toml++ stays private to the shell: headers that other targets include never expose it.

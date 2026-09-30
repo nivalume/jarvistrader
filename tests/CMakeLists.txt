@@ -62,6 +62,14 @@ jarvis_add_layer_test(matching SOURCES cpp/test_matching.cpp SUITES unit propert
 jarvis_add_layer_test(backtest SOURCES cpp/test_backtest.cpp SUITES unit property zero-alloc LIBS jarvis::kernel)
 jarvis_add_layer_test(node SOURCES cpp/test_node.cpp SUITES unit property LIBS jarvis::shell)
 target_compile_definitions(test_node PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# Strategy plugins for the loader test: a good one and one whose entry point reports another
+# layout.
+jarvis_add_strategy_plugin(jarvis_test_plugin cpp/plugin/echo_plugin.cpp)
+jarvis_add_strategy_plugin(jarvis_test_plugin_stale cpp/plugin/stale_plugin.cpp)
+add_dependencies(test_node jarvis_test_plugin jarvis_test_plugin_stale)
+target_compile_definitions(
+  test_node PRIVATE JARVIS_TEST_PLUGIN="$<TARGET_FILE:jarvis_test_plugin>"
+                    JARVIS_TEST_PLUGIN_STALE="$<TARGET_FILE:jarvis_test_plugin_stale>")
 jarvis_add_layer_test(node_run SOURCES cpp/test_node_run.cpp SUITES unit LIBS jarvis::shell)
 
 # Golden trace conformance (tests/golden/<case>/case.toml). Cases run the jarvis CLI.

@@ -675,6 +675,12 @@ jarvis 采用 nautilus 的 standard precision 模式。
 
 - `StrategyVTable` 是由 `make_vtable<S>()` 生成的纯函数指针结构体，每个类型一份（`kVTable<S>`）。
 - C++ 策略在自己的翻译单元里用 `JARVIS_REGISTER_STRATEGY(Type, "Name")` 按名注册（`jarvis/node/strategy_registry.hpp`），配置写 `impl = "cpp:Name"`，Python 侧用 `node.add_native_strategy("Name", params)`。创建时依次尝试 `static Status Type::create(const StrategyParams&, Type&)`、构造函数 `Type(const StrategyParams&)`、默认构造。`StrategyParams` 是该 `[[strategies]]` 条目的只读视图，按键取类型化参数。重名注册不会覆盖，节点启动时报错。注册发生在静态初始化期，所以该翻译单元必须直接链接进可执行文件或共享库。
+- 策略插件（M5-N，`jarvis/node/strategy_plugin.hpp`）：Python 节点承载 wheel 之外编译的 C++ 策略。
+  - 插件是一个共享库：源文件照常用 `JARVIS_REGISTER_STRATEGY` 注册，其中一个源文件加 `JARVIS_STRATEGY_PLUGIN()`，由 CMake 的 `jarvis_add_strategy_plugin(<target> <sources>...)` 构建。库只导出入口 `jarvis_strategy_plugin_v1`，库内的 jarvis 代码副本（注册表等）对外不可见。
+  - Python：`jarvis.load_native(path)` 加载插件并返回其中的策略名，之后 `node.add_native_strategy(name, params)` 与 `impl = "cpp:<name>"` 都能使用它们；`jarvis.registered_strategies()` 列出内置与已加载的策略。C++ 节点用同一个 `node::load_strategy_plugin`。
+  - 插件与节点互相传递 C++ 对象（`Context`、策略函数表、`StrategyParams`、`NativeStrategy`），所以必须由同一份 jarvis 源码、同一编译器与同样的标志构建。入口报告编译器（`__VERSION__` 以及 ASan、调试容器等改变布局或运行时的标志）与这些类型大小和对齐的指纹，加载器与自己的比对，不一致时拒绝加载并提示重新构建；指纹只能发现改变了大小或对齐的差异，其余靠同源构建保证。
+  - 同一个插件再次加载时不重复注册；插件中的名字已被别的实现注册时整个插件被拒绝，什么也不加入。加载成功的库在进程结束前不卸载，因为策略的代码在其中。
+  - 测试：`tests/cpp/test_node.cpp` 加载测试插件并经函数表运行其策略，覆盖重复加载、名字冲突、文件不存在、缺少入口与指纹不一致；`python/tests/test_node.py` 用 wheel 自己的编译命令构建同一个插件，在 Python backtest 节点中运行。
 - Python 节点的策略集合在编译期不可知，每次回调一次间接调用不可避免。它的代价约 1–2 ns，相对于至少 1 µs 的 Python 回调可以忽略。这是 C++ 子集规范中唯一被批准的间接分发，`docs/cpp-subset.md` 需要补一条例外说明（plan.md M0）。
 - 纯 C++ 节点不链接 Python，也不承担间接调用。
 - 两种策略集实例化同一个 `Engine<>` 模板，所以内核测试、基准与规约映射同时覆盖两者。

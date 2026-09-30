@@ -36,6 +36,7 @@
 #include "jarvis/node/event_text.hpp"
 #include "jarvis/node/fingerprint.hpp"
 #include "jarvis/node/model_text.hpp"
+#include "jarvis/node/strategy_plugin.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/context.hpp"
@@ -1003,6 +1004,85 @@ params = { size = true }
     jarvis::strategy::Context ctx{services, 0};
     CHECK(set.on_start(0, ctx) == Status::Ok);
     CHECK(sized->started);
+  }
+
+  TEST_CASE("a strategy plugin adds its strategies to the registry") {
+    node::NodeConfig c;
+    REQUIRE(parse(R"toml(
+[node]
+id = "mm01"
+
+[[strategies]]
+id = "echo-001"
+impl = "cpp:plugin.Echo"
+params = { scale = 7 }
+)toml",
+                  c)
+                .empty());
+    node::StrategyRegistry registry;
+    std::vector<std::string> names;
+    std::string error;
+    REQUIRE(node::load_strategy_plugin(JARVIS_TEST_PLUGIN, registry, names, error) == Status::Ok);
+    CHECK(names == std::vector<std::string>{"plugin.Echo"});
+    CHECK(registry.names() == std::vector<std::string>{"plugin.Echo"});
+    // Again: the same strategies, nothing new.
+    REQUIRE(node::load_strategy_plugin(JARVIS_TEST_PLUGIN, registry, names, error) == Status::Ok);
+    CHECK(names == std::vector<std::string>{"plugin.Echo"});
+    CHECK(registry.names().size() == 1);
+
+    // The plugin's instance runs through its function table, like a strategy of the node.
+    node::NativeStrategy echo;
+    REQUIRE(registry.create("plugin.Echo", node::StrategyParams{c.strategies[0]}, echo) ==
+            Status::Ok);
+    jarvis::strategy::DynamicStrategySet set{1};
+    REQUIRE(echo.add_to(set) == Status::Ok);
+    jarvis::strategy::KernelServices services{jarvis::strategy::KernelConfig{}};
+    jarvis::strategy::Context ctx{services, 0};
+    REQUIRE(set.on_start(0, ctx) == Status::Ok);
+    REQUIRE(services.outputs.size() == 1);
+    const auto* rec = std::get_if<m::StrategyRecord>(&services.outputs[0]);
+    REQUIRE(rec != nullptr);
+    CHECK(rec->tag.view() == "scale");
+    CHECK(rec->value.raw() == 7'000'000'000);
+
+    // A name the node already has from elsewhere: nothing is added.
+    node::StrategyRegistry taken;
+    REQUIRE(taken.add(
+        node::StrategyFactory{"plugin.Echo", [](const node::StrategyParams&,
+                                                node::NativeStrategy&) { return Status::Ok; }}));
+    CHECK(node::load_strategy_plugin(JARVIS_TEST_PLUGIN, taken, names, error) ==
+          Status::AlreadyExists);
+    CHECK(error.find("plugin.Echo") != std::string::npos);
+    CHECK(names.empty());
+  }
+
+  TEST_CASE("the plugin loader refuses what it cannot trust") {
+    node::StrategyRegistry registry;
+    std::vector<std::string> names;
+    std::string error;
+    CHECK(node::load_strategy_plugin("/nonexistent/libnothing.so", registry, names, error) ==
+          Status::IoError);
+    CHECK(error.find("cannot load /nonexistent/libnothing.so") != std::string::npos);
+#if defined(__linux__)
+    // A shared library without the entry point.
+    CHECK(node::load_strategy_plugin("libm.so.6", registry, names, error) ==
+          Status::InvalidArgument);
+    CHECK(error.find("not a jarvis strategy plugin") != std::string::npos);
+#endif
+    // Built from other sources: refused, nothing registered.
+    CHECK(node::load_strategy_plugin(JARVIS_TEST_PLUGIN_STALE, registry, names, error) ==
+          Status::InvalidState);
+    CHECK(error.find("rebuild the plugin") != std::string::npos);
+    CHECK(registry.names().empty());
+
+    node::PluginInfo info{node::kPluginVersion, "another compiler", node::plugin_layout(), nullptr,
+                          0};
+    CHECK(node::check_plugin_info(info, error) == Status::InvalidState);
+    CHECK(error.find("another compiler") != std::string::npos);
+    info.compiler = node::plugin_compiler().c_str();
+    CHECK(node::check_plugin_info(info, error) == Status::Ok);
+    info.version = node::kPluginVersion + 1;
+    CHECK(node::check_plugin_info(info, error) == Status::InvalidState);
   }
 
   // Runs last in this binary: it leaves a duplicate registration behind.

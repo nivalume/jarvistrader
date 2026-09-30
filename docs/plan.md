@@ -171,8 +171,8 @@ M4 验收记录（2026-09-27）：Python 示例 `mm_quote.py` 以 `--env sandbox
 - [x] task: ops — 密钥引用解析、key 权限与 IP 白名单检查（§19.1）：`env:` 与 `file:` 引用解析（`jarvis/node/credentials.hpp`）、key 权限与 IP 白名单检查（启动检查）已完成；凭证文件权限检查已完成（M5-D4：保存 secret 的文件须为 0600 或 0400）
 - [x] task: execution — 内置执行算法 `PeggedQuote`：改单与撤单重下的选择、令牌预算感知（§11.4）：已实现（M5-H：同方向最优价或中间价加偏移、post-only 且不越过对手价、改价跟随、限速余额保留、被拒或被撤后重挂）；队列位置已完成（M5-M：`AlgoTop` 带最优档数量，按比例扣减的前方量估计，队首订单向市场方向多等一个价位；未确认时不改单；交易所拒绝改单时撤单重下）
 - [x] task: execution — 内置执行算法 `PassiveThenAggressive`：已实现（M5-H：post-only 挂单、超时或偏离后撤单并以 IOC 吃单、吃单份额上限；引擎测试与 Python 模拟交易所回测含回放一致）
-- [ ] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点
-- [ ] task: python — `node.add_native_strategy()`：Python 启动的混合节点承载注册的 C++ 策略
+- [x] task: strategy — `jarvis::node_main<S>`：不链接 Python 的纯 C++ 节点：已完成（`jarvis/node/node_main.hpp`，示例 `trade_logger` 与 `pegged_mm` 只链接 `jarvis::shell`（live 版另加 `jarvis::live`），不依赖 libpython）
+- [x] task: python — `node.add_native_strategy()`：Python 启动的混合节点承载注册的 C++ 策略：已完成（按名创建注册的策略；M5-N：`jarvis.load_native(path)` 加载 `jarvis_add_strategy_plugin` 构建的插件，入口报告编译器与共享类型的布局指纹，不一致即拒绝；C++ 与 Python 端到端测试）
 - [ ] task: specs — 决定是否增加第六个规约 `NodeLifecycle`；若采纳则实现并加入 `MAP.toml`（开放问题）
 - [ ] task: harness — `Reconciliation` 正向与反向 trace validation 进入 CI：正向已进入 ctest（`trace.Reconciliation`）、CI formal job 与 nightly；反向待实盘日志
 - [ ] task: harness — 混沌测试：由规约 b 的行为生成断线、重复、乱序、丢消息场景，在 sandbox 与 testnet 执行

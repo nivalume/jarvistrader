@@ -44,6 +44,7 @@
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
 #include "jarvis/node/run_report.hpp"
+#include "jarvis/node/strategy_plugin.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
@@ -1936,6 +1937,19 @@ void bind_node(nb::module_& mod) {
   mod.def(
       "registered_strategies", []() { return node::StrategyRegistry::instance().names(); },
       "Names of the C++ strategies registered in this build.");
+  mod.def(
+      "load_native",
+      [](const std::string& path) {
+        std::vector<std::string> names;
+        std::string error;
+        const Status s =
+            node::load_strategy_plugin(path, node::StrategyRegistry::instance(), names, error);
+        check(s, error); // (after the call: it fills `error`)
+        return names;
+      },
+      nb::arg("path"),
+      "Loads a strategy plugin (a shared library built with jarvis_add_strategy_plugin) and "
+      "returns the names of its strategies, now available to add_native_strategy.");
   mod.def("run_report", &run_report_to_py, nb::arg("directory"),
           "The backtest report of a run directory (see jarvis.report.RunReport).");
 }
