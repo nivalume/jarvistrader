@@ -1,14 +1,16 @@
 # jarvis
 
 `jarvis` is a deterministic, event-driven C++20 trading kernel for Binance with a Python strategy
-layer (nanobind). The design is in [`docs/architecture.md`](docs/architecture.md) and the
-milestones in [`docs/plan.md`](docs/plan.md).
+layer (nanobind). The design is in [`docs/architecture.md`](docs/architecture.md), the
+milestones in [`docs/plan.md`](docs/plan.md), and running nodes in
+[`docs/runbook.md`](docs/runbook.md).
 
-Status: milestones M0 (engineering gates and test harness), M1 (core, the nautilus-compatible
-model, the event log, typed node configuration, the lifecycle state machine and the Python
-bindings) and M2 (the engine, the data layer, Python and C++ strategy hosting, backtest runs,
-replay and data converters) are complete. Order execution, the simulated exchange and risk
-arrive in M3.
+Status: milestones M0 to M4 are complete: engineering gates, the core and model, the engine and
+data layer, order execution, the simulated exchange and risk, and the Binance USDⓈ-M adapter with
+sandbox runs. M5 (live trading, reconciliation, persistence and recovery, telemetry, admin,
+execution algorithms, thread placement) is implemented and tested against scripted and
+simulated venues; its acceptance runs on the Binance testnet (72 hours, chaos, backward trace
+validation from live logs) need API keys and are still open.
 
 A strategy is one file that runs as a node:
 
@@ -128,5 +130,6 @@ uv pip install --python .venv/bin/python --reinstall .
 - `tools/`: layering checker, golden runner, benchmark A/B, TLA+ runner and spec selector,
   milestone acceptance scripts
 - `docs/`: deterministic-kernel constraints and C++ subset; the system design is in
-  [`docs/architecture.md`](docs/architecture.md) and the milestone plan in [`docs/plan.md`](docs/plan.md)
+  [`docs/architecture.md`](docs/architecture.md), the milestone plan in [`docs/plan.md`](docs/plan.md)
+  and the operations runbook in [`docs/runbook.md`](docs/runbook.md)
 - `cmake/`: vendored CPM.cmake and pinned dependency declarations

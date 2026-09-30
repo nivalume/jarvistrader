@@ -193,6 +193,7 @@ TEST_SUITE("unit") {
         http(
             503,
             R"({"code":-1001,"msg":"Internal error; unable to process your request. Please try again."})"),
+        http(429, R"({"code":-1003,"msg":"Too many requests."})", "Retry-After: 2\r\n"),
         http(418, R"({"code":-1003,"msg":"Way too many requests; IP banned."})",
              "Retry-After: 60\r\n"),
     }};
@@ -236,6 +237,21 @@ TEST_SUITE("unit") {
     CHECK(rest.place(order, ack, refusal, refused, error) == Status::IoError); // 5xx: unknown
     CHECK(error.find("unknown") != std::string::npos);
 
+    // A 429: nothing goes out until its Retry-After has passed; an order not sent is refused
+    // here, with code 0.
+    CHECK(rest.depth("BTCUSDT", 5, key, error) == Status::InvalidArgument); // the 429
+    CHECK(rest.backing_off());
+    CHECK(rest.depth("BTCUSDT", 5, key, error) == Status::InvalidState);
+    CHECK(error.find("HTTP 429") != std::string::npos);
+    REQUIRE(rest.place(order, ack, refusal, refused, error) == Status::Ok);
+    CHECK(refused);
+    CHECK(refusal.code == 0);
+    CHECK(refusal.message.find("HTTP 429") != std::string::npos);
+    CHECK(refusal.client_order_id == "jarvis-000001-00000001");
+    clock += 2'001;
+    CHECK_FALSE(rest.backing_off());
+    CHECK(rest.too_many_requests() == 1);
+
     CHECK_FALSE(rest.banned());
     CHECK(rest.depth("BTCUSDT", 5, key, error) == Status::InvalidArgument); // the 418
     CHECK(rest.banned());
@@ -251,7 +267,7 @@ TEST_SUITE("unit") {
     venue.join();
     CHECK(venue.error().empty());
     const std::vector<std::string> requests = venue.requests();
-    REQUIRE(requests.size() == 8);
+    REQUIRE(requests.size() == 9);
     CHECK(requests[0].starts_with("GET /fapi/v1/time HTTP/1.1"));
     CHECK(jarvis::testsupport::header_value(requests[1], "X-MBX-APIKEY") == "KEY1");
     // The signed query carries the venue's time and verifies with the secret.

@@ -64,7 +64,8 @@ public:
   explicit RestClient(RestConfig config);
 
   // IoError when the exchange failed; Ok with the HTTP status otherwise (the endpoint helpers
-  // below turn statuses into results). InvalidState during a 418 ban.
+  // below turn statuses into results). InvalidState, with nothing sent, during a 418 ban or the
+  // back-off a 429 asks for (Retry-After, 10 s without it).
   [[nodiscard]] core::Status call(std::string_view method, std::string_view path, Params params,
                                   Security security, RestResponse& out, std::string& error);
 
@@ -73,6 +74,7 @@ public:
   [[nodiscard]] std::int64_t time_offset_ms() const noexcept { return offset_ms_; }
   void set_time_offset(std::int64_t ms) noexcept { offset_ms_ = ms; } // measured elsewhere
   [[nodiscard]] bool banned() const;
+  [[nodiscard]] bool backing_off() const; // after a 429
   // Answers with HTTP 429 and 418 so far (any thread).
   [[nodiscard]] std::uint64_t too_many_requests() const noexcept {
     return http_429_.load(std::memory_order_relaxed);
@@ -141,6 +143,7 @@ private:
   network::HttpsClient http_;
   std::int64_t offset_ms_ = 0;
   std::int64_t banned_until_ms_ = 0;
+  std::int64_t backoff_until_ms_ = 0;
   std::atomic<std::uint64_t> http_429_{0};
   std::atomic<std::uint64_t> http_418_{0};
   std::vector<model::RateLimitFeedback> limits_;

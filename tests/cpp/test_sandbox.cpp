@@ -344,9 +344,10 @@ TEST_SUITE("unit") {
     CHECK(result.admin_commands == 4);
     CHECK(result.summary.state == md::NodeState::Stopped);
     CHECK(set.get<0>().params == std::vector<std::string>{"size=5 (INT)"});
-    // The requested snapshot (snapshot_every is far off): written at the next batch end.
-    CHECK(result.summary.snapshots == 1);
-    CHECK(node::list_snapshots(result.directory).size() == 1);
+    // The requested snapshot (snapshot_every is far off), written at the next batch end, and
+    // the final one after the Stopped transition.
+    CHECK(result.summary.snapshots == 2);
+    CHECK(node::list_snapshots(result.directory).size() == 2);
 
     // The commands are recorded inputs, and the session replays with the same outputs, the same
     // parameter and the same snapshot.
@@ -367,7 +368,7 @@ TEST_SUITE("unit") {
                              error) == Status::Ok);
     CHECK_FALSE(report.divergence.has_value());
     CHECK(report.outputs == result.summary.outputs);
-    CHECK(report.snapshots_checked == 1);
+    CHECK(report.snapshots_checked == 2);
     CHECK(fresh.get<0>().params == set.get<0>().params);
   }
 

@@ -439,6 +439,10 @@ TEST_SUITE("unit") {
     CHECK(result.summary.snapshot_failures == 0);
     CHECK(result.persist.snapshots == result.summary.snapshots);
     CHECK(report.snapshots_checked == result.summary.snapshots);
+    // The last one is the final snapshot, after the last input (section 19.4).
+    const std::vector<node::SnapshotEntry> files = node::list_snapshots(result.directory);
+    REQUIRE_FALSE(files.empty());
+    CHECK(files.back().seq == last_input_seq(result.directory));
     CHECK(report.inputs == result.summary.inputs);
     CHECK(report.outputs == result.summary.outputs);
     CHECK(fresh.get<0>().log == set.get<0>().log);
@@ -480,12 +484,20 @@ TEST_SUITE("unit") {
     REQUIRE(set.get<0>().fills == 1);
     REQUIRE(first.summary.snapshots > 0);
     if (crash) {
-      // A crash while the last record was written: its end never reached the disk.
+      // A crash while the last record was written: its end never reached the disk, nor did any
+      // snapshot after it (the persist thread writes one only once the log is durable up to it,
+      // so the final snapshot goes too).
       const std::string segment = first.directory + "/" + node::segment_name(0);
       std::filesystem::resize_file(segment, std::filesystem::file_size(segment) - 3);
     }
     const std::uint64_t last = last_input_seq(first.directory);
     REQUIRE(last > 0);
+    for (const node::SnapshotEntry& e : node::list_snapshots(first.directory)) {
+      if (e.seq > last) {
+        CHECK(crash);
+        std::filesystem::remove(e.path);
+      }
+    }
 
     // The second run continues it: the state from the first run's latest snapshot and the rest
     // of its log, reconciled with the venue.
@@ -507,6 +519,10 @@ TEST_SUITE("unit") {
     CHECK(second.recovery.last_seq == last);
     CHECK(second.recovery.snapshot_seq > 0);
     CHECK(second.recovery.snapshot_seq <= last);
+    if (!crash) { // from the final snapshot, with nothing to replay
+      CHECK(second.recovery.snapshot_seq == last);
+      CHECK(second.recovery.replayed == 0);
+    }
     CHECK((second.recovery.torn_bytes != 0) == crash);
     CHECK(second.venue.commands == 0);
     // The strategy continues: on_start is not called again, it still counts the fill, and the

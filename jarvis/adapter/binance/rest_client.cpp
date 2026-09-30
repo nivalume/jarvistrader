@@ -12,7 +12,8 @@ namespace {
 namespace dom = simdjson::dom;
 using core::Status;
 
-constexpr std::int64_t kDefaultBanMs = 120'000; // 418 without Retry-After: two minutes
+constexpr std::int64_t kDefaultBanMs = 120'000;    // 418 without Retry-After: two minutes
+constexpr std::int64_t kDefaultBackoffMs = 10'000; // 429 without Retry-After
 
 std::int64_t system_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -57,6 +58,7 @@ RestClient::RestClient(RestConfig config)
 std::int64_t RestClient::now_ms() const { return config_.now_ms ? config_.now_ms() : system_ms(); }
 
 bool RestClient::banned() const { return now_ms() < banned_until_ms_; }
+bool RestClient::backing_off() const { return now_ms() < backoff_until_ms_; }
 
 std::vector<model::RateLimitFeedback> RestClient::take_limits() {
   std::vector<model::RateLimitFeedback> out;
@@ -70,6 +72,11 @@ Status RestClient::call(std::string_view method, std::string_view path, Params p
   if (banned()) {
     error = "the IP is banned by the venue (HTTP 418) for another " +
             std::to_string((banned_until_ms_ - now_ms()) / 1000) + " s";
+    return Status::InvalidState;
+  }
+  if (backing_off()) {
+    error = "the venue asked to back off (HTTP 429) for another " +
+            std::to_string(backoff_until_ms_ - now_ms()) + " ms";
     return Status::InvalidState;
   }
   std::string target{path};
@@ -109,6 +116,8 @@ Status RestClient::call(std::string_view method, std::string_view path, Params p
     banned_until_ms_ = now_ms() + (out.retry_after_s ? *out.retry_after_s * 1000 : kDefaultBanMs);
     http_418_.fetch_add(1, std::memory_order_relaxed);
   } else if (out.status == 429) {
+    backoff_until_ms_ =
+        now_ms() + (out.retry_after_s ? *out.retry_after_s * 1000 : kDefaultBackoffMs);
     http_429_.fetch_add(1, std::memory_order_relaxed);
   }
   if (out.status >= 400) {
@@ -402,6 +411,13 @@ Status RestClient::order_call(std::string_view method, RequestKind kind, const P
   refused = false;
   RestResponse r;
   const Status s = call(method, "/fapi/v1/order", order, Security::Signed, r, error);
+  if (s == Status::InvalidState) { // a 418 ban or a 429 back-off: nothing was sent
+    refused = true;
+    refusal = RequestError{
+        kind, param(order, kind == RequestKind::Place ? "newClientOrderId" : "origClientOrderId"),
+        0, error, static_cast<std::uint64_t>(now_ms())};
+    return Status::Ok;
+  }
   if (!core::ok(s)) {
     return s; // the request may or may not have reached the venue: in flight
   }

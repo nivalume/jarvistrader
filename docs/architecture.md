@@ -1349,7 +1349,9 @@ jarvis 的补充：进入 `Synced` 时发出 `CLEAR` 与快照档位组成的 `O
 
 - REST 响应头 `X-MBX-USED-WEIGHT-<n><unit>` 与 `X-MBX-ORDER-COUNT-<n><unit>`、WS API 应答的 `rateLimits` 数组，都解析为 `RateLimitFeedback{kind, interval_ns, used, limit}`。
 - `ORDERS` 类交给内核：`RateLimiter::feedback` 把对应窗口的已用量抬高到交易所报告的值，只升不降，所以本地计数偏少时会被纠正，不会因为反馈把预算放宽。`REQUEST_WEIGHT` 由适配器自己的桶使用。
-- 429 带 `Retry-After`，调用方按它退避。418 表示 IP 被封：`RestClient` 在 `Retry-After`（缺省 120 秒）之前让所有调用立即以 `InvalidState` 失败，不再发出请求，避免封禁时间延长。
+- 418 表示 IP 被封：`RestClient` 在 `Retry-After`（缺省 120 秒）之前让所有调用立即以 `InvalidState` 失败，不再发出请求，避免封禁时间延长。
+- 429（M5-R）：`RestClient` 同样在 `Retry-After`（缺省 10 秒）之前不再发出请求。封禁或退避期间没有发出的下单、改单、撤单作为被拒处理（代码 0，原因 `BINANCE_0` 加说明），因为请求确实没有到达交易所；此前这类请求被当作结果未知，要等对账。快照与 listenKey 请求失败后按各自的节拍重试。
+- 与第 10.4 节设计的差别：内核的下单窗口不因 429 清零（429 只涉及 REST 的请求权重，WS API 的 `rateLimits` 照常回灌）；418 也不直接让节点进入 `Degraded`，而是由 `jarvis_http_418_total` 告警通知运维（`docs/runbook.md` 第 8.5 节）。
 
 ---
 
@@ -1492,6 +1494,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - 编码：每个有状态的类用一个成员模板 `template <typename Ar> void state(Ar& ar) { ar(a_, b_, c_); }` 同时描述保存与恢复（`jarvis/core/state.hpp`）。整数、枚举、bool 按定宽小端序；有字段描述符的模型结构体（`jarvis/model/schema.hpp`）逐字段编码；Price、Quantity 等数值类型复用事件日志的编码器，恢复时经过各自的校验构造函数；标识符、币种、UUID 的默认值（未使用槽位中的空 id）按原样恢复。容器按实际布局写出，恢复后分配顺序与原内核相同：定时器 arena 的空闲表、OMS 被淘汰槽位的复用顺序、成交记录的空闲链都保持不变。从未使用过的 OMS 订单槽与成交记录只写数量，订单簿价位窗口按零段压缩。
 - 策略自己的状态：C++ 策略同样写一个 `state(ar)` 成员模板；Python 策略定义 `on_save(self) -> bytes` 与 `on_load(self, state)`。每个策略的状态写在自己的长度前缀段中，恢复时必须恰好读完。没有提供的策略仍会被快照，但快照标记为不完整：恢复后该策略保持构造时的状态，所以不能用来精确续跑，恢复这类节点只能从日志开头回放。
 - 快照点：一次 `BatchEnd` 输入处理完、输出全部写出之后，且距上一个快照点至少 `snapshot_every` 条输入（`engine/snapshot_schedule.hpp`）。这里处于两个批次之间，没有未交付的输出；回放对记录下来的输入使用同一规则，所以节点与回放在同一条输入之后取快照。
+- 另外两个快照点也在 `BatchEnd` 之后：admin 的 `snapshot` 命令之后的第一个（M5-K），以及记录过 `Shutdown` 输入的运行转入 `Stopped` 之后的那一个，即 sandbox 与 live 正常停机时的最终快照（M5-R）。判断写在 `engine::asks_for_snapshot` 中，节点与回放共用；它依据内核记录的 `shutdown`（属于快照状态，`RunStart` 清除），所以从停机过程中的快照开始回放也会取到最终快照。backtest 没有 `Shutdown` 输入，不取最终快照。
 - 文件：运行目录下的 `snapshot-<seq>.jsnap`，内容为魔数、格式版本、本次运行的日志头（配置 hash、seed、提交号）、取快照的输入 `seq` 与 `ts`、完整标志、策略数、状态字节与 CRC-32C（`jarvis/node/snapshot_file.hpp`）。先写临时文件再改名，所以文件要么完整、要么不存在。backtest 在 core 线程上直接写；sandbox 与 live 由 persist 线程在日志落盘到该快照的位置之后再写（并同步文件与目录），磁盘上的快照从不超前于日志。等待写出的快照最多两个，更多时替换较旧的一个并计数。
 - 取快照失败（策略的 `on_save` 抛出异常、文件写不进去）只计数（`RunSummary::snapshot_failures`），运行继续：日志才是记录，快照只是加速。
 - 耗时：状态在 core 线程上编码，文件由 persist 线程写出。默认容量的内核（一个永续合约、每侧 200 档订单簿、200 张订单）状态约 229 KB，编码约 1.1 ms，恢复约 0.9 ms（`bench_report` 的 `snapshot/save_state` 与 `snapshot/load_state`，只报告不设门禁）。这是每 `snapshot_every` 条输入一次的停顿，默认一百万条输入一次。
@@ -1727,6 +1730,8 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 ## 19. 运维与分片
 
+运维步骤（部署、配置、密钥、告警、故障处理）见 `docs/runbook.md`。本节讲设计。
+
 ### 19.1 配置与密钥
 
 - `NodeConfig` 的 hash 写入日志头。testnet 与 prod 是不同的 endpoint 配置值，不存在默认指向 prod 的布尔开关。
@@ -1797,7 +1802,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 5. `exit_keep_orders`：不撤单、不等待；转入 `Stopped` 时解除倒计时，订单留在交易所。
 6. core 线程退出 driver 后最多等 2 秒让命令离开环；venue-io 停止时先处理完命令环，REST 线程仍会发出已排队的 `countdownCancelAll`（第 7.1 节）。
 
-最终快照随 WAL 与恢复实现。
+最终快照（M5-R）：记录过 `Shutdown` 输入的运行，在转入 `Stopped` 之后的批次边界取一个快照（第 16.3 节），persist 线程关闭前写出它。`persistence.resume` 从它继续时不需要重算任何日志。停机时仍有未完成订单也照样取：状态中记着这些订单，下一次运行的对账会处理它们。
 
 ### 19.5 分片
 
