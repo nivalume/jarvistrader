@@ -190,6 +190,13 @@ public:
     return core::Status::Ok;
   }
 
+  // Calls f(trade_id, commission_pending) for each trade of order `index`, latest first.
+  template <typename F> void for_each_trade(std::uint32_t index, F&& f) const {
+    for (std::uint32_t t = orders_[index].trades; t != kNoIndex; t = trades_[t].next) {
+      f(trades_[t].trade_id, trades_[t].commission_pending);
+    }
+  }
+
   // True once for a Lite fill of `trade_id` when a later report of it brings the commission
   // (docs/architecture.md section 8.3); false for any other trade or a second report.
   [[nodiscard]] bool take_pending_commission(std::uint32_t index,

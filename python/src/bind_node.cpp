@@ -967,6 +967,9 @@ nb::dict persist_dict(const live::PersistStats& p) {
   d["segments"] = p.segments;
   d["max_sync_bytes"] = p.max_lag;
   d["stalls"] = p.stalls;
+  d["snapshots"] = p.snapshots;
+  d["snapshots_dropped"] = p.snapshots_dropped;
+  d["segments_removed"] = p.segments_removed;
   return d;
 }
 
@@ -1041,6 +1044,16 @@ nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
   d["venue"] = venue;
   d["log"] = persist_dict(result.persist);
   d["epoch"] = result.epoch;
+  if (!result.recovery.from.empty()) {
+    nb::dict resumed;
+    resumed["from"] = result.recovery.from;
+    resumed["snapshot_seq"] = result.recovery.snapshot_seq;
+    resumed["replayed"] = result.recovery.replayed;
+    resumed["last_seq"] = result.recovery.last_seq;
+    resumed["torn_bytes"] = result.recovery.torn_bytes;
+    resumed["torn_step"] = result.recovery.torn_step;
+    d["resumed"] = resumed;
+  }
   nb::list warnings;
   for (const std::string& w : result.startup.warnings) {
     warnings.append(w);

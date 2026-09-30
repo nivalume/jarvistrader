@@ -34,6 +34,7 @@
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/credentials.hpp"
 #include "jarvis/node/event_log.hpp"
+#include "jarvis/node/recovery.hpp"
 #include "jarvis/node/run_dir.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 
@@ -46,6 +47,11 @@
 //      position mode, margin type, leverage, key permissions): a failed check stops the node;
 //   2. the next ClientOrderId epoch, persisted before any order can be sent;
 //   3. the instruments' definitions as the preamble.
+//
+// With persistence.resume the engine is then restored to where the latest earlier run of this
+// node stopped (node/recovery.hpp): its latest snapshot and the rest of its log, checked as a
+// replay; the new run's directory starts with a snapshot of that state and its first input is
+// RunStart with that run's last seq.
 //
 // The node then waits in Syncing until the account is reconciled (the driver's sync gate), and
 // moves between Running and Degraded with the user data stream. Every input is recorded (by the
@@ -66,7 +72,8 @@ struct LiveRequest {
   std::optional<std::string> spot_rest; // key permissions; default api.binance.com (none on
                                         // testnet, which has no such endpoint)
   std::optional<node::ApiCredentials> credentials; // default: venues[0].credentials
-  std::string epoch_file; // default: "epoch" beside the run directories of persistence.dir
+  std::string epoch_file;  // default: "epoch" beside the run directories of persistence.dir
+  std::string resume_from; // with persistence.resume: the run to continue (default: the latest)
   bool allow_unrestricted_ip = false;
   const std::atomic<bool>* stop = nullptr;
   std::optional<std::chrono::nanoseconds> run_for;
@@ -82,6 +89,7 @@ struct LiveResult {
   std::uint64_t epoch = 0;
   std::uint64_t admin_commands = 0; // taken from the admin socket
   PersistStats persist;
+  node::RecoveryReport recovery; // persistence.resume: where the run continued from
 };
 
 // What is built before the loop starts.
@@ -228,6 +236,63 @@ private:
 
 namespace detail {
 
+// persistence.resume: restores `engine` from the run to continue, if there is one.
+template <strategy::StrategySet SS>
+[[nodiscard]] core::Status recover(const LiveRequest& request, bool persist,
+                                   engine::Engine<SS>& engine, node::RecoveryReport& report,
+                                   std::string& error) {
+  if (!persist) {
+    // The resumed run would not be recorded, and the next resume would go back to this one.
+    error = "persistence.resume needs a recorded run (persistence.mode async or barrier)";
+    return core::Status::InvalidArgument;
+  }
+  const std::string prior =
+      request.resume_from.empty() ? node::resume_source(*request.config) : request.resume_from;
+  if (prior.empty()) {
+    return core::Status::Ok; // the node's first run
+  }
+  return node::recover_run(prior, *request.config, engine, report, error);
+}
+
+// Creates the run directory (with a resumed run's starting snapshot) and starts the persist
+// thread; the IO threads' raw frames go beside the log.
+template <strategy::StrategySet SS>
+[[nodiscard]] core::Status open_run(const LiveRequest& request, engine::Engine<SS>& engine,
+                                    LivePlan& plan, LiveResult& result,
+                                    std::unique_ptr<Persister>& persister, std::string& error) {
+  const node::NodeConfig& config = *request.config;
+  node::RunManifest manifest = request.manifest;
+  manifest.resumed_from = result.recovery.from;
+  core::Status s =
+      node::create_run_directory(config, manifest, request.out, result.directory, error);
+  const model::wire::LogHeader header = node::run_header(config, request.extras);
+  if (core::ok(s) && result.recovery.last_seq != 0) {
+    s = node::write_start_snapshot(result.directory, header, result.recovery.last_seq, engine,
+                                   error);
+  }
+  if (!core::ok(s)) {
+    return s;
+  }
+  persister = std::make_unique<Persister>(persist_config(config));
+  s = persister->open(result.directory, header, error);
+  if (!core::ok(s)) {
+    return s;
+  }
+  if (config.persistence.raw_frames != node::RawFrames::Off) {
+    plan.feed.raw_frames = result.directory + "/raw-frames.jraw";
+    plan.venue.raw_frames = result.directory + "/raw-account.jraw";
+  }
+  if (config.persistence.mode == node::PersistenceMode::Barrier) {
+    plan.venue.durable = &persister->durable();
+  }
+  return core::Status::Ok;
+}
+
+// A resumed run: the venue-io thread takes the recovered orders still open as its own, and asks
+// for the trades since the oldest of them was sent (what filled while no node ran), at most
+// seven days back.
+void resume_venue(const execution::Oms& oms, VenueIoConfig& venue);
+
 // Waits up to `limit` for the venue-io thread to take the commands still in the ring. With a
 // barrier the persist thread must have been closed first, so that every record is durable.
 void await_commands(VenueIo& venue, std::chrono::milliseconds limit);
@@ -238,12 +303,13 @@ template <strategy::StrategySet SS, typename Recorder, typename Hook>
                                      VenueIo& venue, LivePump<Hook>& pump,
                                      const std::atomic<bool>* stop, const Persister* barrier,
                                      LiveResult& result, std::string& error) {
+  const std::uint64_t prior_seq = result.recovery.last_seq;
   CommandRouter<Recorder> router{recorder, venue.commands(), stop, barrier};
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
   options.await_sync = true;
   options.snapshot_every = config.persistence.snapshot_every;
-  options.run_start = model::RunStart{plan.epoch, 0, {}};
+  options.run_start = model::RunStart{plan.epoch, prior_seq, {}};
   node::shutdown_options(config, options);
   backtest::Driver driver{engine, source, router, options};
   const core::Status s = driver.run_realtime(pump, result.summary);
@@ -283,26 +349,22 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   const core::FixedVector<model::StrategyId>& ids = engine.kernel().trading.strategy_ids;
   plan.venue.identity.strategies.assign(ids.span().begin(), ids.span().end());
 
-  // Declared before the IO threads: venue-io reads its durable position until it stops.
-  std::unique_ptr<Persister> persister;
   const bool persist = config.persistence.mode != node::PersistenceMode::None;
   const bool barrier = config.persistence.mode == node::PersistenceMode::Barrier;
+  if (config.persistence.resume) {
+    s = detail::recover(request, persist, engine, result.recovery, error);
+    if (!core::ok(s)) {
+      return s;
+    }
+    detail::resume_venue(engine.kernel().trading.oms, plan.venue);
+  }
+
+  // Declared before the IO threads: venue-io reads its durable position until it stops.
+  std::unique_ptr<Persister> persister;
   if (persist) {
-    s = node::create_run_directory(config, request.manifest, request.out, result.directory, error);
+    s = detail::open_run(request, engine, plan, result, persister, error);
     if (!core::ok(s)) {
       return s;
-    }
-    persister = std::make_unique<Persister>(persist_config(config));
-    s = persister->open(result.directory, node::run_header(config, request.extras), error);
-    if (!core::ok(s)) {
-      return s;
-    }
-    if (config.persistence.raw_frames != node::RawFrames::Off) {
-      plan.feed.raw_frames = result.directory + "/raw-frames.jraw";
-      plan.venue.raw_frames = result.directory + "/raw-account.jraw";
-    }
-    if (barrier) {
-      plan.venue.durable = &persister->durable();
     }
   }
   MarketFeed feed{anchor, plan.feed};

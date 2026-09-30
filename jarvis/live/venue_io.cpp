@@ -157,6 +157,9 @@ struct VenueIo::Impl final : adapter::EventEmitter {
         scratch(model::wire::kRecordHeaderSize + model::wire::kMaxPayload +
                 model::wire::kRecordTrailerSize) {
     rest.client().set_time_offset(config.time_offset_ms);
+    for (const binance::RecoveredOrder& r : config.recovered) {
+      tracker.restore(r);
+    }
   }
 
   const ArrivalClock* clock;

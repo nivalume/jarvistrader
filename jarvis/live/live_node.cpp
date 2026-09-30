@@ -1,5 +1,6 @@
 #include "jarvis/live/live_node.hpp"
 
+#include <charconv>
 #include <fstream>
 #include <sstream>
 
@@ -202,6 +203,42 @@ Status plan_live(const LiveRequest& request, core::UnixNanos now, LivePlan& out,
 }
 
 namespace detail {
+
+void resume_venue(const execution::Oms& oms, VenueIoConfig& venue) {
+  constexpr std::int64_t kClockMarginMs = 60'000;                  // local and venue clocks
+  constexpr std::int64_t kTradeHistoryMs = 7LL * 24 * 3600 * 1000; // userTrades' reach
+  const std::int64_t start_ms = venue.trades_since_ms;
+  for (std::uint32_t i = 0; i < oms.used_bound(); ++i) {
+    const execution::OrderRecord& r = oms.at(i);
+    const model::OrderStatus status = r.state.status();
+    if (!r.used || execution::is_closed(status) || status == model::OrderStatus::Initialized ||
+        status == model::OrderStatus::Emulated || status == model::OrderStatus::Released) {
+      continue; // closed, or never sent to the venue
+    }
+    binance::RecoveredOrder o;
+    o.strategy = r.strategy;
+    o.instrument_id = r.instrument_id;
+    o.client_order_id = r.client_order_id;
+    o.side = r.side;
+    o.type = r.type;
+    if (r.venue_order_id) {
+      o.venue_order_id.assign(r.venue_order_id->view());
+    }
+    o.accepted = status != model::OrderStatus::Submitted;
+    o.last_update_ms = r.ts_venue.value() / 1'000'000;
+    oms.for_each_trade(i, [&o](const model::TradeId& id, bool lite) {
+      std::uint64_t trade = 0;
+      const std::string_view text = id.view();
+      if (std::from_chars(text.data(), text.data() + text.size(), trade).ec == std::errc{}) {
+        (lite ? o.lite_trades : o.trades).push_back(trade);
+      }
+    });
+    venue.recovered.push_back(std::move(o));
+    const std::int64_t sent_ms = static_cast<std::int64_t>(r.ts_init.value() / 1'000'000);
+    venue.trades_since_ms = std::min(venue.trades_since_ms, sent_ms - kClockMarginMs);
+  }
+  venue.trades_since_ms = std::max(venue.trades_since_ms, start_ms - kTradeHistoryMs);
+}
 
 void await_commands(VenueIo& venue, std::chrono::milliseconds limit) {
   const auto end = std::chrono::steady_clock::now() + limit;

@@ -47,6 +47,7 @@ struct PersistConfig {
   std::size_t ring_bytes = std::size_t{64} << 20U;
   bool barrier = false;
   std::chrono::milliseconds sync_every{100}; // async; 0: after every batch, as barrier does
+  bool truncate = false; // after each complete snapshot, remove what only precedes it
 };
 
 struct PersistStats {
@@ -59,9 +60,10 @@ struct PersistStats {
   std::uint64_t segments = 0;  // segments written
   std::uint64_t snapshots = 0; // snapshot files written
   std::uint64_t snapshots_dropped = 0; // replaced while waiting
+  std::uint64_t segments_removed = 0;  // persistence.truncate
 };
 
-// From [persistence]: barrier for mode = "barrier", sync_every_ms.
+// From [persistence]: barrier for mode = "barrier", sync_every_ms, truncate.
 [[nodiscard]] PersistConfig persist_config(const node::NodeConfig& config);
 
 class Persister {

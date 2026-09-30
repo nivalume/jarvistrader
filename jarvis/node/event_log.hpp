@@ -16,7 +16,9 @@
 namespace jarvis::node {
 
 // Event log directory: segments named events-000000.jlog, events-000001.jlog, ... Each segment
-// starts with a LogHeader; records follow back to back (docs/architecture.md section 16.1).
+// starts with a LogHeader; records follow back to back (docs/architecture.md section 16.1). A log
+// whose older segments were removed after a snapshot (persistence.truncate) starts at a later
+// index; its segments are still consecutive.
 
 struct EventLogOptions {
   std::uint64_t segment_bytes = 256ULL << 20U; // roll to a new segment beyond this size
@@ -49,6 +51,10 @@ public:
   [[nodiscard]] core::Status write_snapshot(const SnapshotInfo& info,
                                             std::span<const std::byte> body);
   [[nodiscard]] core::Status flush();
+  // Removes the finished segments that hold only records with seq <= `seq` (the seq of a complete
+  // snapshot already written), oldest first, then the snapshot files older than the first record
+  // left, which nothing can replay from any more. `removed` counts the segments.
+  [[nodiscard]] core::Status truncate_before(std::uint64_t seq, std::uint32_t& removed);
   // flush() and fdatasync: every record appended so far survives a crash.
   [[nodiscard]] core::Status sync();
   [[nodiscard]] core::Status close();
@@ -66,6 +72,8 @@ private:
   int fd_ = -1;
   std::string directory_;
   model::wire::LogHeader header_;
+  std::vector<std::uint64_t> first_seqs_; // per segment written: the seq of its first record
+  std::uint32_t first_segment_ = 0;       // the oldest segment not removed
   EventLogOptions options_;
   std::uint64_t segment_size_ = 0;
   std::uint64_t records_ = 0;
@@ -78,7 +86,8 @@ struct EventLogReadOptions {
   // A log a crash interrupted ends in a partial record (or a segment header cut short). With this
   // set, the first record of the last segment that does not decode (short, or failing its CRC)
   // ends the log instead of failing it; torn_bytes() tells how much was left out. Anything
-  // wrong in an earlier segment is still an error.
+  // wrong in an earlier segment is still an error. A log whose only segment has a torn header
+  // holds no records (and header() is the default).
   bool tolerate_torn_tail = false;
 };
 
@@ -87,7 +96,8 @@ public:
   EventLogReader();
 
   [[nodiscard]] core::Status open(const std::string& directory, EventLogReadOptions options = {});
-  // Header of the first segment; later segments must agree on everything but the index.
+  // Header of the first segment; later segments must agree on everything but the index, which
+  // counts up from the first segment's.
   [[nodiscard]] const model::wire::LogHeader& header() const noexcept { return header_; }
   // The next record in log order, or Status::EndOfStream. The view is valid until the next call.
   [[nodiscard]] core::Status next(model::wire::RecordView& out);

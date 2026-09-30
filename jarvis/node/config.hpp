@@ -149,6 +149,11 @@ struct PersistenceSection {
   std::uint64_t sync_every_ms =
       100; // async: the persist thread's fdatasync cadence; 0: every batch
   RawFrames raw_frames = RawFrames::On;
+  // Live: continue the latest earlier run of this node from its snapshots and log (recovery.hpp).
+  bool resume = false;
+  // Sandbox and live: after each complete snapshot, remove the log segments and snapshots that
+  // only precede it.
+  bool truncate = false;
 };
 
 struct TelemetrySection {

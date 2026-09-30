@@ -129,7 +129,7 @@ Status load_node_config(const NodeArgs& args, NodeConfig& config, RunManifest& m
     error = format_errors(args.config, errors);
     return Status::InvalidArgument;
   }
-  manifest = RunManifest{std::move(text), args.config, args.overrides};
+  manifest = RunManifest{std::move(text), args.config, args.overrides, {}};
   return Status::Ok;
 }
 

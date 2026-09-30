@@ -277,6 +277,60 @@ TEST_SUITE("unit") {
     CHECK(persister.stats().snapshots_dropped == 1);
   }
 
+  TEST_CASE("with truncate, a complete snapshot removes the log segments and snapshots before it") {
+    const TempDir dir{"truncate"};
+    live::PersistConfig config;
+    config.log.segment_bytes = std::uint64_t{16} * 1024U;
+    config.truncate = true;
+    live::Persister persister{config};
+    std::string error;
+    REQUIRE(persister.open(dir.str(), header(), error) == Status::Ok);
+    node::CorpusGenerator corpus{21};
+    const auto append = [&](std::uint64_t n) {
+      EventKey key;
+      m::Event event;
+      for (std::uint64_t i = 0; i < n; ++i) {
+        REQUIRE(corpus.next(key, event) == Status::Ok);
+        REQUIRE(persister.append(key, event) == Status::Ok);
+      }
+    };
+    append(1000);
+    // An incomplete snapshot removes nothing; a complete one what only precedes it.
+    REQUIRE(persister.write_snapshot(node::SnapshotInfo{900, 1, false, 1},
+                                     std::vector<std::byte>{std::byte{1}}) == Status::Ok);
+    REQUIRE(wait_durable(persister, persister.position()));
+    append(10);
+    REQUIRE(persister.write_snapshot(node::SnapshotInfo{1010, 2, true, 1},
+                                     std::vector<std::byte>{std::byte{2}}) == Status::Ok);
+    append(1000);
+    REQUIRE(persister.close() == Status::Ok);
+    const live::PersistStats stats = persister.stats();
+    CHECK(stats.snapshots == 2);
+    CHECK(stats.segments_removed > 0);
+    CHECK(stats.segments_removed + 1 < stats.segments);
+    CHECK_FALSE(std::filesystem::exists(dir.str() + "/" + node::segment_name(0)));
+    CHECK_FALSE(std::filesystem::exists(dir.str() + "/" + node::snapshot_name(900)));
+    CHECK(std::filesystem::exists(dir.str() + "/" + node::snapshot_name(1010)));
+
+    // What is left starts at or before the snapshot and runs to the end.
+    node::EventLogReader reader;
+    REQUIRE(reader.open(dir.str()) == Status::Ok);
+    CHECK(reader.header().segment_index == stats.segments_removed);
+    wire::RecordView record;
+    REQUIRE(reader.next(record) == Status::Ok);
+    const std::uint64_t first = record.header.seq;
+    CHECK(first > 1);
+    CHECK(first <= 1010);
+    std::uint64_t last = first;
+    Status s = Status::Ok;
+    while ((s = reader.next(record)) == Status::Ok) {
+      CHECK(record.header.seq == last + 1);
+      last = record.header.seq;
+    }
+    CHECK(s == Status::EndOfStream);
+    CHECK(last == 2010);
+  }
+
   TEST_CASE("the persister refuses appends before open and after close") {
     const TempDir dir{"closed"};
     live::Persister persister{live::PersistConfig{}};

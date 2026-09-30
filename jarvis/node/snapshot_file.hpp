@@ -54,4 +54,29 @@ struct SnapshotEntry {
 // The snapshot files of `directory`, by seq.
 [[nodiscard]] std::vector<SnapshotEntry> list_snapshots(const std::string& directory);
 
+// A snapshot file read whole and decoded.
+struct LoadedSnapshot {
+  model::wire::LogHeader header;
+  SnapshotInfo info;
+  std::vector<std::byte> file;
+  std::size_t body_offset = 0;
+  std::size_t body_size = 0;
+  [[nodiscard]] std::span<const std::byte> body() const noexcept {
+    return std::span<const std::byte>{file}.subspan(body_offset, body_size);
+  }
+};
+
+// Reads the snapshot file `path` for a restore. It must decode, be complete (every strategy's
+// state in it), and come from this build's commit: the state layout is the build's, so a
+// snapshot another build wrote is not restored. `error` says which of these failed.
+[[nodiscard]] core::Status load_snapshot(const std::string& path, LoadedSnapshot& out,
+                                         std::string& error);
+
+enum class SnapshotPick : std::uint8_t { Earliest, Latest };
+
+// The earliest (or latest) snapshot of `directory` with seq >= `min_seq` that load_snapshot
+// accepts; false when there is none.
+[[nodiscard]] bool pick_snapshot(const std::string& directory, std::uint64_t min_seq,
+                                 SnapshotPick pick, SnapshotEntry& out);
+
 } // namespace jarvis::node

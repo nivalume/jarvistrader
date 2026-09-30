@@ -27,6 +27,10 @@ inline void print_persist(std::ostream& out, const PersistStats& p) {
   out << "log: records " << p.records << ", bytes " << p.position << ", durable " << p.durable
       << ", syncs " << p.syncs << ", segments " << p.segments << ", largest sync " << p.max_lag
       << " bytes, ring stalls " << p.stalls << "\n";
+  if (p.snapshots != 0 || p.snapshots_dropped != 0) {
+    out << "snapshots: " << p.snapshots << " written, " << p.snapshots_dropped
+        << " replaced while waiting, " << p.segments_removed << " log segments removed\n";
+  }
 }
 
 inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
@@ -59,6 +63,18 @@ inline int print_live(std::ostream& out, const LiveResult& r) {
       << r.venue.snapshots << " (" << r.venue.snapshot_failures << " failed), countdowns "
       << r.venue.countdowns << " (" << r.venue.countdown_failures << " failed), decode errors "
       << r.venue.decode_errors << ", waited for the log " << r.venue.barrier_waits << "\n";
+  if (!r.recovery.from.empty()) {
+    const node::RecoveryReport& c = r.recovery;
+    out << "resumed from " << c.from << " at seq " << c.last_seq << " (snapshot " << c.snapshot_seq
+        << ", " << c.replayed << " inputs replayed";
+    if (c.torn_bytes != 0) {
+      out << ", a torn tail of " << c.torn_bytes << " bytes left out";
+    }
+    if (c.torn_step) {
+      out << ", the last input's outputs incomplete";
+    }
+    out << ")\n";
+  }
   print_persist(out, r.persist);
   if (r.venue.unsent_at_stop != 0) {
     out << "not sent at stop: " << r.venue.unsent_at_stop

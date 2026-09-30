@@ -74,6 +74,22 @@ struct TrackedOrder {
   std::uint64_t venue_order_id = 0; // 0 when not acknowledged
 };
 
+// An order an earlier run of this node left open, restored by a resumed run (node/recovery.hpp):
+// the tracker takes it as its own, so that the venue's reports of it are passed on and a
+// reconciliation snapshot asks about it.
+struct RecoveredOrder {
+  std::uint16_t strategy = 0;
+  model::InstrumentId instrument_id;
+  model::ClientOrderId client_order_id;
+  model::OrderSide side = model::OrderSide::Buy;
+  model::OrderType type = model::OrderType::Limit;
+  std::string venue_order_id; // empty when not acknowledged
+  bool accepted = false;
+  std::uint64_t last_update_ms = 0;
+  std::vector<std::uint64_t> trades;      // trade ids already applied
+  std::vector<std::uint64_t> lite_trades; // of those, Lite fills whose commission is still due
+};
+
 struct TrackerStats {
   std::uint64_t unknown_orders = 0;   // reports of orders not sent by this node
   std::uint64_t stale_reports = 0;    // older than the order's last update
@@ -91,6 +107,8 @@ public:
 
   // A command the adapter is sending.
   void on_submit(const model::SubmitOrder& c);
+  // An order of an earlier run (before any report arrives).
+  void restore(const RecoveredOrder& r);
 
   [[nodiscard]] core::Status on_place_ack(const PlaceAck& a, core::UnixNanos recv,
                                           EventEmitter& out);

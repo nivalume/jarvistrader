@@ -87,7 +87,8 @@ struct VenueIoConfig {
   model::Venue venue;               // of the ConnectionStatus records
   std::int64_t time_offset_ms = 0;  // the venue's clock minus the local one (startup checks)
   std::int64_t trades_since_ms = 0; // the node's start: earlier trades belong to no order it knows
-  std::string raw_frames;           // user stream frames and WebSocket API answers; empty: none
+  std::vector<adapter::binance::RecoveredOrder> recovered; // a resumed run's open orders
+  std::string raw_frames; // user stream frames and WebSocket API answers; empty: none
   std::size_t ring_bytes = std::size_t{16} << 20U; // a snapshot record can take 1 MiB
   std::size_t command_slots = 4096;
   std::uint16_t source_id = 2;

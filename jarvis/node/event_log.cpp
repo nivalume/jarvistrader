@@ -75,9 +75,10 @@ std::string segment_name(std::uint32_t index) {
 
 EventLogWriter::EventLogWriter(EventLogWriter&& other) noexcept
     : fd_{std::exchange(other.fd_, -1)}, directory_{std::move(other.directory_)},
-      header_{other.header_}, options_{other.options_}, segment_size_{other.segment_size_},
-      records_{other.records_}, position_{other.position_}, buffer_{std::move(other.buffer_)},
-      scratch_{std::move(other.scratch_)} {}
+      header_{other.header_}, first_seqs_{std::move(other.first_seqs_)},
+      first_segment_{other.first_segment_}, options_{other.options_},
+      segment_size_{other.segment_size_}, records_{other.records_}, position_{other.position_},
+      buffer_{std::move(other.buffer_)}, scratch_{std::move(other.scratch_)} {}
 
 EventLogWriter& EventLogWriter::operator=(EventLogWriter&& other) noexcept {
   if (this != &other) {
@@ -85,6 +86,8 @@ EventLogWriter& EventLogWriter::operator=(EventLogWriter&& other) noexcept {
     fd_ = std::exchange(other.fd_, -1);
     directory_ = std::move(other.directory_);
     header_ = other.header_;
+    first_seqs_ = std::move(other.first_seqs_);
+    first_segment_ = other.first_segment_;
     options_ = other.options_;
     segment_size_ = other.segment_size_;
     records_ = other.records_;
@@ -115,6 +118,8 @@ Status EventLogWriter::open(const std::string& directory, const wire::LogHeader&
   directory_ = directory;
   header_ = header;
   header_.segment_index = 0;
+  first_seqs_.clear();
+  first_segment_ = 0;
   options_ = options;
   records_ = 0;
   position_ = 0;
@@ -186,6 +191,9 @@ Status EventLogWriter::append_record(std::span<const std::byte> record) {
       return s;
     }
   }
+  if (first_seqs_.size() <= header_.segment_index) {
+    first_seqs_.push_back(wire::Reader{record}.u64()); // a record starts with its seq
+  }
   buffer_.insert(buffer_.end(), record.begin(), record.end());
   segment_size_ += record.size();
   position_ += record.size();
@@ -203,6 +211,33 @@ Status EventLogWriter::write_snapshot(const SnapshotInfo& info, std::span<const 
     return s;
   }
   return write_snapshot_file(directory_, info.seq, encoded, options_.durable);
+}
+
+Status EventLogWriter::truncate_before(std::uint64_t seq, std::uint32_t& removed) {
+  removed = 0;
+  if (fd_ < 0) {
+    return Status::InvalidState;
+  }
+  // Segment i holds only records up to `seq` when the next one starts at or before it.
+  while (first_segment_ < header_.segment_index && first_seqs_[first_segment_ + 1U] <= seq) {
+    const std::string path = directory_ + "/" + segment_name(first_segment_);
+    if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+      return Status::IoError;
+    }
+    ++first_segment_;
+    ++removed;
+  }
+  if (removed == 0) {
+    return Status::Ok;
+  }
+  const std::uint64_t first = first_seqs_[first_segment_];
+  for (const SnapshotEntry& old : list_snapshots(directory_)) {
+    if (old.seq < first) {
+      std::error_code ec;
+      std::filesystem::remove(old.path, ec);
+    }
+  }
+  return options_.durable ? sync_directory(directory_) : Status::Ok;
 }
 
 Status EventLogWriter::flush() {
@@ -284,14 +319,14 @@ Status EventLogReader::load_segment(std::size_t index) {
   if (!core::ok(s)) {
     segment_ = index;
     // A crash right after the segment was created: nothing in it was ever a record.
-    if (index > 0 && options_.tolerate_torn_tail && last_segment()) {
+    if (options_.tolerate_torn_tail && last_segment()) {
       return torn(0);
     }
     return s;
   }
   if (index == 0) {
     header_ = header;
-  } else if (!same_log(header, header_) || header.segment_index != index) {
+  } else if (!same_log(header, header_) || header.segment_index != header_.segment_index + index) {
     return Status::InvalidArgument;
   }
   segment_ = index;

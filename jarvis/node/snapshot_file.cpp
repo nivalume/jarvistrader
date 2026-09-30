@@ -14,6 +14,7 @@
 #include <system_error>
 
 #include "jarvis/core/crc32c.hpp"
+#include "jarvis/node/build_info.hpp"
 
 namespace jarvis::node {
 
@@ -198,6 +199,53 @@ std::vector<SnapshotEntry> list_snapshots(const std::string& directory) {
   std::sort(out.begin(), out.end(),
             [](const SnapshotEntry& a, const SnapshotEntry& b) { return a.seq < b.seq; });
   return out;
+}
+
+Status load_snapshot(const std::string& path, LoadedSnapshot& out, std::string& error) {
+  Status s = read_file_bytes(path, out.file);
+  std::span<const std::byte> body;
+  if (core::ok(s)) {
+    s = decode_snapshot(out.file, out.header, out.info, body);
+  }
+  if (!core::ok(s)) {
+    error = path + ": cannot read the snapshot: " + std::string{core::to_string(s)};
+    return s;
+  }
+  out.body_offset = static_cast<std::size_t>(body.data() - out.file.data());
+  out.body_size = body.size();
+  if (!out.info.complete) {
+    error = path + ": the snapshot lacks the state of a strategy that does not describe it";
+    return Status::InvalidState;
+  }
+  const std::string_view commit = build_info().git_commit;
+  using Commit = decltype(out.header.git_commit);
+  if (out.header.git_commit.view() != commit.substr(0, Commit::capacity())) {
+    error = path + ": the snapshot was written by build " +
+            std::string{out.header.git_commit.view()} + " and this is " + std::string{commit} +
+            "; a state is only restored by the build that wrote it";
+    return Status::InvalidState;
+  }
+  return Status::Ok;
+}
+
+bool pick_snapshot(const std::string& directory, std::uint64_t min_seq, SnapshotPick pick,
+                   SnapshotEntry& out) {
+  std::vector<SnapshotEntry> all = list_snapshots(directory);
+  if (pick == SnapshotPick::Latest) {
+    std::reverse(all.begin(), all.end());
+  }
+  for (const SnapshotEntry& entry : all) {
+    if (entry.seq < min_seq) {
+      continue;
+    }
+    LoadedSnapshot loaded;
+    std::string error;
+    if (core::ok(load_snapshot(entry.path, loaded, error))) {
+      out = entry;
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace jarvis::node

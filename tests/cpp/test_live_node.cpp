@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -19,6 +20,7 @@
 #include "jarvis/node/config.hpp"
 #include "jarvis/node/epoch_store.hpp"
 #include "jarvis/node/replay.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
 #include "support/tls_test.hpp"
@@ -77,13 +79,30 @@ std::string canceled_of(std::string_view cid) {
          R"(","S":"BUY","o":"LIMIT","f":"GTC","q":"0.010","p":"84000.0","ap":"84000.0","sp":"0","x":"CANCELED","X":"CANCELED","i":42,"l":"0","z":"0.004","L":"0","N":"USDT","n":"0","T":1700000004090,"t":0,"b":"0","a":"0","m":false,"R":false,"wt":"CONTRACT_PRICE","ot":"LIMIT","ps":"BOTH","cp":false,"rp":"0"}}})";
 }
 
-// Buys once it runs; stops the node when the fill arrives.
+// Buys once it runs; stops the node when the fill arrives (or, resumed, once reconciled). Its
+// own state is the fills it heard of, so a snapshot of it is complete and a run can resume.
 struct Buyer {
-  std::atomic<bool>* stop = nullptr;
-  std::vector<std::string> log;
+  Buyer() = default;
+  explicit Buyer(std::atomic<bool>* s, bool when_reconciled = false)
+      : stop{s}, stop_when_reconciled{when_reconciled} {}
 
-  Status on_reconciled(st::Context& /*ctx*/, const md::ReconcileOutcome& o) {
+  std::atomic<bool>* stop = nullptr;
+  bool stop_when_reconciled = false;
+  std::vector<std::string> log;
+  std::vector<md::ReconcileOutcome> outcomes;
+  std::vector<std::uint64_t> position_raw; // at each reconciliation (0: flat)
+  std::uint32_t fills = 0;
+
+  template <typename Ar> void state(Ar& ar) { ar(fills); }
+
+  Status on_reconciled(st::Context& ctx, const md::ReconcileOutcome& o) {
     log.push_back("reconciled orders=" + std::to_string(o.orders));
+    outcomes.push_back(o);
+    st::PositionView p;
+    position_raw.push_back(ctx.position(btc(), p) ? p.quantity.raw() : 0);
+    if (stop_when_reconciled && stop != nullptr) {
+      stop->store(true);
+    }
     return Status::Ok;
   }
   Status on_start(st::Context& ctx) {
@@ -104,6 +123,7 @@ struct Buyer {
       log.emplace_back("pending cancel");
     } else if (std::holds_alternative<md::OrderFilled>(e)) {
       log.emplace_back("filled");
+      ++fills;
       if (stop != nullptr) {
         stop->store(true);
       }
@@ -117,6 +137,153 @@ struct Buyer {
     return Status::Ok;
   }
 };
+
+// The startup checks' answers: the clock, the instruments, the position mode, multi-assets, and
+// the symbol's position (leverage, margin type).
+std::vector<std::string> startup_answers(std::string_view position) {
+  const std::string exchange_info =
+      file_text(std::string{JARVIS_SOURCE_DIR} + "/tests/data/binance/exchange_info_testnet.json");
+  return {
+      http(R"({"serverTime":1700000002000})"), http(exchange_info),
+      http(R"({"dualSidePosition":false})"), http(R"({"multiAssetsMargin":false})"),
+      http(
+          R"([{"symbol":"BTCUSDT","positionAmt":")" + std::string{position} +
+              R"(","entryPrice":"0.0","markPrice":"84000","unRealizedProfit":"0","liquidationPrice":"0","leverage":"20","maxNotionalValue":"1000000","marginType":"cross","isolatedMargin":"0","isAutoAddMargin":"false","positionSide":"BOTH","notional":"0","isolatedWallet":"0","updateTime":0}])",
+          true)};
+}
+
+// A scripted venue: the WebSocket API places orders (each fills in part at once on the user data
+// stream) and cancels them; REST answers in the order given.
+class MockVenue {
+public:
+  explicit MockVenue(std::vector<std::string> answers)
+      : wss_{8, [this](std::size_t conn, const std::string& m) { return answer(conn, m); }},
+        https_{std::move(answers), wss_.ca_file(), wss_.key_file()} {}
+  MockVenue(const MockVenue&) = delete;
+  MockVenue& operator=(const MockVenue&) = delete;
+
+  [[nodiscard]] live::LiveRequest request(const node::NodeConfig& config, const std::string& text,
+                                          const TempDir& dir, std::atomic<bool>& stop) const {
+    live::LiveRequest request;
+    request.config = &config;
+    request.manifest.config_text = text;
+    request.manifest.source = "live.toml";
+    live::FeedEndpoints market;
+    market.streams = wss_.url("");
+    market.ws_api = wss_.url("/ws-fapi/v1");
+    market.tls.ca_file = wss_.ca_file();
+    request.market = market;
+    live::VenueEndpoints venue;
+    venue.rest = https_.url();
+    venue.ws_api = wss_.url("/ws-fapi/v1");
+    venue.user_stream = wss_.url("/private/stream");
+    venue.tls.ca_file = wss_.ca_file();
+    request.venue = venue;
+    request.spot_rest = ""; // no key permission check against the mock
+    request.credentials = node::ApiCredentials{"KEY1", "s3cret"};
+    request.epoch_file = dir.file("epoch");
+    request.stop = &stop;
+    request.run_for = std::chrono::seconds{10};
+    request.now_ms = [] { return std::int64_t{1'700'000'002'000}; };
+    return request;
+  }
+
+  [[nodiscard]] std::vector<std::string> requests() { return https_.requests(); }
+  [[nodiscard]] bool clean() { return wss_.error().empty() && https_.error().empty(); }
+
+private:
+  std::vector<WsReply> answer(std::size_t conn, const std::string& m) {
+    if (m.empty()) {
+      return {};
+    }
+    if (wss_.target(conn) == "/private/stream") {
+      const std::size_t at = m.find("\"id\":");
+      return {WsReply::send(R"({"result":null,"id":)" + m.substr(at + 5, m.find('}', at) - at - 5) +
+                            "}")};
+    }
+    const auto to_stream = [this](const std::string& frame) {
+      for (std::size_t c = 0; c < 8; ++c) {
+        if (wss_.target(c) == "/private/stream") {
+          wss_.push(c, WsReply::send(frame));
+        }
+      }
+    };
+    if (field(m, "method") == "order.cancel") {
+      const std::string cid = field(m, "origClientOrderId");
+      to_stream(canceled_of(cid));
+      return {WsReply::send(
+          R"({"id":")" + field(m, "id") +
+          R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"CANCELED","clientOrderId":")" +
+          cid + R"(","updateTime":1700000004000}})")};
+    }
+    if (field(m, "method") == "order.place") {
+      const std::string cid = field(m, "newClientOrderId");
+      to_stream(fill_of(cid));
+      return {WsReply::send(
+          R"({"id":")" + field(m, "id") +
+          R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"NEW","clientOrderId":")" +
+          cid + R"(","updateTime":1700000003000}})")};
+    }
+    return {};
+  }
+
+  ScriptedWssServer wss_;
+  ScriptedHttpsServer https_;
+};
+
+// The first run's REST answers: the startup checks, the listenKey, the snapshot (an empty
+// account), then the dead man's switch for the order the strategy places, and its disarming once
+// the shutdown has canceled what was left of the order.
+std::vector<std::string> first_run_answers() {
+  std::vector<std::string> a = startup_answers("0.000");
+  for (
+      std::string r :
+      {http(R"({"listenKey":"LK1"})"), http("[]"), http("[]"),
+       http(
+           R"([{"accountAlias":"a","asset":"USDT","balance":"10000.0","crossWalletBalance":"10000","crossUnPnl":"0","availableBalance":"10000.0","maxWithdrawAmount":"10000","marginAvailable":true,"updateTime":1700000000000}])"),
+       http("[]"), http("[]"), http(R"({"symbol":"BTCUSDT","countdownTime":"120000"})"),
+       http(R"({"symbol":"BTCUSDT","countdownTime":"0"})")}) {
+    a.push_back(std::move(r));
+  }
+  return a;
+}
+
+// A resumed run's REST answers: the startup checks, the listenKey, and the snapshot: no open
+// orders or new trades, no balances reported, and the position the first run's fill left.
+std::vector<std::string> resumed_answers() {
+  std::vector<std::string> a = startup_answers("0.004");
+  for (
+      std::string r :
+      {http(R"({"listenKey":"LK2"})"), http("[]"), http("[]"), http("[]"),
+       http(
+           R"([{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"0.004","entryPrice":"84000.0","updateTime":1700000003100}])"),
+       http("[]")}) {
+    a.push_back(std::move(r));
+  }
+  return a;
+}
+
+// The seq of the first record of a run log, and of its last input (a torn tail left out).
+std::uint64_t first_seq(const std::string& dir) {
+  node::EventLogReader reader;
+  md::wire::RecordView record;
+  REQUIRE(reader.open(dir) == Status::Ok);
+  REQUIRE(reader.next(record) == Status::Ok);
+  return record.header.seq;
+}
+
+std::uint64_t last_input_seq(const std::string& dir) {
+  node::EventLogReader reader;
+  md::wire::RecordView record;
+  REQUIRE(reader.open(dir, node::EventLogReadOptions{true}) == Status::Ok);
+  std::uint64_t last = 0;
+  while (reader.next(record) == Status::Ok) {
+    if (record.header.kind < md::wire::kFirstOutputKind) {
+      last = record.header.seq;
+    }
+  }
+  return last;
+}
 
 std::string config_text(const TempDir& dir, std::string_view mode) {
   return R"(
@@ -160,65 +327,7 @@ TEST_SUITE("unit") {
     SUBCASE("async") {}
     SUBCASE("barrier") { mode = "barrier"; }
     CAPTURE(mode);
-    ScriptedWssServer* self = nullptr;
-    ScriptedWssServer wss{
-        8, [&self](std::size_t conn, const std::string& m) -> std::vector<WsReply> {
-          if (m.empty()) {
-            return {};
-          }
-          const std::string target = self->target(conn);
-          if (target == "/private/stream") {
-            const std::size_t at = m.find("\"id\":");
-            return {WsReply::send(R"({"result":null,"id":)" +
-                                  m.substr(at + 5, m.find('}', at) - at - 5) + "}")};
-          }
-          const auto to_stream = [&self](const std::string& frame) {
-            for (std::size_t c = 0; c < 8; ++c) {
-              if (self->target(c) == "/private/stream") {
-                self->push(c, WsReply::send(frame));
-              }
-            }
-          };
-          if (field(m, "method") == "order.cancel") {
-            const std::string cid = field(m, "origClientOrderId");
-            to_stream(canceled_of(cid));
-            return {WsReply::send(
-                R"({"id":")" + field(m, "id") +
-                R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"CANCELED","clientOrderId":")" +
-                cid + R"(","updateTime":1700000004000}})")};
-          }
-          if (field(m, "method") == "order.place") {
-            const std::string cid = field(m, "newClientOrderId");
-            to_stream(fill_of(cid));
-            return {WsReply::send(
-                R"({"id":")" + field(m, "id") +
-                R"(","status":200,"result":{"orderId":42,"symbol":"BTCUSDT","status":"NEW","clientOrderId":")" +
-                cid + R"(","updateTime":1700000003000}})")};
-          }
-          return {};
-        }};
-    self = &wss;
-    const std::string exchange_info = file_text(std::string{JARVIS_SOURCE_DIR} +
-                                                "/tests/data/binance/exchange_info_testnet.json");
-    ScriptedHttpsServer https{
-        std::vector<std::string>{
-            // Startup checks: clock, instruments, position mode, multi-assets, the symbol.
-            http(R"({"serverTime":1700000002000})"), http(exchange_info),
-            http(R"({"dualSidePosition":false})"), http(R"({"multiAssetsMargin":false})"),
-            http(
-                R"([{"symbol":"BTCUSDT","positionAmt":"0.000","entryPrice":"0.0","markPrice":"84000","unRealizedProfit":"0","liquidationPrice":"0","leverage":"20","maxNotionalValue":"1000000","marginType":"cross","isolatedMargin":"0","isAutoAddMargin":"false","positionSide":"BOTH","notional":"0","isolatedWallet":"0","updateTime":0}])",
-                true),
-            // The venue-io thread: the listenKey, then the snapshot (an empty account).
-            http(R"({"listenKey":"LK1"})"), http("[]"), http("[]"),
-            http(
-                R"([{"accountAlias":"a","asset":"USDT","balance":"10000.0","crossWalletBalance":"10000","crossUnPnl":"0","availableBalance":"10000.0","maxWithdrawAmount":"10000","marginAvailable":true,"updateTime":1700000000000}])"),
-            http("[]"), http("[]"),
-            // The dead man's switch for the order the strategy places, and its disarming once
-            // the shutdown has canceled what was left of the order.
-            http(R"({"symbol":"BTCUSDT","countdownTime":"120000"})"),
-            http(R"({"symbol":"BTCUSDT","countdownTime":"0"})")},
-        wss.ca_file(), wss.key_file()};
-
+    MockVenue venue{first_run_answers()};
     const TempDir dir;
     const std::string text = config_text(dir, mode);
     node::NodeConfig config;
@@ -226,35 +335,15 @@ TEST_SUITE("unit") {
     REQUIRE(node::parse_config(text, "live.toml", {}, config, errors) == Status::Ok);
 
     std::atomic<bool> stop{false};
-    live::LiveRequest request;
-    request.config = &config;
-    request.manifest.config_text = text;
-    request.manifest.source = "live.toml";
-    live::FeedEndpoints market;
-    market.streams = wss.url("");
-    market.ws_api = wss.url("/ws-fapi/v1");
-    market.tls.ca_file = wss.ca_file();
-    request.market = market;
-    live::VenueEndpoints venue;
-    venue.rest = https.url();
-    venue.ws_api = wss.url("/ws-fapi/v1");
-    venue.user_stream = wss.url("/private/stream");
-    venue.tls.ca_file = wss.ca_file();
-    request.venue = venue;
-    request.spot_rest = ""; // no key permission check against the mock
-    request.credentials = node::ApiCredentials{"KEY1", "s3cret"};
-    request.epoch_file = dir.file("epoch");
+    live::LiveRequest request = venue.request(config, text, dir, stop);
     // Earlier runs took epochs 1 to 4: this one's ClientOrderIds carry 5, and so must the replay's
     // (the RunStart input records it).
     for (int i = 0; i < 4; ++i) {
       std::uint64_t earlier = 0;
       REQUIRE(node::next_epoch(dir.file("epoch"), earlier) == Status::Ok);
     }
-    request.stop = &stop;
-    request.run_for = std::chrono::seconds{10};
-    request.now_ms = [] { return std::int64_t{1'700'000'002'000}; };
 
-    st::StaticStrategySet<Buyer> set{Buyer{&stop, {}}};
+    st::StaticStrategySet<Buyer> set{Buyer{&stop}};
     live::LiveResult result;
     std::string error;
     node::NoHook hook;
@@ -264,9 +353,13 @@ TEST_SUITE("unit") {
     CHECK(result.epoch == 5);
     CHECK(result.startup.passed());
     // The shutdown cancels the rest of the order; the strategy, stopped, hears only of the
-    // request.
-    CHECK(set.get<0>().log == std::vector<std::string>{"reconciled orders=0", "start", "submitted",
-                                                       "accepted", "filled", "pending cancel"});
+    // request. The fill on the user data stream can overtake the WebSocket API's answer to the
+    // order (as at the venue); the order is then accepted by its fill.
+    const std::vector<std::string> acked{
+        "reconciled orders=0", "start", "submitted", "accepted", "filled", "pending cancel"};
+    const std::vector<std::string> overtaken{"reconciled orders=0", "start", "submitted", "filled",
+                                             "pending cancel"};
+    CHECK((set.get<0>().log == acked || set.get<0>().log == overtaken));
     CHECK(result.summary.left_open == 0);
     // The order, its countdown, the shutdown's cancel, the countdown's disarming.
     CHECK(result.venue.commands == 4);
@@ -275,7 +368,7 @@ TEST_SUITE("unit") {
     CHECK(result.venue.decode_errors == 0);
     CHECK(result.venue.countdowns == 2);
     CHECK(result.venue.countdown_failures == 0);
-    const std::vector<std::string> requests = https.requests();
+    const std::vector<std::string> requests = venue.requests();
     REQUIRE(requests.size() >= 2);
     const std::string& arm = requests[requests.size() - 2];
     CHECK(arm.starts_with("POST /fapi/v1/countdownCancelAll"));
@@ -316,7 +409,99 @@ TEST_SUITE("unit") {
     std::uint64_t epoch = 0;
     REQUIRE(node::read_epoch(dir.file("epoch"), epoch) == Status::Ok);
     CHECK(epoch == 5);
-    CHECK(wss.error().empty());
-    CHECK(https.error().empty());
+    CHECK(venue.clean());
+  }
+
+  TEST_CASE("a live node resumes where its earlier run stopped, also after a crash") {
+    bool crash = false;
+    SUBCASE("stopped") {}
+    SUBCASE("crashed") { crash = true; }
+    CAPTURE(crash);
+    const TempDir dir;
+    const std::string text = config_text(dir, "async") + "resume = true\n";
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::parse_config(text, "live.toml", {}, config, errors) == Status::Ok);
+    std::string error;
+    node::NoHook hook;
+
+    // The first run (nothing to resume yet) buys, is partly filled, and cancels the rest on the
+    // way out.
+    std::atomic<bool> stop{false};
+    st::StaticStrategySet<Buyer> set{Buyer{&stop}};
+    live::LiveResult first;
+    {
+      MockVenue venue{first_run_answers()};
+      const live::LiveRequest request = venue.request(config, text, dir, stop);
+      const Status s = live::run_live(request, set, first, error, hook);
+      INFO(error);
+      REQUIRE(s == Status::Ok);
+      CHECK(venue.clean());
+    }
+    CHECK(first.recovery.from.empty());
+    REQUIRE(set.get<0>().fills == 1);
+    REQUIRE(first.summary.snapshots > 0);
+    if (crash) {
+      // A crash while the last record was written: its end never reached the disk.
+      const std::string segment = first.directory + "/" + node::segment_name(0);
+      std::filesystem::resize_file(segment, std::filesystem::file_size(segment) - 3);
+    }
+    const std::uint64_t last = last_input_seq(first.directory);
+    REQUIRE(last > 0);
+
+    // The second run continues it: the state from the first run's latest snapshot and the rest
+    // of its log, reconciled with the venue.
+    std::atomic<bool> stop2{false};
+    st::StaticStrategySet<Buyer> set2{Buyer{&stop2, true}};
+    live::LiveResult second;
+    {
+      MockVenue venue{resumed_answers()};
+      const live::LiveRequest request = venue.request(config, text, dir, stop2);
+      const Status s = live::run_live(request, set2, second, error, hook);
+      INFO(error);
+      REQUIRE(s == Status::Ok);
+      CHECK(venue.clean());
+      // No order and no dead man's switch this time.
+      CHECK(venue.requests().size() == resumed_answers().size());
+    }
+    CHECK(second.epoch == 2);
+    CHECK(second.recovery.from == first.directory);
+    CHECK(second.recovery.last_seq == last);
+    CHECK(second.recovery.snapshot_seq > 0);
+    CHECK(second.recovery.snapshot_seq <= last);
+    CHECK((second.recovery.torn_bytes != 0) == crash);
+    CHECK(second.venue.commands == 0);
+    // The strategy continues: on_start is not called again, it still counts the fill, and the
+    // position the first run left matches the venue's, so the reconciliation finds nothing.
+    const Buyer& resumed = set2.get<0>();
+    CHECK(resumed.log == std::vector<std::string>{"reconciled orders=0"});
+    CHECK(resumed.fills == 1);
+    md::Quantity filled;
+    REQUIRE(md::Quantity::parse("0.004", filled) == Status::Ok);
+    REQUIRE(resumed.position_raw.size() == 1);
+    CHECK(resumed.position_raw[0] == filled.raw());
+    REQUIRE(resumed.outcomes.size() == 1);
+    CHECK(resumed.outcomes[0].diffs == 0);
+    CHECK(resumed.outcomes[0].lost == 0);
+    CHECK(resumed.outcomes[0].external == 0);
+
+    // The new run's log continues the seq after the first run's last input, and its directory
+    // starts with a snapshot of the state it continued from.
+    CHECK(first_seq(second.directory) == last + 1);
+    CHECK(std::filesystem::exists(second.directory + "/" + node::snapshot_name(last)));
+    CHECK(file_text(second.directory + "/run.toml").find("resumed_from = ") != std::string::npos);
+    // Its replay starts from that snapshot.
+    st::StaticStrategySet<Buyer> fresh{Buyer{}};
+    node::ReplayReport report;
+    REQUIRE(node::replay_run(second.directory, config, fresh, node::ReplayOptions{}, report,
+                             error) == Status::Ok);
+    INFO((report.divergence ? report.divergence->recorded + " / " + report.divergence->replayed
+                            : std::string{}));
+    CHECK_FALSE(report.divergence.has_value());
+    CHECK(report.start_seq == last);
+    CHECK(report.inputs == second.summary.inputs);
+    CHECK(report.outputs == second.summary.outputs);
+    CHECK(fresh.get<0>().log == resumed.log);
+    CHECK(fresh.get<0>().fills == 1);
   }
 }

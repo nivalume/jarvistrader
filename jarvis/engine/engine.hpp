@@ -105,6 +105,7 @@ public:
     deliver_order_events();
     cover_submits(first_output);
     arm_algo_timer();
+    k_.timers.prune(); // between steps the next timer is the heap's top (TimerQueue::peek)
     return s;
   }
 
@@ -131,7 +132,9 @@ public:
   void clear_outputs() noexcept { k_.outputs.clear(); }
 
   // The next timer due, without firing it; the node turns it into a TimerFired input.
-  [[nodiscard]] bool next_timer(core::FiredTimer& out) noexcept { return k_.timers.peek(out); }
+  [[nodiscard]] bool next_timer(core::FiredTimer& out) const noexcept {
+    return k_.timers.peek(out);
+  }
 
   [[nodiscard]] bool halt_requested() const noexcept { return k_.halt_requested; }
   // An admin shutdown: the driver stops the node the configured way.

@@ -282,6 +282,8 @@ dir = "runs/{node_id}/{run_id}"
 sync_every_ms = 100               # async：persist 线程最多隔这么久 fdatasync 一次；0 为每批一次
 snapshot_every = 1000000
 raw_frames = true                 # true | false | sampled
+resume = false                    # live：从本节点最近一次运行的快照与日志继续（16.3 节）
+truncate = false                  # sandbox 与 live：每个完整快照之后删除只在它之前的日志段与快照
 
 [telemetry]
 prometheus = "0.0.0.0:9100"
@@ -1445,7 +1447,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 
 ### 16.3 快照与恢复
 
-- 每 `snapshot_every` 条事件写一次 `EngineState` 快照（同样是定宽显式编码），包含策略状态哈希；之后可截断更早的日志段。
+- 每 `snapshot_every` 条事件写一次 `EngineState` 快照（同样是定宽显式编码），包含策略状态；之后可截断更早的日志段。
 - 恢复 = 最近快照 + 日志尾部回放 + 对账。
 
 快照的实现（M5-I2）：
@@ -1458,12 +1460,25 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 - 取快照失败（策略的 `on_save` 抛出异常、文件写不进去）只计数（`RunSummary::snapshot_failures`），运行继续：日志才是记录，快照只是加速。
 - 回放校验：`--replay` 在每个快照点重算内核状态，与目录中同一 `seq` 的快照文件逐字节比较，不同即为 `ReplayDivergence`；`--from-snapshot FILE` 从该快照恢复内核（只接受完整的快照），然后从下一条输入开始回放，输出仍须与日志逐字节一致。
 - 测试：引擎层性质测试在随机输入序列的任意一步保存、恢复到新引擎，逐步比较两者的输出、策略回调与最终状态字节；对账性质测试在随机交易所历史的任意一步让一个从快照恢复的孪生引擎加入，此后每一步都比较；golden 场景（订单、K 线、批次、订单簿、特征、报价、成交）每隔几十条输入取一次快照，逐个从快照回放到结尾均无偏差。
+- 节点在两步之间向引擎查询的东西（最早的定时器 `next_timer`、挂单数、停止请求）不改变任何状态，否则节点的驱动器在两步之间的查询会让它的状态字节与不做这些查询的回放不同。定时器队列的堆里留有已取消的旧条目：每个 `step` 结束时弹出堆顶的旧条目（`TimerQueue::prune`），回放同样如此；两步之间的查询只读，堆顶就是下一个定时器。
+
+恢复与截断的实现（M5-I3）：
+
+- `persistence.resume = true`（只对 live 有效；backtest 与 sandbox 忽略它，sandbox 的模拟交易所状态不在快照中）：节点启动时找到本节点最近一次运行的目录（`persistence.dir` 中 `{run_id}` 位置的目录，按 UTC 时间与 `-2`、`-3` 后缀排序，只算含日志的目录），或 `LiveRequest::resume_from` 指定的目录，把引擎恢复到它结束时的状态（`jarvis/node/recovery.hpp`）：
+  1. 该运行的配置 hash 必须与本次相同，每个策略都必须描述自己的状态，否则拒绝启动并说明原因（设 `persistence.resume = false` 则从头开始，由对账重建订单与持仓）；
+  2. 从该目录中最近的完整快照恢复，要求快照由同一提交号的构建写出（状态布局属于构建，别的构建写出的快照不恢复）；然后按回放的方式重算其后的日志并逐条比对输出，比对不一致即拒绝启动。日志末尾可以是半条记录，最后一条输入的输出或策略错误可以缺失：这正是崩溃留下的样子（`ReplayOptions::tolerate_torn_end`）；
+  3. 新运行在自己的目录中先写一个该状态的快照，文件名用上次运行最后一条输入的 `seq`，然后 `seq` 接着它编号，第一条输入是 `RunStart{epoch, prior_seq}`。`RunStart` 重置会话状态：生命周期回到 `Init`，连接状态清空，对账器回到 `Disconnected` 并重新同步，`countdownCancelAll` 定时器解除，未完成的批次缓冲丢弃。策略不会再收到 `on_start`，它们接着上次的状态运行，下一次回调是对账完成的 `on_reconciled`。
+- 恢复出的未结订单交给 venue-io 线程的订单跟踪器（`OrderTracker::restore`），否则新进程会把这些订单的回报当作外部订单丢弃；对账快照从最早一个未结订单发出前一分钟开始读 `userTrades`（最多回溯 7 天），以找回节点不在线时的成交。`async` 模式下上次进程发出但没有写进日志的东西，由这次对账找出；`barrier` 模式下没有写进日志的命令从未发出。
+- `run.toml` 记录 `resumed_from`；运行结束的打印与 Python 结果的 `resumed` 字典给出恢复来源、所用快照、重算的输入数、丢弃的半条记录字节数。
+- 日志的开头不是 `seq` 1（继续上一次运行，或旧段已被截断）时，回放自动从目录中覆盖它开头的最早快照开始：第一条记录是输入时需要该 `seq` 减一处的快照，是输出时需要该 `seq` 处的快照（它的输入已被删除）。`--from-snapshot` 给出的快照比日志开头还早时报错。
+- `persistence.truncate = true`（sandbox 与 live）：persist 线程每写出一个完整快照，就删除只含该快照之前记录的旧段（下一段的第一条记录不晚于快照的 `seq`），从最旧的删起，再删除比剩余第一条记录更早的快照文件，然后同步目录。剩余的段编号连续，读取器接受编号不从 0 开始的日志。中途崩溃只会少删，不会留下缺口。
+- 测试：backtest 运行的日志在 40 多个位置截断（段头内、记录中间、输入与输出之间），每次恢复出的引擎状态字节都与完整日志回放到同一输入时相同；截断旧段的日志从覆盖它的快照回放无偏差并核对其后全部快照；persist 线程只在完整快照之后截断；脚本化交易所端到端测试中第一次运行下单并部分成交，第二次运行（正常停止后，或最后一条记录被截断后）恢复状态、不再调用 `on_start`、对账无差异，其日志从上次的 `seq` 接着编号并能从起始快照回放。
 
 ### 16.4 命令行工具
 
 | 命令 | 作用 |
 | --- | --- |
-| `jarvis replay <run-dir> [--from-snapshot file] [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，并在每个快照点与目录中的快照文件逐字节比对；`--from-snapshot` 从该快照开始回放；可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
+| `jarvis replay <run-dir> [--from-snapshot file] [--until seq] [--dump-state]` | 回放运行目录，重算并逐字节比对输出，并在每个快照点与目录中的快照文件逐字节比对；`--from-snapshot` 从该快照开始回放，日志不从 `seq` 1 开始时自动从覆盖它开头的快照开始；可停在某个 `seq` 输出内核状态；只能构造本程序注册过的 C++ 策略，Python 策略用策略文件自身的 `--replay` |
 | `jarvis snapshot <file>` | 打印快照文件的 `seq`、完整与否、配置 hash、提交号与状态字节的 SHA-256（确定性门比较 Release 与 `-O0` 写出的快照用它） |
 | `jarvis fingerprint <log>` | 输出命令流的字节比对结果与 SHA-256 摘要，供确定性门使用 |
 | `jarvis redecode <raw> --codec <c>` | 从原始帧重建解码日志 |

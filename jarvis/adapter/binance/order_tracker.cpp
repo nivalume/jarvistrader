@@ -52,6 +52,26 @@ void OrderTracker::on_submit(const model::SubmitOrder& c) {
   orders_.insert_or_assign(std::string{c.client_order_id.view()}, std::move(o));
 }
 
+void OrderTracker::restore(const RecoveredOrder& r) {
+  Order o;
+  o.strategy = r.strategy;
+  o.symbol = symbols_->find(r.instrument_id).value_or(0);
+  o.instrument_id = r.instrument_id;
+  o.client_order_id = r.client_order_id;
+  o.side = r.side;
+  o.type = r.type;
+  o.venue_order_id = r.venue_order_id;
+  o.accepted = r.accepted;
+  o.last_update_ms = r.last_update_ms;
+  for (const std::uint64_t t : r.trades) {
+    o.trades[t] = TradeState::Full;
+  }
+  for (const std::uint64_t t : r.lite_trades) {
+    o.trades[t] = TradeState::Lite;
+  }
+  orders_.insert_or_assign(std::string{r.client_order_id.view()}, std::move(o));
+}
+
 std::vector<TrackedOrder> OrderTracker::unclosed() const {
   std::vector<TrackedOrder> out;
   for (const auto& [cid, o] : orders_) {

@@ -57,6 +57,7 @@ struct Persister::Impl {
   std::atomic<std::uint64_t> segments{0};
   std::atomic<std::uint64_t> snapshots{0};
   std::atomic<std::uint64_t> snapshots_dropped{0};
+  std::atomic<std::uint64_t> segments_removed{0};
 
   std::vector<std::byte> scratch; // the core's encoding buffer
   PersistConfig config;
@@ -86,12 +87,17 @@ struct Persister::Impl {
         waiting.pop_front();
         has_waiting.store(!waiting.empty(), std::memory_order_release);
       }
-      const Status s = writer.write_snapshot(next.info, next.body);
+      Status s = writer.write_snapshot(next.info, next.body);
+      std::uint32_t removed = 0;
+      if (core::ok(s) && config.truncate && next.info.complete) {
+        s = writer.truncate_before(next.info.seq, removed);
+      }
       if (!core::ok(s)) {
         fail(s);
         return false;
       }
       snapshots.fetch_add(1, std::memory_order_relaxed);
+      segments_removed.fetch_add(removed, std::memory_order_relaxed);
     }
     return true;
   }
@@ -186,6 +192,7 @@ PersistConfig persist_config(const node::NodeConfig& config) {
   PersistConfig out;
   out.barrier = config.persistence.mode == node::PersistenceMode::Barrier;
   out.sync_every = std::chrono::milliseconds{config.persistence.sync_every_ms};
+  out.truncate = config.persistence.truncate;
   return out;
 }
 
@@ -275,9 +282,10 @@ bool Persister::failed() const noexcept { return impl_->failed.load(std::memory_
 
 PersistStats Persister::stats() const noexcept {
   const Impl& p = *impl_;
-  return PersistStats{load(p.records),  load(p.position_seen), load(p.durable),
-                      load(p.syncs),    load(p.stalls),        load(p.max_lag),
-                      load(p.segments), load(p.snapshots),     load(p.snapshots_dropped)};
+  return PersistStats{load(p.records),         load(p.position_seen), load(p.durable),
+                      load(p.syncs),           load(p.stalls),        load(p.max_lag),
+                      load(p.segments),        load(p.snapshots),     load(p.snapshots_dropped),
+                      load(p.segments_removed)};
 }
 
 Status Persister::close() {

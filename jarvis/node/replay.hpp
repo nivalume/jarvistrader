@@ -36,7 +36,13 @@
 // node (engine/snapshot_schedule.hpp, persistence.snapshot_every) and compares it with the
 // snapshot file of that seq when the run directory has one; a different state is a divergence.
 // With `from_snapshot` the replay starts from that snapshot file instead of the first input: the
-// engine is restored from it and the log is replayed from the next input on.
+// engine is restored from it and the log is replayed from the next input on. A log that does not
+// start at seq 1 (a run resumed from an earlier one, or one whose older segments were truncated)
+// starts from the earliest snapshot of its directory that covers its first record.
+//
+// Recovery (recovery.hpp) replays into the engine a live node is about to run, and accepts the
+// end a crash leaves (`tolerate_torn_end`): a torn last record, and missing outputs or strategy
+// errors of the last input, whose records were not written yet.
 
 namespace jarvis::node {
 
@@ -45,6 +51,7 @@ struct ReplayOptions {
   bool dump_state = false;
   bool check_snapshots = true;
   std::optional<std::string> from_snapshot; // a snapshot file of this run
+  bool tolerate_torn_end = false;
 };
 
 struct Divergence {
@@ -59,7 +66,10 @@ struct ReplayReport {
   std::optional<Divergence> divergence;
   std::string state;                   // kernel_state_text after the last step, when dump_state
   std::uint64_t snapshots_checked = 0; // snapshot files that matched the replayed state
-  std::uint64_t start_seq = 0;         // with from_snapshot: the snapshot's seq
+  std::uint64_t start_seq = 0;         // the seq of the snapshot the replay started from, if any
+  std::uint64_t last_seq = 0;          // the last input stepped (or the snapshot's seq)
+  std::uint64_t torn_bytes = 0;        // tolerate_torn_end: a torn tail left out
+  bool torn_step = false; // tolerate_torn_end: the last input's outputs or errors were missing
 };
 
 namespace detail {
@@ -123,45 +133,36 @@ namespace detail {
 // One replay pass over a run log; see replay_run.
 template <strategy::StrategySet SS> class Replayer {
 public:
-  Replayer(const NodeConfig& config, SS& strategies, const ReplayOptions& options,
+  Replayer(const NodeConfig& config, engine::Engine<SS>& engine, const ReplayOptions& options,
            ReplayReport& report, std::string directory)
-      : engine_{kernel_config(config), strategies, error_policy(config)}, options_{&options},
-        report_{&report}, directory_{std::move(directory)},
-        snapshots_{config.persistence.snapshot_every} {
-    name_strategies(config, engine_.kernel());
-  }
+      : engine_{&engine}, options_{&options}, report_{&report}, directory_{std::move(directory)},
+        snapshots_{config.persistence.snapshot_every} {}
 
   // Restores the engine from a snapshot file of this run; the replay then starts after its seq.
   [[nodiscard]] core::Status restore(const std::string& path, std::string& error) {
-    std::vector<std::byte> file;
-    core::Status s = read_file_bytes(path, file);
-    model::wire::LogHeader header;
-    SnapshotInfo info;
-    std::span<const std::byte> body;
-    if (core::ok(s)) {
-      s = decode_snapshot(file, header, info, body);
+    LoadedSnapshot snapshot;
+    core::Status s = load_snapshot(path, snapshot, error);
+    if (!core::ok(s)) {
+      return s;
     }
-    if (core::ok(s)) {
-      s = engine_.load_state(body);
-    }
+    s = engine_->load_state(snapshot.body());
     if (!core::ok(s)) {
       error = path + ": cannot restore the snapshot: " + std::string{core::to_string(s)};
       return s;
     }
-    if (!info.complete) {
-      error = path + ": the snapshot lacks the state of a strategy that does not describe it";
-      return core::Status::InvalidState;
-    }
-    lifecycle_.restore(engine_.kernel().node_state);
-    snapshots_.resume_after(info.seq);
-    skip_until_ = info.seq;
-    last_seq_ = info.seq;
-    report_->start_seq = info.seq;
+    lifecycle_.restore(engine_->kernel().node_state);
+    snapshots_.resume_after(snapshot.info.seq);
+    skip_until_ = snapshot.info.seq;
+    last_seq_ = snapshot.info.seq;
+    restored_ = true;
+    report_->start_seq = snapshot.info.seq;
+    report_->last_seq = snapshot.info.seq;
     return core::Status::Ok;
   }
 
   [[nodiscard]] core::Status run(EventLogReader& reader, std::string& error) {
     model::wire::RecordView record;
+    bool first = true;
     while (!report_->divergence && !stopped_) {
       const core::Status s = reader.next(record);
       if (s == core::Status::EndOfStream) {
@@ -173,6 +174,13 @@ public:
                 std::string{core::to_string(s)};
         return s;
       }
+      if (first) {
+        first = false;
+        const core::Status started = start_point(record, error);
+        if (!core::ok(started)) {
+          return started;
+        }
+      }
       if (record.header.seq <= skip_until_) {
         continue; // before the snapshot the replay started from
       }
@@ -183,13 +191,42 @@ public:
         return handled;
       }
     }
+    report_->last_seq = last_seq_;
     if (options_->dump_state) {
-      report_->state = kernel_state_text(engine_.kernel());
+      report_->state = kernel_state_text(engine_->kernel());
     }
     return core::Status::Ok;
   }
 
 private:
+  // A log that starts after seq 1 needs a snapshot at or after the state before its first
+  // record: the seq before it when that is an input, its own seq when it is an output (its input
+  // is gone).
+  core::Status start_point(const model::wire::RecordView& record, std::string& error) {
+    const bool output = record.header.kind >= model::wire::kFirstOutputKind;
+    const std::uint64_t needed = output ? record.header.seq : record.header.seq - 1;
+    if (restored_) {
+      if (skip_until_ < needed) {
+        error = "the snapshot at seq " + std::to_string(skip_until_) +
+                " is older than the log, which starts at seq " + std::to_string(record.header.seq);
+        return core::Status::InvalidArgument;
+      }
+      return core::Status::Ok;
+    }
+    if (needed == 0) {
+      return core::Status::Ok;
+    }
+    SnapshotEntry snapshot;
+    if (directory_.empty() ||
+        !pick_snapshot(directory_, needed, SnapshotPick::Earliest, snapshot)) {
+      error = "the log starts at seq " + std::to_string(record.header.seq) +
+              " (it continues an earlier run, or its older segments were removed) and no "
+              "complete snapshot of this build in the directory covers it";
+      return core::Status::NotFound;
+    }
+    return restore(snapshot.path, error);
+  }
+
   void diverge(std::uint64_t seq, std::string recorded, std::string replayed) {
     report_->divergence = Divergence{seq, std::move(recorded), std::move(replayed)};
   }
@@ -262,7 +299,7 @@ private:
 
   void step(const model::wire::RecordView& record, const model::Event& event) {
     const core::EventKey key{record.header.ts, record.header.source_id, record.header.seq};
-    const core::Status s = engine_.step(key, event);
+    const core::Status s = engine_->step(key, event);
     if (!core::ok(s)) {
       diverge(record.header.seq, input_line(record.header, event),
               "the step failed: " + std::string{core::to_string(s)});
@@ -270,13 +307,13 @@ private:
     }
     computed_.items.clear();
     matched_ = 0;
-    static_cast<void>(engine_.flush_outputs(computed_));
+    static_cast<void>(engine_->flush_outputs(computed_));
     if (!std::holds_alternative<model::StrategyError>(event)) {
-      for (const strategy::StrategyFailure& f : engine_.failures()) {
+      for (const strategy::StrategyFailure& f : engine_->failures()) {
         errors_.add(f);
       }
     }
-    engine_.clear_failures();
+    engine_->clear_failures();
     last_seq_ = record.header.seq;
     ++report_->inputs;
     if (snapshots_.due(record.header.seq, std::holds_alternative<model::BatchEnd>(event))) {
@@ -301,7 +338,7 @@ private:
       return;
     }
     std::vector<std::byte> state;
-    if (!core::ok(engine_.save_state(state))) {
+    if (!core::ok(engine_->save_state(state))) {
       diverge(seq, "a snapshot", "no snapshot: saving the state failed");
       return;
     }
@@ -319,9 +356,14 @@ private:
     ++report_->snapshots_checked;
   }
 
-  // End of the log: every computed output and failure must have been recorded.
+  // End of the log: every computed output and failure must have been recorded, unless the log
+  // may end where a crash cut it.
   void finish() {
     if (report_->divergence) {
+      return;
+    }
+    if (options_->tolerate_torn_end) {
+      report_->torn_step = matched_ < computed_.items.size() || !errors_.empty();
       return;
     }
     if (matched_ < computed_.items.size()) {
@@ -331,7 +373,7 @@ private:
     }
   }
 
-  engine::Engine<SS> engine_;
+  engine::Engine<SS>* engine_;
   engine::Lifecycle lifecycle_;
   const ReplayOptions* options_;
   ReplayReport* report_;
@@ -342,23 +384,25 @@ private:
   ErrorCheck errors_;
   std::size_t matched_ = 0;
   std::uint64_t last_seq_ = 0;
+  bool restored_ = false;
   bool stopped_ = false;
 };
 
 } // namespace detail
 
+// Replays the run log in `directory` into `engine`, built from `config` and not yet stepped.
 template <strategy::StrategySet SS>
-[[nodiscard]] core::Status replay_run(const std::string& directory, const NodeConfig& config,
-                                      SS& strategies, const ReplayOptions& options,
-                                      ReplayReport& report, std::string& error) {
+[[nodiscard]] core::Status replay_into(const std::string& directory, const NodeConfig& config,
+                                       engine::Engine<SS>& engine, const ReplayOptions& options,
+                                       ReplayReport& report, std::string& error) {
   report = ReplayReport{};
   EventLogReader reader;
-  const core::Status s = reader.open(directory);
+  const core::Status s = reader.open(directory, EventLogReadOptions{options.tolerate_torn_end});
   if (!core::ok(s)) {
     error = directory + ": cannot open the run log: " + std::string{core::to_string(s)};
     return s;
   }
-  detail::Replayer<SS> replayer{config, strategies, options, report, directory};
+  detail::Replayer<SS> replayer{config, engine, options, report, directory};
   if (options.from_snapshot) {
     const core::Status restored = replayer.restore(*options.from_snapshot, error);
     if (!core::ok(restored)) {
@@ -369,7 +413,17 @@ template <strategy::StrategySet SS>
   if (!core::ok(r)) {
     error = directory + ": " + error;
   }
+  report.torn_bytes = reader.torn_bytes();
   return r;
+}
+
+template <strategy::StrategySet SS>
+[[nodiscard]] core::Status replay_run(const std::string& directory, const NodeConfig& config,
+                                      SS& strategies, const ReplayOptions& options,
+                                      ReplayReport& report, std::string& error) {
+  engine::Engine<SS> engine{kernel_config(config), strategies, error_policy(config)};
+  name_strategies(config, engine.kernel());
+  return replay_into(directory, config, engine, options, report, error);
 }
 
 } // namespace jarvis::node

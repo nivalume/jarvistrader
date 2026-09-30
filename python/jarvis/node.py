@@ -70,6 +70,10 @@ class RunResult:
     log: Mapping[str, int] | None = None  # sandbox and live: the persist thread's counters
     epoch: int | None = None  # live: the ClientOrderId epoch this run took
     warnings: tuple[str, ...] = ()  # live: what the startup checks warned about
+    # live with persistence.resume: the run it continued ("from"), the snapshot ("snapshot_seq"),
+    # the inputs replayed after it, the last seq, and what a crash left ("torn_bytes",
+    # "torn_step")
+    resumed: Mapping[str, object] | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -107,6 +111,8 @@ class RunResult:
             lines.append("log: " + ", ".join(f"{k} {v}" for k, v in self.log.items()))
         if self.epoch is not None:
             lines.append(f"epoch: {self.epoch}")
+        if self.resumed is not None:
+            lines.append("resumed: " + ", ".join(f"{k} {v}" for k, v in self.resumed.items()))
         lines.extend(f"warning: {w}" for w in self.warnings)
         for s in self.strategies:
             mean = s.total_ns / s.calls / 1000 if s.calls else 0.0

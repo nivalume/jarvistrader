@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <utility>
 
@@ -45,6 +46,40 @@ public:
       sift_down(0);
     }
     return true;
+  }
+
+  // The entry with the smallest key among those for which match(entry) is true, or null, without
+  // changing the heap: it looks below an entry only when that entry does not match (a match's
+  // descendants have larger keys), so it reads about as many entries as there are non-matching
+  // ones above the answer.
+  template <typename Predicate>
+  [[nodiscard]] const Entry* min_where(Predicate&& match) const noexcept {
+    const Entry* best = nullptr;
+    // Depth first; a pending right child per level at most, and a heap is at most 64 levels.
+    std::array<std::size_t, 128> pending{};
+    std::size_t depth = 0;
+    if (!heap_.empty()) {
+      pending[depth++] = 0;
+    }
+    while (depth > 0) {
+      const std::size_t i = pending[--depth];
+      const Entry& e = heap_[i];
+      if (best != nullptr && !(e.key < best->key)) {
+        continue; // nothing below it is smaller either
+      }
+      if (match(e)) {
+        best = &e;
+        continue;
+      }
+      const std::size_t left = 2 * i + 1;
+      if (left + 1 < heap_.size()) {
+        pending[depth++] = left + 1;
+      }
+      if (left < heap_.size()) {
+        pending[depth++] = left;
+      }
+    }
+    return best;
   }
 
   // Keeps only entries for which keep(entry) is true, then restores the heap. Used to purge

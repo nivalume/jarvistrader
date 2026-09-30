@@ -27,8 +27,10 @@
 #include "jarvis/node/log_source.hpp"
 #include "jarvis/node/node_cli.hpp"
 #include "jarvis/node/node_main.hpp"
+#include "jarvis/node/recovery.hpp"
 #include "jarvis/node/replay.hpp"
 #include "jarvis/node/run_dir.hpp"
+#include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
@@ -125,6 +127,8 @@ struct Echo {
   std::int64_t shift_raw = 0;
   std::uint64_t heartbeats = 0;
 
+  template <typename Ar> void state(Ar& ar) { ar(heartbeats); } // its snapshots are complete
+
   static Status create(const node::StrategyParams& params, Echo& out) {
     Status s = params.get_or<std::int64_t>("timer_ms", 0, out.timer_ms);
     if (jarvis::core::ok(s)) {
@@ -206,7 +210,7 @@ Recorded record_run(const TempDir& tmp, const std::string& text, std::string_vie
   st::StaticStrategySet<Echo> set{make_echo(config.strategies[0])};
   node::BacktestRequest request;
   request.config = &config;
-  request.manifest = node::RunManifest{text, "test.toml", {}};
+  request.manifest = node::RunManifest{text, "test.toml", {}, {}};
   request.out = tmp.sub(out_name);
   Recorded r;
   std::string error;
@@ -236,6 +240,50 @@ node::ReplayReport replay(const std::string& directory, std::string_view param,
   node::ReplayReport report;
   REQUIRE(node::replay_run(directory, config, set, options, report, error) == Status::Ok);
   return report;
+}
+
+// Echo without a state of its own: a node running it cannot resume.
+struct Forgetful {
+  static Status on_start(st::Context& ctx) { return ctx.subscribe_trades(btc()); }
+};
+
+using EchoEngine = jarvis::engine::Engine<st::StaticStrategySet<Echo>>;
+
+// The kernel state of `engine` (Engine::save_state).
+std::vector<std::byte> state_of(EchoEngine& engine) {
+  std::vector<std::byte> out;
+  REQUIRE(engine.save_state(out) == Status::Ok);
+  return out;
+}
+
+// Copies the run directory `from` to `to`, rewriting its log into segments of about
+// `segment_bytes`; with `truncate_at`, the segments before the snapshot of that seq are then
+// removed as persistence.truncate does.
+void copy_run(const std::string& from, const std::string& to, std::uint64_t segment_bytes,
+              std::optional<std::uint64_t> truncate_at, std::uint32_t& removed) {
+  namespace fs = std::filesystem;
+  fs::create_directories(to);
+  for (const auto& entry : fs::directory_iterator(from)) {
+    if (entry.path().extension() != ".jlog") {
+      fs::copy_file(entry.path(), fs::path{to} / entry.path().filename());
+    }
+  }
+  node::EventLogReader reader;
+  REQUIRE(reader.open(from) == Status::Ok);
+  node::EventLogWriter writer;
+  node::EventLogOptions options;
+  options.segment_bytes = segment_bytes;
+  REQUIRE(writer.open(to, reader.header(), options) == Status::Ok);
+  wire::RecordView record;
+  while (reader.next(record) == Status::Ok) {
+    REQUIRE(writer.append_record(record.bytes) == Status::Ok);
+  }
+  removed = 0;
+  if (truncate_at) {
+    REQUIRE(writer.flush() == Status::Ok);
+    REQUIRE(writer.truncate_before(*truncate_at, removed) == Status::Ok);
+  }
+  REQUIRE(writer.close() == Status::Ok);
 }
 
 } // namespace
@@ -412,5 +460,145 @@ TEST_SUITE("unit") {
     CHECK(node::parse_node_args({"--replay", "r", "--until", "5", "--dump-state"}, args, error));
     CHECK(args.until == std::optional<std::uint64_t>{5});
     CHECK(args.dump_state);
+  }
+
+  TEST_CASE("a log whose older segments were removed replays from the snapshot covering it") {
+    const TempDir tmp{"truncated"};
+    const std::string text = config_text(make_catalog(tmp), "timer_ms = 3600000") +
+                             "\n[persistence]\nsnapshot_every = 10\n";
+    const Recorded run = record_run(tmp, text, "run");
+    const std::vector<node::SnapshotEntry> snapshots = node::list_snapshots(run.directory);
+    REQUIRE(snapshots.size() >= 4);
+    const node::SnapshotEntry& middle = snapshots[snapshots.size() / 2];
+
+    std::uint32_t removed = 0;
+    const std::string copy = tmp.sub("copy");
+    copy_run(run.directory, copy, 1024, middle.seq, removed);
+    CHECK(removed > 0);
+    CHECK_FALSE(std::filesystem::exists(copy + "/" + node::segment_name(0)));
+    node::EventLogReader reader;
+    REQUIRE(reader.open(copy) == Status::Ok);
+    CHECK(reader.header().segment_index == removed);
+    wire::RecordView first;
+    REQUIRE(reader.next(first) == Status::Ok);
+    CHECK(first.header.seq > 1);
+    CHECK(first.header.seq <= middle.seq);
+    // The snapshots older than the first record left are gone; the one truncated at is kept.
+    const std::vector<node::SnapshotEntry> kept = node::list_snapshots(copy);
+    REQUIRE_FALSE(kept.empty());
+    CHECK(kept.front().seq >= first.header.seq);
+    CHECK(std::filesystem::exists(middle.path));
+
+    // The replay starts from the earliest snapshot that covers the first record, and checks
+    // every snapshot after it.
+    const node::ReplayReport report = replay(copy, "");
+    INFO((report.divergence ? report.divergence->recorded + " / " + report.divergence->replayed
+                            : std::string{}));
+    CHECK_FALSE(report.divergence.has_value());
+    CHECK(report.start_seq == kept.front().seq);
+    CHECK(report.inputs == run.result.summary.inputs - report.start_seq);
+    CHECK(report.snapshots_checked == kept.size() - 1);
+
+    // A snapshot older than the log cannot start it.
+    node::NodeConfig config;
+    std::string error;
+    REQUIRE(node::load_run_config(copy, config, error) == Status::Ok);
+    st::StaticStrategySet<Echo> set{make_echo(config.strategies[0])};
+    node::ReplayOptions options;
+    options.from_snapshot = snapshots.front().path;
+    node::ReplayReport refused;
+    CHECK(node::replay_run(copy, config, set, options, refused, error) == Status::InvalidArgument);
+    CHECK(error.find("older than the log") != std::string::npos);
+  }
+
+  TEST_CASE("recovery restores the state a run log ends in, wherever a crash cut it") {
+    const TempDir tmp{"recover"};
+    const std::string text = config_text(make_catalog(tmp), "timer_ms = 3600000") +
+                             "\n[persistence]\nsnapshot_every = 10\n";
+    const Recorded run = record_run(tmp, text, "run");
+    const node::NodeConfig config = parse(text);
+    const std::string segment = run.directory + "/" + node::segment_name(0);
+    const auto size = static_cast<std::uint64_t>(std::filesystem::file_size(segment));
+
+    std::vector<std::uint64_t> cuts{size, size - 1, size - 3, 10, 0};
+    for (std::uint64_t i = 1; i < 40; ++i) {
+      cuts.push_back(size * i / 40);
+    }
+    int n = 0;
+    for (const std::uint64_t cut : cuts) {
+      CAPTURE(cut);
+      const std::string crashed = tmp.sub("crashed-" + std::to_string(n++));
+      std::filesystem::copy(run.directory, crashed);
+      std::filesystem::resize_file(crashed + "/" + node::segment_name(0), cut);
+
+      st::StaticStrategySet<Echo> set{make_echo(config.strategies[0])};
+      EchoEngine engine{node::kernel_config(config), set, node::error_policy(config)};
+      node::name_strategies(config, engine.kernel());
+      node::RecoveryReport report;
+      std::string error;
+      const Status s = node::recover_run(crashed, config, engine, report, error);
+      INFO(error);
+      REQUIRE(s == Status::Ok);
+      CHECK((report.torn_bytes != 0 || cut == size || report.last_seq == 0));
+
+      // The same state as replaying the whole run up to that input.
+      st::StaticStrategySet<Echo> ref_set{make_echo(config.strategies[0])};
+      EchoEngine reference{node::kernel_config(config), ref_set, node::error_policy(config)};
+      node::name_strategies(config, reference.kernel());
+      if (report.last_seq != 0) {
+        node::ReplayOptions until;
+        until.until = report.last_seq;
+        node::ReplayReport replayed;
+        REQUIRE(node::replay_into(run.directory, config, reference, until, replayed, error) ==
+                Status::Ok);
+        REQUIRE_FALSE(replayed.divergence.has_value());
+      }
+      CHECK(state_of(engine) == state_of(reference));
+      CHECK(set.get<0>().heartbeats == ref_set.get<0>().heartbeats);
+    }
+  }
+
+  TEST_CASE("recovery refuses another configuration and strategies without a state") {
+    const TempDir tmp{"refuse"};
+    const std::string catalog = make_catalog(tmp);
+    const std::string text = config_text(catalog, "timer_ms = 3600000");
+    const Recorded run = record_run(tmp, text, "run");
+    std::string error;
+    node::RecoveryReport report;
+
+    const node::NodeConfig other = parse(config_text(catalog, "timer_ms = 60000"));
+    st::StaticStrategySet<Echo> set{make_echo(other.strategies[0])};
+    EchoEngine engine{node::kernel_config(other), set, node::error_policy(other)};
+    CHECK(node::recover_run(run.directory, other, engine, report, error) ==
+          Status::InvalidArgument);
+    CHECK(error.find("different configuration") != std::string::npos);
+
+    const node::NodeConfig config = parse(text);
+    st::StaticStrategySet<Forgetful> forgetful{Forgetful{}};
+    jarvis::engine::Engine<st::StaticStrategySet<Forgetful>> plain{
+        node::kernel_config(config), forgetful, node::error_policy(config)};
+    CHECK(node::recover_run(run.directory, config, plain, report, error) == Status::InvalidState);
+    CHECK(error.find("does not describe its own state") != std::string::npos);
+  }
+
+  TEST_CASE("the runs of a node are found where persistence.dir puts them, oldest first") {
+    const TempDir tmp{"runs"};
+    node::NodeConfig config;
+    config.node.id = "mm01";
+    config.persistence.dir = tmp.sub("runs") + "/{node_id}/{run_id}";
+    const std::string base = tmp.sub("runs") + "/mm01/";
+    for (const char* id : {"20260930T120000Z-10", "20260930T120000Z", "20260930T115959Z",
+                           "20260930T120000Z-2", "20261001T000000Z-no-log"}) {
+      std::filesystem::create_directories(base + id);
+      if (!std::string_view{id}.ends_with("no-log")) {
+        std::ofstream{base + id + "/" + node::segment_name(0)} << "x";
+      }
+    }
+    CHECK(node::node_runs(config) ==
+          std::vector<std::string>{base + "20260930T115959Z", base + "20260930T120000Z",
+                                   base + "20260930T120000Z-2", base + "20260930T120000Z-10"});
+    CHECK(node::resume_source(config) == base + "20260930T120000Z-10");
+    config.node.id = "other";
+    CHECK(node::node_runs(config).empty());
   }
 }

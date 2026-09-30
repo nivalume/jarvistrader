@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -9,6 +10,7 @@
 #include <iterator>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <toml++/toml.hpp>
@@ -90,7 +92,29 @@ std::string manifest_text(const NodeConfig& config, const RunManifest& manifest)
   }
   out += "]\n";
   out += "config_hash = " + toml_string(hex(config_hash(config))) + "\n";
+  if (!manifest.resumed_from.empty()) {
+    out += "resumed_from = " + toml_string(manifest.resumed_from) + "\n";
+  }
   return out;
+}
+
+// Run ids order by their UTC stamp, then by the -2, -3, ... a taken name got.
+bool earlier_run_id(std::string_view a, std::string_view b) {
+  const auto split = [](std::string_view id, std::string_view& stamp) {
+    const std::size_t dash = id.find('-');
+    stamp = id.substr(0, dash);
+    std::uint64_t attempt = 1;
+    if (dash != std::string_view::npos) {
+      const std::string_view digits = id.substr(dash + 1);
+      static_cast<void>(std::from_chars(digits.data(), digits.data() + digits.size(), attempt));
+    }
+    return attempt;
+  };
+  std::string_view sa;
+  std::string_view sb;
+  const std::uint64_t na = split(a, sa);
+  const std::uint64_t nb = split(b, sb);
+  return sa != sb ? sa < sb : na < nb;
 }
 
 } // namespace
@@ -159,6 +183,47 @@ Status create_run_directory(const NodeConfig& config, const RunManifest& manifes
     return Status::IoError;
   }
   return Status::Ok;
+}
+
+std::vector<std::string> node_runs(const NodeConfig& config) {
+  const std::string base = replace_all(config.persistence.dir, "{node_id}", config.node.id);
+  constexpr std::string_view kRunId = "{run_id}";
+  const std::size_t at = base.find(kRunId);
+  if (at == std::string::npos) {
+    return has_log(base) ? std::vector<std::string>{base} : std::vector<std::string>{};
+  }
+  // The path component holding {run_id}: its parent is listed, and the entries matching the
+  // component's text around {run_id} are the runs.
+  const std::size_t slash = base.rfind('/', at);
+  const std::size_t begin = slash == std::string::npos ? 0 : slash + 1;
+  const std::size_t end = std::min(base.find('/', at), base.size());
+  const std::string parent =
+      slash == std::string::npos ? "." : base.substr(0, std::max<std::size_t>(slash, 1));
+  const std::string prefix = base.substr(begin, at - begin);
+  const std::string suffix = base.substr(at + kRunId.size(), end - at - kRunId.size());
+  const std::string rest = base.substr(end);
+  std::vector<std::pair<std::string, std::string>> runs; // run id, directory
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(parent, ec)) {
+    const std::string name = entry.path().filename().string();
+    if (name.size() <= prefix.size() + suffix.size() || !name.starts_with(prefix) ||
+        !name.ends_with(suffix)) {
+      continue;
+    }
+    std::string id = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+    const std::string dir = entry.path().string() + replace_all(rest, kRunId, id);
+    if (has_log(dir)) {
+      runs.emplace_back(std::move(id), dir);
+    }
+  }
+  std::ranges::sort(runs,
+                    [](const auto& a, const auto& b) { return earlier_run_id(a.first, b.first); });
+  std::vector<std::string> out;
+  out.reserve(runs.size());
+  for (auto& run : runs) {
+    out.push_back(std::move(run.second));
+  }
+  return out;
 }
 
 Status load_run_config(const std::string& directory, NodeConfig& config, std::string& error) {

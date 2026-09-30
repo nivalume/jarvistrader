@@ -111,32 +111,42 @@ public:
     return false;
   }
 
-  // The next live timer (earliest deadline, then schedule order) without firing it.
-  [[nodiscard]] bool peek(FiredTimer& out) noexcept {
+  // Pops the stale entries off the top of the heap, so that the top is a live timer. The engine
+  // calls it at the end of every step: between steps peek() then finds the next timer at once.
+  void prune() noexcept {
     while (!heap_.empty()) {
       const auto& top = heap_.top();
       const Slot* slot = slots_.get(top.payload.handle);
       if (slot != nullptr && slot->armed_seq == top.key.seq) {
-        out = FiredTimer{top.payload.handle, slot->key, top.key.ts};
-        return true;
+        return;
       }
       PriorityQueue<Entry>::Entry discarded;
       static_cast<void>(heap_.pop(discarded));
     }
-    return false;
   }
 
-  [[nodiscard]] std::optional<UnixNanos> next_deadline() noexcept {
-    while (!heap_.empty()) {
-      const auto& top = heap_.top();
-      const Slot* slot = slots_.get(top.payload.handle);
-      if (slot != nullptr && slot->armed_seq == top.key.seq) {
-        return top.key.ts;
-      }
-      PriorityQueue<Entry>::Entry discarded;
-      static_cast<void>(heap_.pop(discarded));
+  // The next live timer (earliest deadline, then schedule order) without firing it. It changes
+  // nothing, not even the stale entries: what a node's driver asks between steps must leave the
+  // state as a replay, which does not ask, has it (EngineState snapshots compare it). After
+  // prune() the answer is the top entry.
+  [[nodiscard]] bool peek(FiredTimer& out) const noexcept {
+    const auto* next = heap_.min_where([this](const PriorityQueue<Entry>::Entry& e) {
+      const Slot* slot = slots_.get(e.payload.handle);
+      return slot != nullptr && slot->armed_seq == e.key.seq;
+    });
+    if (next == nullptr) {
+      return false;
     }
-    return std::nullopt;
+    out = FiredTimer{next->payload.handle, slots_.get(next->payload.handle)->key, next->key.ts};
+    return true;
+  }
+
+  [[nodiscard]] std::optional<UnixNanos> next_deadline() const noexcept {
+    FiredTimer next;
+    if (!peek(next)) {
+      return std::nullopt;
+    }
+    return next.deadline;
   }
 
   [[nodiscard]] std::size_t active() const noexcept { return slots_.size(); }

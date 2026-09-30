@@ -18,6 +18,7 @@
 #include "jarvis/core/priority_queue.hpp"
 #include "jarvis/core/rng.hpp"
 #include "jarvis/core/sha256.hpp"
+#include "jarvis/core/state.hpp"
 #include "jarvis/core/status.hpp"
 #include "jarvis/core/time.hpp"
 #include "jarvis/testkit/alloc.hpp"
@@ -381,6 +382,48 @@ TEST_SUITE("property") {
         ++fires;
       }
       CHECK(fires == expected_fires);
+    });
+  }
+  TEST_CASE("TimerQueue::peek names the timer that fires next and leaves the queue unchanged") {
+    jarvis::testkit::for_all([](Gen& gen) {
+      constexpr std::uint32_t kCapacity = 8;
+      core::TimerQueue timers{kCapacity};
+      std::vector<core::TimerHandle> live;
+      std::uint64_t now = 0;
+      for (int step = 0; step < 300; ++step) {
+        const std::uint64_t pick = gen.below(3);
+        if (pick == 0 && live.size() < kCapacity) {
+          core::TimerHandle h;
+          REQUIRE(timers.schedule(UnixNanos{now + gen.range_u(0, 200)}, core::DurationNanos{},
+                                  {0, static_cast<std::uint32_t>(step)}, h) == Status::Ok);
+          live.push_back(h);
+        } else if (pick == 1 && !live.empty()) {
+          const auto index = static_cast<std::size_t>(gen.below(live.size()));
+          REQUIRE(timers.cancel(live[index]) == Status::Ok);
+          live[index] = live.back();
+          live.pop_back();
+        } else {
+          // What peek says against what pop_due then fires, with the state bytes unchanged by the
+          // peek (stale entries included).
+          std::vector<std::byte> before;
+          REQUIRE(core::save_state(timers, before) == Status::Ok);
+          core::FiredTimer peeked;
+          const bool any = timers.peek(peeked);
+          std::vector<std::byte> after;
+          REQUIRE(core::save_state(timers, after) == Status::Ok);
+          CHECK(before == after);
+          CHECK(any == !live.empty());
+          if (any) {
+            now = peeked.deadline.value();
+            core::FiredTimer fired;
+            REQUIRE(timers.pop_due(UnixNanos{now}, fired));
+            CHECK(fired.handle == peeked.handle);
+            CHECK(fired.key == peeked.key);
+            CHECK(fired.deadline == peeked.deadline);
+            std::erase(live, fired.handle);
+          }
+        }
+      }
     });
   }
   TEST_CASE("hardware and table CRC-32C agree") {
