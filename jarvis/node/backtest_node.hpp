@@ -33,10 +33,11 @@ struct NoHook {
   static void before_input(const model::Event& /*event*/) noexcept {}
 };
 
-// The driver's Recorder over the run log.
-template <InputHook Hook> class LogRecorder {
+// The driver's Recorder over the run log: EventLogWriter on the core thread (backtest), or the
+// persist thread's queue (live::Persister, sandbox and live).
+template <InputHook Hook, typename Writer = EventLogWriter> class LogRecorder {
 public:
-  LogRecorder(EventLogWriter& writer, Hook& hook) noexcept : writer_{&writer}, hook_{&hook} {}
+  LogRecorder(Writer& writer, Hook& hook) noexcept : writer_{&writer}, hook_{&hook} {}
   [[nodiscard]] core::Status record(const core::EventKey& key, const model::Event& event) {
     hook_->before_input(event);
     return writer_->append(key, event);
@@ -46,7 +47,7 @@ public:
   }
 
 private:
-  EventLogWriter* writer_;
+  Writer* writer_;
   Hook* hook_;
 };
 
@@ -136,10 +137,10 @@ template <strategy::StrategySet SS, typename Source, InputHook Hook>
   if (!core::ok(s)) {
     return s;
   }
+  // A backtest writes the log on the core thread and never syncs it: async and barrier differ
+  // only where commands reach a venue (section 16.2).
   EventLogWriter writer;
-  EventLogOptions log_options;
-  log_options.sync_on_flush = config.persistence.mode == PersistenceMode::Barrier;
-  s = writer.open(result.directory, run_header(config, request.extras), log_options);
+  s = writer.open(result.directory, run_header(config, request.extras));
   if (!core::ok(s)) {
     error = "cannot open the run log in " + result.directory;
     return s;

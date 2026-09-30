@@ -18,6 +18,7 @@
 #include "jarvis/live/clock.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
+#include "jarvis/live/persist.hpp"
 #include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/config.hpp"
@@ -51,6 +52,7 @@ struct SandboxResult {
   backtest::RunSummary summary;
   MarketFeedStats feed;
   std::uint64_t admin_commands = 0; // taken from the admin socket
+  PersistStats persist;
 };
 
 // What is built before the loop starts: the instruments (exchangeInfo), the preamble (their
@@ -222,18 +224,17 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   engine::Engine<SS> engine{node::kernel_config(config), strategies, node::error_policy(config)};
   node::name_strategies(config, engine.kernel());
 
-  node::EventLogWriter writer;
+  // Commands never leave the process (the simulated venue), so barrier works as async here.
+  std::unique_ptr<Persister> persister;
   const bool persist = config.persistence.mode != node::PersistenceMode::None;
   if (persist) {
     s = node::create_run_directory(config, request.manifest, request.out, result.directory, error);
     if (!core::ok(s)) {
       return s;
     }
-    node::EventLogOptions log_options;
-    log_options.sync_on_flush = config.persistence.mode == node::PersistenceMode::Barrier;
-    s = writer.open(result.directory, node::run_header(config, request.extras), log_options);
+    persister = std::make_unique<Persister>(persist_config(config));
+    s = persister->open(result.directory, node::run_header(config, request.extras), error);
     if (!core::ok(s)) {
-      error = "cannot open the run log in " + result.directory;
       return s;
     }
     if (config.persistence.raw_frames != node::RawFrames::Off) {
@@ -261,7 +262,7 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   SandboxPump<Hook> pump{clock, feed, source, hook, request.stop, deadline};
   pump.attach_admin(admin.get(), &engine.kernel());
   if (persist) {
-    node::LogRecorder<Hook> recorder{writer, hook};
+    node::LogRecorder<Hook, Persister> recorder{*persister, hook};
     s = detail::run_wired(config, engine, plan, source, recorder, pump, start, result, error);
   } else {
     node::NullRecorder<Hook> recorder{hook};
@@ -274,9 +275,11 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   result.feed = feed.stats();
   if (persist) {
-    const core::Status closed = writer.close();
+    const core::Status closed = persister->close();
+    result.persist = persister->stats();
     if (core::ok(s) && !core::ok(closed)) {
-      error = "cannot finish the run log in " + result.directory;
+      error = "cannot finish the run log in " + result.directory + ": " +
+              std::string{core::to_string(closed)};
       return closed;
     }
   }

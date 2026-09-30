@@ -40,6 +40,25 @@ Status write_all(int fd, std::span<const std::byte> bytes) {
   return Status::Ok;
 }
 
+Status sync_file(int fd) {
+#if defined(__APPLE__)
+  return ::fsync(fd) == 0 ? Status::Ok : Status::IoError;
+#else
+  return ::fdatasync(fd) == 0 ? Status::Ok : Status::IoError;
+#endif
+}
+
+// A new directory entry survives a crash once the directory itself is synced.
+Status sync_directory(const std::string& directory) {
+  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) {
+    return Status::IoError;
+  }
+  const Status s = ::fsync(fd) == 0 ? Status::Ok : Status::IoError;
+  ::close(fd);
+  return s;
+}
+
 bool same_log(const wire::LogHeader& a, const wire::LogHeader& b) {
   return a.format_version == b.format_version && a.schema_version == b.schema_version &&
          a.config_hash == b.config_hash && a.seed == b.seed &&
@@ -57,7 +76,7 @@ std::string segment_name(std::uint32_t index) {
 EventLogWriter::EventLogWriter(EventLogWriter&& other) noexcept
     : fd_{std::exchange(other.fd_, -1)}, directory_{std::move(other.directory_)},
       header_{other.header_}, options_{other.options_}, segment_size_{other.segment_size_},
-      records_{other.records_}, buffer_{std::move(other.buffer_)},
+      records_{other.records_}, position_{other.position_}, buffer_{std::move(other.buffer_)},
       scratch_{std::move(other.scratch_)} {}
 
 EventLogWriter& EventLogWriter::operator=(EventLogWriter&& other) noexcept {
@@ -69,6 +88,7 @@ EventLogWriter& EventLogWriter::operator=(EventLogWriter&& other) noexcept {
     options_ = other.options_;
     segment_size_ = other.segment_size_;
     records_ = other.records_;
+    position_ = other.position_;
     buffer_ = std::move(other.buffer_);
     scratch_ = std::move(other.scratch_);
   }
@@ -97,6 +117,7 @@ Status EventLogWriter::open(const std::string& directory, const wire::LogHeader&
   header_.segment_index = 0;
   options_ = options;
   records_ = 0;
+  position_ = 0;
   buffer_.clear();
   buffer_.reserve(kFlushThreshold + kMaxRecordBytes);
   scratch_.assign(kMaxRecordBytes, std::byte{0});
@@ -108,6 +129,12 @@ Status EventLogWriter::open_segment() {
   fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
   if (fd_ < 0) {
     return errno == EEXIST ? Status::AlreadyExists : Status::IoError;
+  }
+  if (options_.durable) {
+    const Status s = sync_directory(directory_);
+    if (!core::ok(s)) {
+      return s;
+    }
   }
   std::array<std::byte, kMaxHeaderBytes> bytes{};
   std::size_t written = 0;
@@ -145,6 +172,9 @@ Status EventLogWriter::append_record(std::span<const std::byte> record) {
   }
   if (segment_size_ + record.size() > options_.segment_bytes && records_ > 0) {
     Status s = flush();
+    if (core::ok(s) && options_.durable && !options_.sync_on_flush) {
+      s = sync_fd();
+    }
     if (!core::ok(s)) {
       return s;
     }
@@ -158,6 +188,7 @@ Status EventLogWriter::append_record(std::span<const std::byte> record) {
   }
   buffer_.insert(buffer_.end(), record.begin(), record.end());
   segment_size_ += record.size();
+  position_ += record.size();
   ++records_;
   return buffer_.size() >= kFlushThreshold ? flush() : Status::Ok;
 }
@@ -171,23 +202,27 @@ Status EventLogWriter::flush() {
     return s;
   }
   buffer_.clear();
-  if (options_.sync_on_flush) {
-#if defined(__APPLE__)
-    if (::fsync(fd_) != 0) {
-#else
-    if (::fdatasync(fd_) != 0) {
-#endif
-      return Status::IoError;
-    }
+  return options_.sync_on_flush ? sync_fd() : Status::Ok;
+}
+
+Status EventLogWriter::sync_fd() const { return sync_file(fd_); }
+
+Status EventLogWriter::sync() {
+  Status s = flush();
+  if (core::ok(s) && !options_.sync_on_flush) {
+    s = sync_fd();
   }
-  return Status::Ok;
+  return s;
 }
 
 Status EventLogWriter::close() {
   if (fd_ < 0) {
     return Status::Ok;
   }
-  const Status s = flush();
+  Status s = flush();
+  if (core::ok(s) && options_.durable && !options_.sync_on_flush) {
+    s = sync_fd();
+  }
   ::close(fd_);
   fd_ = -1;
   return s;
@@ -195,7 +230,10 @@ Status EventLogWriter::close() {
 
 EventLogReader::EventLogReader() : scratch_{wire::kMaxPayload / 16} {}
 
-Status EventLogReader::open(const std::string& directory) {
+Status EventLogReader::open(const std::string& directory, EventLogReadOptions options) {
+  options_ = options;
+  torn_bytes_ = 0;
+  torn_segment_.clear();
   segments_.clear();
   std::error_code ec;
   for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
@@ -232,6 +270,11 @@ Status EventLogReader::load_segment(std::size_t index) {
   std::size_t consumed = 0;
   const Status s = wire::decode_header(data_, header, consumed);
   if (!core::ok(s)) {
+    segment_ = index;
+    // A crash right after the segment was created: nothing in it was ever a record.
+    if (index > 0 && options_.tolerate_torn_tail && last_segment()) {
+      return torn(0);
+    }
     return s;
   }
   if (index == 0) {
@@ -256,9 +299,20 @@ Status EventLogReader::next(wire::RecordView& out) {
   }
   const Status s = wire::decode_record(std::span<const std::byte>{data_}.subspan(pos_), out);
   if (!core::ok(s)) {
+    if (options_.tolerate_torn_tail && last_segment()) {
+      static_cast<void>(torn(pos_));
+      return Status::EndOfStream;
+    }
     return s;
   }
   pos_ += out.bytes.size();
+  return Status::Ok;
+}
+
+Status EventLogReader::torn(std::size_t from) {
+  torn_bytes_ = data_.size() - from;
+  torn_segment_ = segments_[segment_];
+  pos_ = data_.size();
   return Status::Ok;
 }
 

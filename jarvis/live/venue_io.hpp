@@ -49,6 +49,11 @@
 //
 // The IO thread polls the command ring between rounds of network work: with busy_poll it never
 // sleeps; otherwise a round lasts at most a millisecond.
+//
+// persistence.mode = "barrier" (section 16.2): each queued command carries the event log position
+// just past its own record, and the IO thread sends it only once the persist thread's durable
+// position (VenueIoConfig::durable) has reached that. Commands keep their order: one waiting at
+// the head of the ring holds the ones behind it.
 
 namespace jarvis::live {
 
@@ -62,6 +67,16 @@ struct VenueEndpoints {
 // A command from the core for the venue.
 using VenueCommand = std::variant<model::SubmitOrder, model::ModifyOrder, model::CancelOrder,
                                   model::CountdownCancelAll>;
+
+// A command in the ring, with the log position it waits for (0: none).
+struct QueuedCommand {
+  QueuedCommand() = default;
+  // NOLINTNEXTLINE(google-explicit-constructor): a command with no barrier
+  QueuedCommand(const VenueCommand& c, std::uint64_t durable = 0)
+      : command{c}, durable_at{durable} {}
+  VenueCommand command;
+  std::uint64_t durable_at = 0;
+};
 
 struct VenueIoConfig {
   VenueEndpoints endpoints;
@@ -85,6 +100,8 @@ struct VenueIoConfig {
   bool rest_fallback = true;                     // orders over REST while the WebSocket API is down
   adapter::binance::ListenKeyKeeperConfig keeper;
   std::function<std::int64_t()> now_ms; // local UTC milliseconds for signing; system clock if empty
+  // persistence.mode = "barrier": the persist thread's durable log position; commands wait for it.
+  const std::atomic<std::uint64_t>* durable = nullptr;
 };
 
 struct VenueIoStats {
@@ -103,7 +120,10 @@ struct VenueIoStats {
   std::uint64_t countdown_failures = 0;
   std::uint64_t checks = 0; // light checks recorded
   std::uint64_t check_failures = 0;
-  std::uint64_t rest_orders = 0; // commands sent over REST (the WebSocket API was down)
+  std::uint64_t rest_orders = 0;    // commands sent over REST (the WebSocket API was down)
+  std::uint64_t barrier_waits = 0;  // commands that waited for their record to be durable
+  std::uint64_t unsent_at_stop = 0; // commands still in the ring when the thread stopped (their
+                                    // records never became durable: nothing was sent)
 };
 
 class VenueIo {
@@ -117,8 +137,8 @@ public:
   [[nodiscard]] core::Status start(std::string& error);
   void stop(); // closes the connections and joins the threads
 
-  [[nodiscard]] SpscByteRing& ring() noexcept;               // venue -> core
-  [[nodiscard]] SpscRing<VenueCommand>& commands() noexcept; // core -> venue
+  [[nodiscard]] SpscByteRing& ring() noexcept;                // venue -> core
+  [[nodiscard]] SpscRing<QueuedCommand>& commands() noexcept; // core -> venue
   [[nodiscard]] VenueIoStats stats() const noexcept;
   [[nodiscard]] std::uint16_t source_id() const noexcept;
   // The last error of the REST thread (listenKey, snapshot), for the operator.

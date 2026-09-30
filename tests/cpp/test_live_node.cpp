@@ -118,7 +118,7 @@ struct Buyer {
   }
 };
 
-std::string config_text(const TempDir& dir) {
+std::string config_text(const TempDir& dir, std::string_view mode) {
   return R"(
 [node]
 id = "lv01"
@@ -141,8 +141,12 @@ impl = "cpp:Buyer"
 instruments = ["BTCUSDT-PERP.BINANCE"]
 
 [persistence]
+mode = ")" +
+         std::string{mode} +
+         R"("
 dir = ")" +
-         dir.file("runs") + R"(/{node_id}/{run_id}"
+         dir.file("runs") +
+         R"(/{node_id}/{run_id}"
 )";
 }
 
@@ -150,6 +154,11 @@ dir = ")" +
 
 TEST_SUITE("unit") {
   TEST_CASE("a live node syncs, trades, and its recording replays with the same outputs") {
+    // Once with the default persistence, once with every command waiting for its record.
+    std::string mode = "async";
+    SUBCASE("async") {}
+    SUBCASE("barrier") { mode = "barrier"; }
+    CAPTURE(mode);
     ScriptedWssServer* self = nullptr;
     ScriptedWssServer wss{
         8, [&self](std::size_t conn, const std::string& m) -> std::vector<WsReply> {
@@ -210,7 +219,7 @@ TEST_SUITE("unit") {
         wss.ca_file(), wss.key_file()};
 
     const TempDir dir;
-    const std::string text = config_text(dir);
+    const std::string text = config_text(dir, mode);
     node::NodeConfig config;
     std::vector<node::ConfigError> errors;
     REQUIRE(node::parse_config(text, "live.toml", {}, config, errors) == Status::Ok);
@@ -267,6 +276,17 @@ TEST_SUITE("unit") {
     CHECK(requests.back().find("symbol=BTCUSDT&countdownTime=0&") != std::string::npos);
     CHECK(result.summary.state == md::NodeState::Stopped);
     REQUIRE_FALSE(result.directory.empty());
+    // Every input and output went through the persist thread and is durable.
+    CHECK(result.persist.records == result.summary.inputs + result.summary.outputs);
+    CHECK(result.persist.durable == result.persist.position);
+    CHECK(result.persist.stalls == 0);
+    CHECK(result.venue.unsent_at_stop == 0);
+    if (mode == "barrier") {
+      CHECK(result.persist.syncs >= 1);
+      CHECK(result.venue.barrier_waits <= result.venue.commands);
+    } else {
+      CHECK(result.venue.barrier_waits == 0);
+    }
 
     // The environment equivalence: the recorded live session under the backtest wiring.
     st::StaticStrategySet<Buyer> fresh{Buyer{}};

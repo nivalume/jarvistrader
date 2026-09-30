@@ -146,6 +146,8 @@ struct PersistenceSection {
   PersistenceMode mode = PersistenceMode::Async;
   std::string dir = "runs/{node_id}/{run_id}";
   std::uint64_t snapshot_every = 1'000'000;
+  std::uint64_t sync_every_ms =
+      100; // async: the persist thread's fdatasync cadence; 0: every batch
   RawFrames raw_frames = RawFrames::On;
 };
 

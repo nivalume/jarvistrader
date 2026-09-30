@@ -279,6 +279,7 @@ overrun_limit = 50
 [persistence]
 mode = "async"                    # none | async | barrier
 dir = "runs/{node_id}/{run_id}"
+sync_every_ms = 100               # async：persist 线程最多隔这么久 fdatasync 一次；0 为每批一次
 snapshot_every = 1000000
 raw_frames = true                 # true | false | sampled
 
@@ -636,8 +637,9 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - persist 线程把 `EventRecord` 追加写入 WAL；telemetry 线程格式化日志与指标，telemetry 环满时丢弃并计数，persist 环满时反压 core（写入失败即 `Faulted`）。
 - core 线程绑核，空闲时 busy-poll 入站环。core 内不加锁、不分配内存。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
-- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<VenueCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
-- 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。sandbox 由 core 线程同步写日志（1 MiB 缓冲）；persist 线程、ud-io 与 order-sender 线程随实盘（M5）接入，它们用到的会话已在 M4-D 实现。
+- venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<QueuedCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则一轮最长 1 ms。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
+- 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。
+- persist 线程（M5-I1，`jarvis/live/persist.hpp` 的 `Persister`）：sandbox 与 live 中 core 不再自己写日志，而是把编码好的记录写入一个 SPSC 字节环（默认 64 MiB），persist 线程取出后按段追加并 `fdatasync`，写出的字节与 core 线程上的 `EventLogWriter` 完全相同（测试逐字节比对）。环满时 core 等待并计数（`stalls`），从不丢记录；写入或同步失败后 persist 线程不再取记录，core 的下一次追加返回 `IoError`，运行随之停止。backtest 仍由 core 线程同步写日志（1 MiB 缓冲），从不 `fdatasync`。
 
 ### 7.2 路由
 
@@ -1431,6 +1433,15 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 | `barrier` | order-sender 发送命令前等待 `persisted_seq ≥ cmd.seq` | 需要"发出的命令一定在本地有记录"的场景 |
 
 默认选 `async` 的理由是：对账协议本来就要处理本地状态丢失（崩溃、磁盘故障），把它当作恢复机制比让每个命令等待落盘更合理。
+
+实现（M5-I1）：
+
+- 日志位置是已追加记录的字节数（不计段头）。persist 线程每次 `fdatasync` 后公布 durable 位置：崩溃后日志至少保留到这里。段写满时旧段先 `fdatasync` 再关闭，新段创建后同步目录，所以 durable 位置之前的记录在崩溃后都能读到。
+- `async`：persist 线程最多每 `persistence.sync_every_ms`（默认 100）同步一次，为 0 时每取一批同步一次；core 从不等待。崩溃最多丢失最近一个同步间隔内的记录。
+- `barrier`：persist 线程每取一批就同步。`CommandRouter` 在命令的输出记录追加之后把当前日志位置随命令放入 venue-io 的命令环（`QueuedCommand::durable_at`）；venue-io 只在 durable 位置达到它之后才发出这条命令，排在它后面的命令也一起等待，顺序不变。等待期间 IO 线程不休眠（让出 CPU），延迟约为一次 `fdatasync`。sandbox 的命令只发给进程内的模拟交易所，`barrier` 与 `async` 相同；backtest 不 `fdatasync`。
+- 读取崩溃留下的日志：最后一段末尾可能是半条记录，或刚创建、段头不完整的段。`EventLogReadOptions::tolerate_torn_tail` 把最后一段中第一条解不开的记录（长度不足或 CRC 不符）当作日志结尾，并报告丢弃的字节数；更早的段出现同样问题仍是错误。
+- 关停顺序：主循环结束后不再有记录追加，节点先关闭 persist 线程（全部记录落盘），再等 venue-io 取完命令环、停止 IO 线程。所以 `barrier` 下关停时的撤单与解除 `countdownCancelAll` 不会因为等待落盘而被丢下；停止时仍留在环中的命令（记录从未落盘，例如 persist 线程写入失败）不发出，计入 `unsent_at_stop`。
+- 统计：记录数、字节、durable 位置、同步次数、单次同步覆盖的最大字节数、环满次数、段数（`PersistStats`，打印在运行结束时，Python 结果的 `log` 字典）；venue-io 统计等待过日志的命令数（`barrier_waits`）与停止时未发出的命令数（`unsent_at_stop`）。
 
 ### 16.3 快照与恢复
 

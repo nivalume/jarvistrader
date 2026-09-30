@@ -617,6 +617,7 @@ void read_operations(TableReader& root, NodeConfig& c) {
     r.enumeration("mode", c.persistence.mode, kPersistenceNames);
     r.string("dir", c.persistence.dir);
     r.unsigned_int("snapshot_every", c.persistence.snapshot_every, std::uint64_t{1});
+    r.unsigned_int("sync_every_ms", c.persistence.sync_every_ms, std::uint64_t{0});
     read_raw_frames(r, c.persistence.raw_frames);
     r.finish();
   }
@@ -1045,6 +1046,7 @@ std::string canonical_operational_text(const NodeConfig& config) {
   c.str("persistence.mode", name_of(kPersistenceNames, config.persistence.mode));
   c.str("persistence.dir", config.persistence.dir);
   c.num("persistence.snapshot_every", config.persistence.snapshot_every);
+  c.num("persistence.sync_every_ms", config.persistence.sync_every_ms);
   c.raw("persistence.raw_frames", raw_frames_name(config.persistence.raw_frames));
   c.str("telemetry.prometheus", config.telemetry.prometheus);
   c.flag("telemetry.jsonl", config.telemetry.jsonl);

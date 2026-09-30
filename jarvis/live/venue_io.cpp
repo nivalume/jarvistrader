@@ -44,6 +44,8 @@ struct Counters {
   std::atomic<std::uint64_t> checks{0};
   std::atomic<std::uint64_t> check_failures{0};
   std::atomic<std::uint64_t> rest_orders{0};
+  std::atomic<std::uint64_t> barrier_waits{0};
+  std::atomic<std::uint64_t> unsent_at_stop{0};
 
   static void add(std::atomic<std::uint64_t>& c) { c.fetch_add(1, std::memory_order_relaxed); }
 };
@@ -160,7 +162,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   const ArrivalClock* clock;
   VenueIoConfig config;
   SpscByteRing ring;
-  SpscRing<VenueCommand> commands;
+  SpscRing<QueuedCommand> commands;
   Counters counters;
   network::IoContext io;
   binance::OrderTracker tracker;
@@ -173,6 +175,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   std::unique_ptr<binance::UserStreamSession> stream;
   std::unique_ptr<network::Timer> retry;
   std::unique_ptr<network::Timer> check_timer;
+  bool head_held = false; // the command at the head of the ring waits for the persist thread
   RawFrameWriter raw;
   bool recording = false;
   bool live = false;            // the user stream (IO thread)
@@ -595,10 +598,24 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     api->start();
   }
 
-  std::size_t drain() {
+  // The commands whose records are durable (all of them without a barrier); `held` is set when
+  // the head of the ring still waits for the persist thread.
+  std::size_t drain(bool& held) {
     std::size_t n = 0;
-    VenueCommand c;
-    while (commands.try_pop(c)) {
+    held = false;
+    while (const QueuedCommand* q = commands.front()) {
+      if (q->durable_at > 0 && config.durable != nullptr &&
+          config.durable->load(std::memory_order_acquire) < q->durable_at) {
+        if (!head_held) {
+          Counters::add(counters.barrier_waits);
+          head_held = true;
+        }
+        held = true;
+        break;
+      }
+      const VenueCommand c = q->command;
+      commands.pop();
+      head_held = false;
       command(c);
       ++n;
     }
@@ -607,10 +624,11 @@ struct VenueIo::Impl final : adapter::EventEmitter {
 
   void run() {
     while (!stopping.load(std::memory_order_relaxed)) {
-      std::size_t work = drain();
+      bool held = false;
+      std::size_t work = drain(held);
       work += io.poll();
       if (work == 0) {
-        if (config.busy_poll) {
+        if (config.busy_poll || held) {
           std::this_thread::yield();
         } else {
           io.run_for(std::chrono::milliseconds{1});
@@ -618,7 +636,9 @@ struct VenueIo::Impl final : adapter::EventEmitter {
       }
       io.restart();
     }
-    drain();                                    // the commands the core sent before stopping
+    bool held = false;
+    drain(held); // the commands the core sent before stopping (whose records are durable)
+    counters.unsent_at_stop.store(commands.size(), std::memory_order_relaxed);
     io.run_for(std::chrono::milliseconds{200}); // let them and the closes go out
   }
 
@@ -672,7 +692,7 @@ void VenueIo::stop() {
 }
 
 SpscByteRing& VenueIo::ring() noexcept { return impl_->ring; }
-SpscRing<VenueCommand>& VenueIo::commands() noexcept { return impl_->commands; }
+SpscRing<QueuedCommand>& VenueIo::commands() noexcept { return impl_->commands; }
 std::uint16_t VenueIo::source_id() const noexcept { return impl_->config.source_id; }
 
 std::string VenueIo::last_error() const {
@@ -700,7 +720,9 @@ VenueIoStats VenueIo::stats() const noexcept {
                       v(c.countdown_failures),
                       v(c.checks),
                       v(c.check_failures),
-                      v(c.rest_orders)};
+                      v(c.rest_orders),
+                      v(c.barrier_waits),
+                      v(c.unsent_at_stop)};
 }
 
 } // namespace jarvis::live

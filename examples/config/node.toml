@@ -52,6 +52,7 @@ overrun_limit = 50
 mode = "async"                    # none | async | barrier
 dir = "runs/{node_id}/{run_id}"
 snapshot_every = 1000000
+sync_every_ms = 100               # async: fdatasync at most this often; 0: after every batch
 raw_frames = true                 # true | false | "sampled"
 
 [telemetry]

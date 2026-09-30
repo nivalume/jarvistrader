@@ -19,7 +19,10 @@ namespace jarvis::node {
 
 struct EventLogOptions {
   std::uint64_t segment_bytes = 256ULL << 20U; // roll to a new segment beyond this size
-  bool sync_on_flush = false;                  // fdatasync after each flush (persistence=barrier)
+  bool sync_on_flush = false;                  // fdatasync after each flush
+  // A finished segment is fdatasync'ed before it is closed, and the directory after a segment is
+  // created, so that what sync() made durable stays reachable after a crash (the persist thread).
+  bool durable = false;
 };
 
 class EventLogWriter {
@@ -41,12 +44,19 @@ public:
   // Appends an already encoded record (as produced by model::wire::encode_record).
   [[nodiscard]] core::Status append_record(std::span<const std::byte> record);
   [[nodiscard]] core::Status flush();
+  // flush() and fdatasync: every record appended so far survives a crash.
+  [[nodiscard]] core::Status sync();
   [[nodiscard]] core::Status close();
 
   [[nodiscard]] std::uint64_t records() const noexcept { return records_; }
+  // Bytes of records appended so far, across segments (segment headers not counted): the log
+  // position after the latest record.
+  [[nodiscard]] std::uint64_t position() const noexcept { return position_; }
+  [[nodiscard]] std::uint32_t segment_index() const noexcept { return header_.segment_index; }
 
 private:
   [[nodiscard]] core::Status open_segment();
+  [[nodiscard]] core::Status sync_fd() const;
 
   int fd_ = -1;
   std::string directory_;
@@ -54,15 +64,24 @@ private:
   EventLogOptions options_;
   std::uint64_t segment_size_ = 0;
   std::uint64_t records_ = 0;
+  std::uint64_t position_ = 0;
   std::vector<std::byte> buffer_;
   std::vector<std::byte> scratch_;
+};
+
+struct EventLogReadOptions {
+  // A log a crash interrupted ends in a partial record (or a segment header cut short). With this
+  // set, the first record of the last segment that does not decode (short, or failing its CRC)
+  // ends the log instead of failing it; torn_bytes() tells how much was left out. Anything
+  // wrong in an earlier segment is still an error.
+  bool tolerate_torn_tail = false;
 };
 
 class EventLogReader {
 public:
   EventLogReader();
 
-  [[nodiscard]] core::Status open(const std::string& directory);
+  [[nodiscard]] core::Status open(const std::string& directory, EventLogReadOptions options = {});
   // Header of the first segment; later segments must agree on everything but the index.
   [[nodiscard]] const model::wire::LogHeader& header() const noexcept { return header_; }
   // The next record in log order, or Status::EndOfStream. The view is valid until the next call.
@@ -73,15 +92,28 @@ public:
   [[nodiscard]] static core::Status decode_output(const model::wire::RecordView& record,
                                                   model::Output& out);
 
+  // With tolerate_torn_tail, once next() has returned EndOfStream: the bytes after the last
+  // whole record of the last segment (0 for a clean end), and that segment's path.
+  [[nodiscard]] std::uint64_t torn_bytes() const noexcept { return torn_bytes_; }
+  [[nodiscard]] const std::string& torn_segment() const noexcept { return torn_segment_; }
+  // The file offset just past the last record next() returned, in the current segment.
+  [[nodiscard]] std::size_t segment_offset() const noexcept { return pos_; }
+  [[nodiscard]] const std::vector<std::string>& segments() const noexcept { return segments_; }
+
 private:
   [[nodiscard]] core::Status load_segment(std::size_t index);
+  [[nodiscard]] bool last_segment() const noexcept { return segment_ + 1 >= segments_.size(); }
+  core::Status torn(std::size_t from);
 
+  EventLogReadOptions options_;
   std::vector<std::string> segments_;
   std::size_t segment_ = 0;
   std::vector<std::byte> data_;
   std::size_t pos_ = 0;
   model::wire::LogHeader header_;
   model::wire::DecodeScratch scratch_;
+  std::uint64_t torn_bytes_ = 0;
+  std::string torn_segment_;
 };
 
 [[nodiscard]] std::string segment_name(std::uint32_t index);

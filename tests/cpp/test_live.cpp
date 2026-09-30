@@ -6,6 +6,8 @@
 #include <string>
 #include <string_view>
 
+#include <unistd.h>
+
 #include <doctest/doctest.h>
 
 #include "jarvis/live/raw_frames.hpp"
@@ -19,8 +21,11 @@ std::span<const std::byte> bytes(std::string_view s) {
   return std::as_bytes(std::span<const char>{s.data(), s.size()});
 }
 
+// Unique per process, so that test binaries may run side by side.
 std::string temp_file(std::string_view name) {
-  return (std::filesystem::temp_directory_path() / name).string();
+  return (std::filesystem::temp_directory_path() /
+          (std::to_string(::getpid()) + "-" + std::string{name}))
+      .string();
 }
 
 } // namespace

@@ -902,6 +902,18 @@ nb::dict feed_dict(const live::MarketFeedStats& f) {
   return feed;
 }
 
+nb::dict persist_dict(const live::PersistStats& p) {
+  nb::dict d;
+  d["records"] = p.records;
+  d["bytes"] = p.position;
+  d["durable"] = p.durable;
+  d["syncs"] = p.syncs;
+  d["segments"] = p.segments;
+  d["max_sync_bytes"] = p.max_lag;
+  d["stalls"] = p.stalls;
+  return d;
+}
+
 nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
                           const std::optional<std::string>& out, std::optional<double> run_for_s) {
   live::SandboxRequest request;
@@ -927,6 +939,7 @@ nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
   summary.summary = result.summary;
   nb::dict d = summary_dict(summary);
   d["feed"] = feed_dict(result.feed);
+  d["log"] = persist_dict(result.persist);
   d["strategies"] = assembly.stats();
   return d;
 }
@@ -967,7 +980,10 @@ nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
   venue["snapshot_failures"] = result.venue.snapshot_failures;
   venue["countdowns"] = result.venue.countdowns;
   venue["countdown_failures"] = result.venue.countdown_failures;
+  venue["barrier_waits"] = result.venue.barrier_waits;
+  venue["unsent_at_stop"] = result.venue.unsent_at_stop;
   d["venue"] = venue;
+  d["log"] = persist_dict(result.persist);
   d["epoch"] = result.epoch;
   nb::list warnings;
   for (const std::string& w : result.startup.warnings) {

@@ -368,6 +368,107 @@ TEST_SUITE("unit") {
     CHECK(records.size() == 299);
   }
 
+  TEST_CASE("a torn tail ends the log when tolerated, and only in the last segment") {
+    const TempDir dir{"torn"};
+    const auto written = write_corpus(dir.str(), 5, 300);
+    const std::string segment = dir.sub("events-000000.jlog");
+    const std::vector<char> original = read_file(segment);
+    const auto read_tolerant = [&dir](std::vector<std::vector<std::byte>>& records,
+                                      node::EventLogReader& reader) {
+      REQUIRE(reader.open(dir.str(), node::EventLogReadOptions{true}) == Status::Ok);
+      wire::RecordView record;
+      Status s = Status::Ok;
+      while ((s = reader.next(record)) == Status::Ok) {
+        records.emplace_back(record.bytes.begin(), record.bytes.end());
+      }
+      return s;
+    };
+
+    // A clean log: nothing torn.
+    std::vector<std::vector<std::byte>> records;
+    node::EventLogReader clean;
+    CHECK(read_tolerant(records, clean) == Status::EndOfStream);
+    CHECK(records == written);
+    CHECK(clean.torn_bytes() == 0);
+
+    // Cut inside the last record.
+    std::vector<char> cut = original;
+    cut.resize(cut.size() - 3);
+    write_file(segment, cut);
+    records.clear();
+    node::EventLogReader reader;
+    CHECK(read_tolerant(records, reader) == Status::EndOfStream);
+    REQUIRE(records.size() == 299);
+    CHECK(reader.torn_bytes() == written.back().size() - 3);
+    CHECK(reader.torn_segment() == segment);
+    CHECK(reader.segment_offset() == cut.size());
+
+    // Damage in the last record's bytes: its CRC fails.
+    std::vector<char> damaged = original;
+    damaged[damaged.size() - 2] = static_cast<char>(damaged[damaged.size() - 2] ^ 0x10);
+    write_file(segment, damaged);
+    records.clear();
+    node::EventLogReader crc;
+    CHECK(read_tolerant(records, crc) == Status::EndOfStream);
+    CHECK(records.size() == 299);
+    CHECK(crc.torn_bytes() == written.back().size());
+    write_file(segment, original);
+
+    // A segment created just before the crash, its header cut short.
+    const std::string next = dir.sub(node::segment_name(1));
+    write_file(next, {'J', 'A', 'R', 'V', 'I'});
+    records.clear();
+    node::EventLogReader header;
+    CHECK(read_tolerant(records, header) == Status::EndOfStream);
+    CHECK(records == written);
+    CHECK(header.torn_bytes() == 5);
+    CHECK(header.torn_segment() == next);
+    records.clear();
+    CHECK(read_all(dir.str(), records) != Status::EndOfStream); // not tolerated by default
+    std::filesystem::remove(next);
+  }
+
+  TEST_CASE("damage before the last segment is an error even when a torn tail is tolerated") {
+    const TempDir dir{"torn-early"};
+    node::EventLogOptions options;
+    options.segment_bytes = 32ULL * 1024ULL;
+    static_cast<void>(write_corpus(dir.str(), 11, 2000, options));
+    const std::string first = dir.sub("events-000000.jlog");
+    std::vector<char> cut = read_file(first);
+    cut.resize(cut.size() - 3);
+    write_file(first, cut);
+    node::EventLogReader reader;
+    REQUIRE(reader.open(dir.str(), node::EventLogReadOptions{true}) == Status::Ok);
+    wire::RecordView record;
+    Status s = Status::Ok;
+    while ((s = reader.next(record)) == Status::Ok) {
+    }
+    CHECK(s == Status::Truncated);
+    CHECK(reader.torn_bytes() == 0);
+  }
+
+  TEST_CASE("the writer's position counts record bytes across segments") {
+    const TempDir dir{"position"};
+    node::EventLogOptions options;
+    options.segment_bytes = 16ULL * 1024ULL;
+    node::EventLogWriter writer;
+    REQUIRE(writer.open(dir.str(), test_header(3), options) == Status::Ok);
+    node::CorpusGenerator corpus{3};
+    std::uint64_t total = 0;
+    EventKey key;
+    m::Event event;
+    for (int i = 0; i < 500; ++i) {
+      REQUIRE(corpus.next(key, event) == Status::Ok);
+      total += encode(key, event).size();
+      REQUIRE(writer.append(key, event) == Status::Ok);
+      CHECK(writer.position() == total);
+    }
+    CHECK(writer.segment_index() > 1);
+    REQUIRE(writer.sync() == Status::Ok);
+    REQUIRE(writer.close() == Status::Ok);
+    CHECK(writer.position() == total);
+  }
+
   TEST_CASE("fingerprints ignore segmentation and compare_logs finds the first difference") {
     const TempDir one{"fp-one"};
     const TempDir rolled{"fp-rolled"};

@@ -341,6 +341,64 @@ TEST_SUITE("unit") {
     CHECK(wss.error().empty());
   }
 
+  TEST_CASE("venue-io: in barrier mode a command waits until its record is durable") {
+    std::atomic<ScriptedWssServer*> server{nullptr};
+    ScriptedWssServer wss{4, [&server](std::size_t conn, const std::string& message) {
+                            return venue(*server.load(), conn, message);
+                          }};
+    server.store(&wss);
+    ScriptedHttpsServer https{std::vector<std::string>{
+                                  http(R"({"listenKey":"LK1"})"), http("[]"), http("[]"),
+                                  http(kBalances), http("[]"), http("[]"), // the snapshot
+                              },
+                              wss.ca_file(), wss.key_file()};
+    const live::ArrivalClock clock;
+    std::atomic<std::uint64_t> durable{0};
+    live::VenueIoConfig config = config_for(wss, https);
+    config.durable = &durable;
+    live::VenueIo io{clock, config};
+    std::string error;
+    REQUIRE(io.start(error) == Status::Ok);
+    Reader reader{io.ring()};
+    REQUIRE(reader.wait_for("VenueSnapshot"));
+
+    // C-1's record ends at 500; C-2 has no barrier of its own but stays behind C-1.
+    REQUIRE(io.commands().try_push(live::QueuedCommand{live::VenueCommand{limit_buy("C-1")}, 500}));
+    REQUIRE(io.commands().try_push(live::QueuedCommand{live::VenueCommand{limit_buy("C-2")}}));
+    std::this_thread::sleep_for(std::chrono::milliseconds{150});
+    const std::size_t before = reader.records.size();
+    CHECK_FALSE(reader.wait_for("OrderAccepted", before, std::chrono::milliseconds{50}));
+    CHECK(io.stats().commands == 0);
+    CHECK(io.stats().barrier_waits == 1);
+
+    durable.store(499);
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    CHECK(io.stats().commands == 0);
+    durable.store(500);
+    REQUIRE(reader.wait_for("OrderAccepted", before));
+    const auto accepted = [&reader, before](std::size_t skip) {
+      for (std::size_t i = before; i < reader.records.size(); ++i) {
+        if (const auto* a = std::get_if<m::OrderAccepted>(&reader.records[i].event)) {
+          if (skip-- == 0) {
+            return std::string{a->header.client_order_id.view()};
+          }
+        }
+      }
+      return std::string{};
+    };
+    const auto second = [&] { return !accepted(1).empty(); };
+    for (int i = 0; i < 400 && !second(); ++i) {
+      reader.drain();
+      std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    io.stop();
+    CHECK(accepted(0) == "C-1");
+    CHECK(accepted(1) == "C-2");
+    CHECK(io.stats().commands == 2);
+    CHECK(io.stats().barrier_waits == 1);
+    CHECK(wss.error().empty());
+  }
+
   TEST_CASE("venue-io: with the WebSocket API down, orders go over REST") {
     std::atomic<ScriptedWssServer*> server{nullptr};
     ScriptedWssServer wss{4, [&server](std::size_t conn, const std::string& message) {

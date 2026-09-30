@@ -22,6 +22,7 @@
 #include "jarvis/live/clock.hpp"
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
+#include "jarvis/live/persist.hpp"
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/sandbox_node.hpp"
 #include "jarvis/live/spsc_ring.hpp"
@@ -47,9 +48,11 @@
 //   3. the instruments' definitions as the preamble.
 //
 // The node then waits in Syncing until the account is reconciled (the driver's sync gate), and
-// moves between Running and Degraded with the user data stream. Every input is recorded, so the
-// session replays under the backtest wiring. Commands go to the venue-io thread as the engine
-// emits them; on the way out the node waits (a bounded time) until they have left the ring.
+// moves between Running and Degraded with the user data stream. Every input is recorded (by the
+// persist thread), so the session replays under the backtest wiring. Commands go to the venue-io
+// thread as the engine emits them, after their own records (with persistence.mode = "barrier"
+// the venue-io thread sends each once its record is durable); on the way out the node waits (a
+// bounded time) until they have left the ring.
 
 namespace jarvis::live {
 
@@ -78,6 +81,7 @@ struct LiveResult {
   adapter::binance::StartupReport startup;
   std::uint64_t epoch = 0;
   std::uint64_t admin_commands = 0; // taken from the admin socket
+  PersistStats persist;
 };
 
 // What is built before the loop starts.
@@ -166,11 +170,13 @@ private:
 };
 
 // A recorder that also hands the venue commands to the venue-io thread. A full command ring is
-// waited out (a command is never dropped) unless the node is stopping.
+// waited out (a command is never dropped) unless the node is stopping. With a barrier (the
+// persist thread in barrier mode) each command carries the log position after its own record.
 template <typename Rec> class CommandRouter {
 public:
-  CommandRouter(Rec& inner, SpscRing<VenueCommand>& commands, const std::atomic<bool>* stop)
-      : inner_{&inner}, commands_{&commands}, stop_{stop} {}
+  CommandRouter(Rec& inner, SpscRing<QueuedCommand>& commands, const std::atomic<bool>* stop,
+                const Persister* barrier = nullptr)
+      : inner_{&inner}, commands_{&commands}, stop_{stop}, barrier_{barrier} {}
 
   [[nodiscard]] core::Status record(const core::EventKey& key, const model::Event& event) {
     return inner_->record(key, event);
@@ -198,7 +204,8 @@ public:
 
 private:
   core::Status send(const VenueCommand& c) {
-    while (!commands_->try_push(c)) {
+    const QueuedCommand q{c, barrier_ != nullptr ? barrier_->position() : 0};
+    while (!commands_->try_push(q)) {
       if (stop_ != nullptr && stop_->load(std::memory_order_relaxed)) {
         return core::Status::IoError;
       }
@@ -208,21 +215,24 @@ private:
   }
 
   Rec* inner_;
-  SpscRing<VenueCommand>* commands_;
+  SpscRing<QueuedCommand>* commands_;
   const std::atomic<bool>* stop_;
+  const Persister* barrier_;
 };
 
 namespace detail {
 
-// Waits up to `limit` for the venue-io thread to take the commands still in the ring.
+// Waits up to `limit` for the venue-io thread to take the commands still in the ring. With a
+// barrier the persist thread must have been closed first, so that every record is durable.
 void await_commands(VenueIo& venue, std::chrono::milliseconds limit);
 
 template <strategy::StrategySet SS, typename Recorder, typename Hook>
-[[nodiscard]] core::Status
-live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const LivePlan& plan,
-          LiveSource& source, Recorder& recorder, VenueIo& venue, LivePump<Hook>& pump,
-          const std::atomic<bool>* stop, LiveResult& result, std::string& error) {
-  CommandRouter<Recorder> router{recorder, venue.commands(), stop};
+[[nodiscard]] core::Status live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine,
+                                     const LivePlan& plan, LiveSource& source, Recorder& recorder,
+                                     VenueIo& venue, LivePump<Hook>& pump,
+                                     const std::atomic<bool>* stop, const Persister* barrier,
+                                     LiveResult& result, std::string& error) {
+  CommandRouter<Recorder> router{recorder, venue.commands(), stop, barrier};
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
   options.await_sync = true;
@@ -233,7 +243,6 @@ live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const Live
     error = "the run stopped at seq " + std::to_string(engine.kernel().current.seq) + ": " +
             std::string{core::to_string(s)};
   }
-  await_commands(venue, std::chrono::milliseconds{2'000});
   return s;
 }
 
@@ -266,23 +275,26 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   const core::FixedVector<model::StrategyId>& ids = engine.kernel().trading.strategy_ids;
   plan.venue.identity.strategies.assign(ids.span().begin(), ids.span().end());
 
-  node::EventLogWriter writer;
+  // Declared before the IO threads: venue-io reads its durable position until it stops.
+  std::unique_ptr<Persister> persister;
   const bool persist = config.persistence.mode != node::PersistenceMode::None;
+  const bool barrier = config.persistence.mode == node::PersistenceMode::Barrier;
   if (persist) {
     s = node::create_run_directory(config, request.manifest, request.out, result.directory, error);
     if (!core::ok(s)) {
       return s;
     }
-    node::EventLogOptions log_options;
-    log_options.sync_on_flush = config.persistence.mode == node::PersistenceMode::Barrier;
-    s = writer.open(result.directory, node::run_header(config, request.extras), log_options);
+    persister = std::make_unique<Persister>(persist_config(config));
+    s = persister->open(result.directory, node::run_header(config, request.extras), error);
     if (!core::ok(s)) {
-      error = "cannot open the run log in " + result.directory;
       return s;
     }
     if (config.persistence.raw_frames != node::RawFrames::Off) {
       plan.feed.raw_frames = result.directory + "/raw-frames.jraw";
       plan.venue.raw_frames = result.directory + "/raw-account.jraw";
+    }
+    if (barrier) {
+      plan.venue.durable = &persister->durable();
     }
   }
   MarketFeed feed{anchor, plan.feed};
@@ -311,14 +323,22 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   LivePump<Hook> pump{clock, feed, venue, source, hook, request.stop, deadline};
   pump.attach_admin(admin.get(), &engine.kernel());
   if (persist) {
-    node::LogRecorder<Hook> recorder{writer, hook};
-    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop, result,
-                          error);
+    node::LogRecorder<Hook, Persister> recorder{*persister, hook};
+    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop,
+                          barrier ? persister.get() : nullptr, result, error);
   } else {
     node::NullRecorder<Hook> recorder{hook};
-    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop, result,
-                          error);
+    s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop,
+                          nullptr, result, error);
   }
+  // Nothing is appended once the loop has ended: the log is closed (every record durable) before
+  // the last commands, which in barrier mode wait for that, are let out.
+  core::Status closed = core::Status::Ok;
+  if (persist) {
+    closed = persister->close();
+    result.persist = persister->stats();
+  }
+  detail::await_commands(venue, std::chrono::milliseconds{2'000});
   venue.stop();
   feed.stop();
   if (admin) {
@@ -327,12 +347,10 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   result.feed = feed.stats();
   result.venue = venue.stats();
-  if (persist) {
-    const core::Status closed = writer.close();
-    if (core::ok(s) && !core::ok(closed)) {
-      error = "cannot finish the run log in " + result.directory;
-      return closed;
-    }
+  if (core::ok(s) && !core::ok(closed)) {
+    error = "cannot finish the run log in " + result.directory + ": " +
+            std::string{core::to_string(closed)};
+    return closed;
   }
   return s;
 }

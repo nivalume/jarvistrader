@@ -20,6 +20,15 @@ namespace jarvis {
 
 namespace live::detail {
 
+inline void print_persist(std::ostream& out, const PersistStats& p) {
+  if (p.records == 0) {
+    return;
+  }
+  out << "log: records " << p.records << ", bytes " << p.position << ", durable " << p.durable
+      << ", syncs " << p.syncs << ", segments " << p.segments << ", largest sync " << p.max_lag
+      << " bytes, ring stalls " << p.stalls << "\n";
+}
+
 inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
   const auto& s = r.summary;
   out << "run: " << (r.directory.empty() ? std::string{"(not recorded)"} : r.directory) << "\n"
@@ -30,6 +39,7 @@ inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
       << r.feed.decode_errors << ", connects " << r.feed.connects << ", snapshots "
       << r.feed.snapshots << " (" << r.feed.snapshot_failures << " failed), book syncs "
       << r.feed.book_syncs << ", ring waits " << r.feed.ring_waits << "\n";
+  print_persist(out, r.persist);
   if (s.left_open != 0) {
     out << "left open at stop: " << s.left_open << " orders\n";
   }
@@ -48,7 +58,12 @@ inline int print_live(std::ostream& out, const LiveResult& r) {
       << r.venue.refused_locally << ", unknown " << r.venue.unknown_outcomes << "), snapshots "
       << r.venue.snapshots << " (" << r.venue.snapshot_failures << " failed), countdowns "
       << r.venue.countdowns << " (" << r.venue.countdown_failures << " failed), decode errors "
-      << r.venue.decode_errors << "\n";
+      << r.venue.decode_errors << ", waited for the log " << r.venue.barrier_waits << "\n";
+  print_persist(out, r.persist);
+  if (r.venue.unsent_at_stop != 0) {
+    out << "not sent at stop: " << r.venue.unsent_at_stop
+        << " commands (their records never became durable)\n";
+  }
   if (s.left_open != 0) {
     out << "left open at stop: " << s.left_open
         << " orders (the venue's countdownCancelAll, still armed, cancels them)\n";
