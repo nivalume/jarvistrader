@@ -22,6 +22,8 @@ enum class LogCode : std::uint8_t {
   // args: cancels issued. Every order of every strategy (a hard loss limit, an admin
   // cancel_all, the shutdown).
   KillSwitch = 3,
+  // args: nanoseconds since the last market data input, node.market_data_stale_ms in ns.
+  MarketDataStale = 4,
 };
 
 inline constexpr std::uint16_t kNoLogStrategy = 0xFFFF;
@@ -41,6 +43,8 @@ struct LogRecord {
     return "strategy_halted";
   case LogCode::KillSwitch:
     return "kill_switch";
+  case LogCode::MarketDataStale:
+    return "market_data_stale";
   }
   return "unknown";
 }

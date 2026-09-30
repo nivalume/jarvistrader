@@ -57,6 +57,18 @@
 
 namespace jarvis::engine {
 
+namespace detail {
+
+// Inputs whose arrival makes market data fresh (section 19.3).
+template <typename T>
+inline constexpr bool kMarketData =
+    std::is_same_v<T, model::TradeTick> || std::is_same_v<T, model::QuoteTick> ||
+    std::is_same_v<T, model::OrderBookDeltas> || std::is_same_v<T, model::Bar> ||
+    std::is_same_v<T, model::MarkPriceUpdate> || std::is_same_v<T, model::IndexPriceUpdate> ||
+    std::is_same_v<T, model::FundingRateUpdate> || std::is_same_v<T, model::LiquidationOrder>;
+
+} // namespace detail
+
 using strategy::KernelConfig;
 using strategy::KernelServices;
 using strategy::StrategyIndex;
@@ -104,7 +116,14 @@ public:
     k_.trading.begin_step();
     const Watched before = watched();
     const std::size_t first_output = k_.outputs.size();
-    const core::Status s = std::visit([this](const auto& e) { return this->dispatch(e); }, event);
+    const core::Status s = std::visit(
+        [this](const auto& e) {
+          if constexpr (detail::kMarketData<std::decay_t<decltype(e)>>) {
+            note_market_data();
+          }
+          return this->dispatch(e);
+        },
+        event);
     deliver_order_events();
     cover_submits(first_output);
     arm_algo_timer();
@@ -790,6 +809,10 @@ private:
   // account is synced again.
   core::Status on_connection(const model::ConnectionStatus& e) {
     k_.health.apply(e.kind, e.up);
+    if (e.kind == model::ConnectionKind::MarketData && e.up) {
+      k_.freshness.last_market_data = k_.current.ts; // silence counts from the connection
+      arm_freshness();
+    }
     if (e.kind == model::ConnectionKind::UserStream && k_.trading.reconciler.on_connection(e.up)) {
       static_cast<void>(k_.trading.risk.apply(risk::TradingTrigger::SyncStarted));
     }
@@ -942,6 +965,10 @@ private:
       static_cast<void>(k_.timers.cancel(k_.countdown.timer));
       k_.countdown.armed = false;
     }
+    if (k_.freshness.armed) {
+      static_cast<void>(k_.timers.cancel(k_.freshness.timer));
+      k_.freshness.armed = false;
+    }
     k_.countdown.running = false;
     for (std::size_t slot = 0; slot < k_.countdown.live.size(); ++slot) {
       k_.countdown.live[slot] = 0;
@@ -1009,6 +1036,10 @@ private:
       k_.algo_timer.armed = false;
       k_.trading.algo_wake_changed = true;
       return k_.trading.on_algo_timer(k_.current, e.deadline, k_.outputs);
+    }
+    if (e.key.owner == strategy::kKernelTimerOwner && e.key.id == strategy::kStaleTimerId) {
+      check_freshness();
+      return core::Status::Ok;
     }
     if (e.key.owner == strategy::kKernelTimerOwner && e.key.id == strategy::kCountdownTimerId) {
       k_.countdown.armed = false;
@@ -1197,6 +1228,40 @@ private:
       break;
     }
     return core::Status::Ok;
+  }
+
+  // ---- market data freshness (section 19.3) ----
+
+  void note_market_data() noexcept {
+    k_.freshness.last_market_data = k_.current.ts;
+    k_.health.market_data_stale = false; // fresh again: the sync gate brings the node back
+  }
+
+  // A periodic check at half the limit, once market data has been up (never in a backtest).
+  void arm_freshness() noexcept {
+    const std::uint64_t limit = k_.config().market_data_stale_ns;
+    if (limit == 0 || k_.freshness.armed) {
+      return;
+    }
+    const std::uint64_t every = limit / 2 > 0 ? limit / 2 : 1;
+    k_.freshness.armed = core::ok(k_.timers.schedule(
+        core::UnixNanos{k_.current.ts.value() + every}, core::DurationNanos{every},
+        core::TimerKey{strategy::kKernelTimerOwner, strategy::kStaleTimerId}, k_.freshness.timer));
+  }
+
+  void check_freshness() noexcept {
+    const std::uint64_t limit = k_.config().market_data_stale_ns;
+    const std::uint64_t now = k_.current.ts.value();
+    const std::uint64_t last = k_.freshness.last_market_data.value();
+    if (limit == 0 || k_.health.market_data != execution::LinkState::Up ||
+        k_.health.market_data_stale || now < last || now - last <= limit) {
+      return;
+    }
+    k_.health.market_data_stale = true; // the sync gate moves Running to Degraded
+    strategy::LogRecord r{strategy::LogCode::MarketDataStale, strategy::kNoLogStrategy, {}};
+    r.args[0] = static_cast<std::int64_t>(now - last);
+    r.args[1] = static_cast<std::int64_t>(limit);
+    k_.log(r);
   }
 
   // A halted strategy receives nothing more; its open orders are canceled (section 7.6).

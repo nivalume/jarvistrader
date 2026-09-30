@@ -202,7 +202,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - 与 sandbox 相同，每个输入都记录，录制的会话在 backtest 接线下回放必须逐字节一致。C++ 节点用同一个 `jarvis::live_node_main<S...>`，Python 节点用 `jarvis.main` 或 `Node.run()`（带 live shell 的构建）。
 - 测试：`tests/cpp/test_live_node.cpp` 用脚本化的交易所（HTTPS 负责启动检查、listenKey 与快照，WSS 负责行情、用户流与 WS API）端到端运行：对账、策略启动、下单、确认、成交，然后回放录制的会话，输出一致。
 - 停止（`SIGINT`、`SIGTERM`、`--run-for` 到期或 `HaltNode`）按 `[node] shutdown` 进行（第 19.4 节）：默认撤单、在 `Stopping` 中等待交易所确认，再解除 `countdownCancelAll`。
-- 尚未实现：行情新鲜度（按时间判断行情陈旧）。
+- 行情新鲜度（M5-L）：行情连接 up 之后，超过 `[node] market_data_stale_ms` 没有收到任何行情输入即视为陈旧，节点进入 `Degraded`，行情恢复后经 `Syncing` 回到 `Running`（第 4.4 节）。
 
 ### 4.2 NodeConfig
 
@@ -223,6 +223,7 @@ strict_determinism = true
 capacity = { orders = 4096, instruments = 64, batch = 1024, timers = 256, strategies = 8 }
 shutdown = "cancel_all_then_exit" # sandbox 与 live：cancel_all_then_exit | exit_keep_orders
 shutdown_timeout_ms = 10000       # 等待撤单确认的上限
+market_data_stale_ms = 10000      # 行情连接 up 但这么久没有行情即为陈旧；0 关闭检查
 
 [data]                            # backtest 使用
 catalog = "runs/2026-09/"
@@ -335,6 +336,18 @@ public:
   - `Running → Degraded`：用户流断开或重连后重新缓冲，或行情、下单通道 down。TradingState 随之降为 `Reducing`；`countdownCancelAll` 不再续期，所以降级持续整个倒计时后由交易所撤单。
   - `Degraded → Syncing`：用户流恢复（缓冲中或已同步）且行情与下单通道都不处于 down；随后按上面的规则回到 `Running`。
   - backtest 没有这些输入，闸门不会移动它；sandbox 没有用户流，按账户已同步处理，只有行情连接会让它降级。
+- 行情新鲜度（M5-L）：`ConnectionHealth` 另有 `market_data_stale` 位，为真时 `healthy()` 为假，闸门据此把 `Running` 移到 `Degraded`。
+  - 判断在内核中，按记录的输入的时间，所以回放复现它。行情连接 up 的那一步安排一个内核周期定时器（`kStaleTimerId`，周期为限值的一半）；成交、报价、订单簿增量、K 线、标记价、指数价、资金费率、强平单任一输入到达都更新最后时间并清除陈旧位。
+  - 定时器触发时，若行情连接 up、尚未陈旧、且距最后一次行情输入（或连接 up 的时刻）超过 `[node] market_data_stale_ms`（默认 10000，0 关闭），置陈旧位并写一条内核记录 `market_data_stale`（已过时长与限值，第 19.2 节）。之后第一条行情输入清除它，闸门经 `Syncing` 回到 `Running`。
+  - 行情连接的 up 与 down 也清除陈旧位：down 本身已让节点降级，up 从零开始计时。
+  - backtest 数据中没有 `ConnectionStatus`，定时器不会安排；`RunStart`（恢复的运行）取消遗留的定时器，连接重新 up 时再安排。
+- `Faulted`（M5-L，`Driver::fault`）：step、日志写入、交易所适配或泵返回错误时，driver 不再推进输入，按顺序尽力做三件事，每件都作为输入记录：
+  - 实时运行且有未完成订单时，先步进 `Shutdown{cancel_all_then_exit}`，与 KillSwitch 相同：TradingState 置为 `Halted`，撤销全部订单，撤单命令照常交给 venue-io；不等待确认。
+  - 转移 `Fault`，节点进入 `Faulted`。策略不再收到回调，`on_stop` 也不调用。
+  - 关闭当前批次。
+  - 最后 `run()` 与 `run_realtime()` 返回原来的错误；`RunSummary` 带 `faulted`、`fault`、`state = FAULTED` 与仍未完成的订单数。节点打印 `the node faulted at seq …` 并以非零码退出。
+  - 日志本身写不进去时，后续输入也无法记录，因此不再步进任何输入（WAL 先于步进的规则不变）。这时撤单靠交易所的 `countdownCancelAll`：`Faulted` 不解除它，节点停止续期，倒计时结束后交易所撤销全部订单（第 10.3 节）。
+  - 回放一个 `Faulted` 的运行会在同一个输入上得到同样的错误；恢复它同样会失败，需要人工处理。
 - 转移表位于 `jarvis/engine/lifecycle.hpp`，是纯函数 `next_state(from, reason)`。原因码：`Configured`（Init → Wired）、`RunRequested`（Wired → Starting）、`Started`（Starting → Syncing）、`Synced`（Syncing → Running）、`HealthLost`（Syncing 或 Running → Degraded）、`HealthRestored`（Degraded → Syncing）、`EndOfData`（Running → Stopping）、`ShutdownRequested`（Wired 到 Degraded 之间任一状态 → Stopping；Stopping 中重复请求保持原状态）、`Drained`（Stopping → Stopped）、`Fault`（任一非终态 → Faulted）。表外的组合返回 `InvalidTransition`。
 - 每次状态转移都写成 WAL 事件 `NodeLifecycle{from, to, reason}`，回放会复现它；回放时每条记录都必须与转移表给出的结果一致，否则报 `InvalidTransition`。
 - 只有 core 线程推动状态。IO、admin、信号处理只入队事件。
@@ -1705,7 +1718,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 实现（M5-J，sandbox 与 live；`jarvis/strategy/telemetry.hpp`、`jarvis/live/telemetry.hpp`）：
 
-- 内核记录：`step` 内出现、但任何输入输出都看不到的决定，写成 `LogRecord{code, strategy, args[4]}`：`trading_state`（TradingState 的前后值、基础状态、同步与降级两个保持位）、`strategy_halted`（被错误策略停用的策略，是否连带停机）、`kill_switch`（撤单数）。每步最多 64 条，超出的计数；它们不写入运行日志也不进入快照，下一步开始时清空，回放产生同样的记录。
+- 内核记录：`step` 内出现、但任何输入输出都看不到的决定，写成 `LogRecord{code, strategy, args[4]}`：`trading_state`（TradingState 的前后值、基础状态、同步与降级两个保持位）、`strategy_halted`（被错误策略停用的策略，是否连带停机）、`kill_switch`（撤单数）、`market_data_stale`（距最后一次行情输入的纳秒数与限值，第 4.4 节）。每步最多 64 条，超出的计数；它们不写入运行日志也不进入快照，下一步开始时清空，回放产生同样的记录。
 - 采集：driver 每步之后调用记录器的 `after_step`。`TelemetryRecorder` 包在节点的记录器外面，把要记录的输入（生命周期、连接、账户快照摘要、对账、admin、关停、`RunStart`、限速反馈、交易所订单事件）、输出（下单、改单、撤单、拒单、对账差异与结果、`countdownCancelAll`）与内核记录复制成定长记录放进遥测环（8192 条，满了计数丢弃）。行情、定时器与批次边界只计数。core 线程每 100 ms 经 const 访问器读取内核、IO 线程与 persist 线程的计数器，发布一份样本；两步之间不调用任何会改变内核状态的方法（限速窗口用只读视图）。
 - JSON lines：遥测线程把每条记录格式化为一行 `{"ts":…,"seq":…,"event":…, 字段…}`，写入运行目录的 `telemetry.jsonl`（`[telemetry] jsonl`，默认开）。字段名与日志的字段描述符相同；小数与标识符写成字符串，时间写成整数纳秒，枚举写成名字，缺省值为 `null`。订单相关的每一行都带 `client_order_id`，一张订单从 `SubmitOrder` 到成交或撤单可以按它串起来。
 - Prometheus：`[telemetry] prometheus = "host:port"`（端口可为 0，由系统分配）时，遥测线程以文本格式提供 `/metrics`，另有 `/ready`（`Running` 时 200，否则 503）与 `/live`（core 线程 5 秒内发布过样本时 200）。上表各项对应的指标：
@@ -1724,6 +1737,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 ### 19.3 健康检查与 admin
 
 - readiness = 已同步 ∧ 行情新鲜 ∧ 用户流心跳正常。liveness = core 线程在规定时间内推进了 `seq` 或处于空闲。
+- 行情新鲜由内核按 `[node] market_data_stale_ms` 判断，陈旧时节点处于 `Degraded`，所以 `/ready` 与 `status` 的 `ready` 都为假（第 4.4 节）。
 - admin 命令经 Unix socket 进入，作为记录事件处理，因此可审计、可回放：`halt`、`reduce`、`resume`、`cancel_all`、`set_param`、`snapshot`、`shutdown`。
 - 实现（M5-G）：
   - `[admin] socket`（`unix://` 路径，可含 `{node_id}`）设置后，sandbox 与 live 节点启动 admin 线程（`jarvis/live/admin_server.hpp`）。socket 文件权限为 0600，只有属主能发命令；启动时替换遗留的 socket 文件，停止时删除。每个连接一条命令、一行回复（协议见 `jarvis/node/admin_protocol.hpp`）。

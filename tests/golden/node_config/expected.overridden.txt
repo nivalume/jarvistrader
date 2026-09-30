@@ -2,6 +2,7 @@
 node.id = "mm01"
 node.seed = 7
 node.strict_determinism = true
+node.market_data_stale_ms = 10000
 node.capacity.orders = 4096
 node.capacity.instruments = 64
 node.capacity.batch = 1024
@@ -64,4 +65,4 @@ persistence.truncate = false
 telemetry.prometheus = "0.0.0.0:9100"
 telemetry.jsonl = true
 admin.socket = "unix:///run/jarvis/{node_id}.sock"
-config_hash = 25760b86d2be96e85867ca2af501669b08f9dfc0434ed22992d3ef2601fed994
+config_hash = 27982323b63d101a0de67d5ef806612d17e6f1c5dc53ffc9729b0fabb246e439

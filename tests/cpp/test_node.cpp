@@ -635,6 +635,13 @@ check_margin = false
     errors = parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 5000\n", bad);
     CHECK(has_error(errors, "risk.countdown_cancel_all_ms", "at least 10000"));
     CHECK(parse("[node]\nid = \"mm01\"\n[risk]\ncountdown_cancel_all_ms = 0\n", bad).empty());
+
+    // Market data freshness: 10 s by default, hashed, 0 turns the check off.
+    CHECK(node::kernel_config(c).market_data_stale_ns == 10'000'000'000);
+    const std::string hashed = node::canonical_hashed_text(c);
+    REQUIRE(parse("[node]\nid = \"mm01\"\nmarket_data_stale_ms = 0\n", c).empty());
+    CHECK(node::kernel_config(c).market_data_stale_ns == 0);
+    CHECK(node::canonical_hashed_text(c) != hashed);
   }
 
   TEST_CASE("the simulated venue's books hold what the kernel's hold") {

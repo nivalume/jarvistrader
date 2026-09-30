@@ -338,7 +338,7 @@ live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const Live
   backtest::Driver driver{engine, source, router, options};
   const core::Status s = driver.run_realtime(pump, result.summary);
   if (!core::ok(s)) {
-    error = "the run stopped at seq " + std::to_string(engine.kernel().current.seq) + ": " +
+    error = "the node faulted at seq " + std::to_string(engine.kernel().current.seq) + ": " +
             std::string{core::to_string(s)};
   }
   return s;

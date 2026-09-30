@@ -392,6 +392,7 @@ void read_node(TableReader& root, NodeSection& n) {
   r.boolean("strict_determinism", n.strict_determinism);
   r.enumeration("shutdown", n.shutdown, kShutdownNames);
   r.unsigned_int("shutdown_timeout_ms", n.shutdown_timeout_ms);
+  r.unsigned_int("market_data_stale_ms", n.market_data_stale_ms);
   if (const toml::table* cap = r.table("capacity")) {
     read_capacity(*cap, "node.capacity", root.errors(), n.capacity);
   }
@@ -1006,6 +1007,7 @@ std::string canonical_hashed_text(const NodeConfig& config) {
   c.str("node.id", n.id);
   c.num("node.seed", n.seed);
   c.flag("node.strict_determinism", n.strict_determinism);
+  c.num("node.market_data_stale_ms", n.market_data_stale_ms);
   c.num("node.capacity.orders", n.capacity.orders);
   c.num("node.capacity.instruments", n.capacity.instruments);
   c.num("node.capacity.batch", n.capacity.batch);

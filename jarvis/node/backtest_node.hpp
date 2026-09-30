@@ -142,7 +142,7 @@ template <strategy::StrategySet SS, typename Source, InputHook Hook>
     backtest::Driver driver{engine, source, recorder, options};
     s = driver.run(result.summary);
     if (!core::ok(s)) {
-      error = "the run stopped: " + std::string{core::to_string(s)};
+      error = "the node faulted: " + std::string{core::to_string(s)};
     }
     return s;
   }
@@ -163,7 +163,7 @@ template <strategy::StrategySet SS, typename Source, InputHook Hook>
   s = driver.run(result.summary);
   const core::Status closed = writer.close();
   if (!core::ok(s)) {
-    error = "the run stopped at seq " + std::to_string(engine.kernel().current.seq) + ": " +
+    error = "the node faulted at seq " + std::to_string(engine.kernel().current.seq) + ": " +
             std::string{core::to_string(s)};
     return s;
   }

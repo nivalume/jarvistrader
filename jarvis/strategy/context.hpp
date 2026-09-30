@@ -54,6 +54,9 @@ struct KernelConfig {
   std::uint32_t book_window_levels = 16384;
   std::uint32_t book_overflow_levels = 4096;
   std::uint64_t seed = 0;
+  // Market data that is up but silent this long counts as stale (node.market_data_stale_ms);
+  // 0: no check.
+  std::uint64_t market_data_stale_ns = 0;
   TradingConfig trading;
 };
 
@@ -71,7 +74,8 @@ struct StrategyFailure {
 // use this owner.
 inline constexpr std::uint32_t kKernelTimerOwner = 0xFFFFFFFFU;
 inline constexpr std::uint32_t kCountdownTimerId = 0xFFFFFFFFU;
-inline constexpr std::uint32_t kAlgoTimerId = 0xFFFFFFFEU; // the execution algorithms' wake-ups
+inline constexpr std::uint32_t kAlgoTimerId = 0xFFFFFFFEU;  // the execution algorithms' wake-ups
+inline constexpr std::uint32_t kStaleTimerId = 0xFFFFFFFDU; // the market data freshness check
 
 struct AlgoTimerState {
   bool armed = false;
@@ -89,6 +93,17 @@ struct CountdownState {
   core::FixedVector<std::uint8_t> live{0}; // by slot: renewed at the last renewal or since
 
   template <typename Ar> void state(Ar& ar) { ar(running, armed, timer, live); }
+};
+
+// The market data freshness check (docs/architecture.md section 19.3): a periodic kernel timer,
+// armed once market data is up, compares the time since the last market data input with
+// node.market_data_stale_ms.
+struct FreshnessState {
+  core::UnixNanos last_market_data;
+  bool armed = false;
+  core::TimerHandle timer;
+
+  template <typename Ar> void state(Ar& ar) { ar(last_market_data, armed, timer); }
 };
 
 struct BookMark {
@@ -523,6 +538,7 @@ public:
   std::optional<model::ShutdownMode> shutdown; // the Shutdown input, once stepped
   execution::ConnectionHealth health;          // market data and order entry
   CountdownState countdown;
+  FreshnessState freshness;
   AlgoTimerState algo_timer;
   Trading trading;
 
@@ -538,8 +554,8 @@ public:
     }
     ar(current, instruments, matrix, features, books, ticks, bar_types, aggregators, timers,
        timer_entries, pending, dirty_pending, batches, dirty_batches, disabled, halt_requested,
-       stop_requested, node_state, stopped, shutdown, health, countdown, algo_timer, trading,
-       book_types_);
+       stop_requested, node_state, stopped, shutdown, health, countdown, freshness, algo_timer,
+       trading, book_types_);
   }
 
 private:

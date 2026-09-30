@@ -50,6 +50,9 @@ struct NodeSection {
   // How a sandbox or live node stops (section 19.4); the Shutdown input records it.
   model::ShutdownMode shutdown = model::ShutdownMode::CancelAllThenExit;
   std::uint32_t shutdown_timeout_ms = 10'000; // the wait for the cancels to be confirmed
+  // Market data that is up but silent this long counts as stale: the node goes Degraded until it
+  // flows again (section 19.3). 0: no check. It changes the kernel's steps, so it is hashed.
+  std::uint32_t market_data_stale_ms = 10'000;
 };
 
 struct TimeRange {

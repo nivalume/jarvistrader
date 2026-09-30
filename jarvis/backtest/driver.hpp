@@ -121,6 +121,9 @@ struct RunSummary {
   std::uint32_t left_open = 0;     // orders still open when the node stopped
   std::uint64_t snapshots = 0;     // EngineState snapshots taken
   std::uint64_t snapshot_failures = 0;
+  // An error ended the run (section 4.4): the node went to Faulted and run() returned `fault`.
+  bool faulted = false;
+  core::Status fault = core::Status::Ok;
   model::NodeState state = model::NodeState::Init;
   core::UnixNanos first_ts;
   core::UnixNanos last_ts;
@@ -134,8 +137,61 @@ public:
       : engine_{&engine}, source_{&source}, recorder_{&recorder}, options_{options},
         failures_{engine.kernel().failures.capacity()}, snapshots_{options.snapshot_every} {}
 
+  // A run that fails ends in Faulted (see fault()); `out` is filled either way.
   [[nodiscard]] core::Status run(RunSummary& out) {
     summary_ = RunSummary{};
+    const core::Status s = run_to_end();
+    return core::ok(s) ? finish(out) : fault(s, false, last_ts_, out);
+  }
+
+  // The same input sequence in real time: an input is stepped once the clock has reached its
+  // time, and every input the pump delivers is stamped with the clock's reading, so the log is
+  // a backtest input sequence that happened to arrive in real time and replays the same way.
+  // A batch closes when the next input has a later ts or when nothing more is due. The run
+  // ends when the pump asks to stop (ShutdownRequested), an admin shutdown was stepped, or a
+  // strategy error halts the node.
+  template <Pump P> [[nodiscard]] core::Status run_realtime(P& pump, RunSummary& out) {
+    summary_ = RunSummary{};
+    const core::Status s = run_realtime_to_end(pump);
+    return core::ok(s) ? finish(out) : fault(s, true, pump.now(), out);
+  }
+
+private:
+  core::Status finish(RunSummary& out) {
+    summary_.state = lifecycle_.state();
+    summary_.last_ts = last_ts_;
+    out = summary_;
+    return core::Status::Ok;
+  }
+
+  // A step, the log, the venue or the pump failed (section 4.4). Best effort, each recorded: in
+  // real time the kill switch (a Shutdown input that cancels every open order), then the Fault
+  // transition and the batch end. The run returns the original error. When the log itself has
+  // failed nothing more can be recorded, so nothing more is stepped either; the venue's
+  // countdownCancelAll then cancels the orders once the countdown runs out.
+  core::Status fault(core::Status error, bool realtime, core::UnixNanos now, RunSummary& out) {
+    const core::UnixNanos ts = now < last_ts_ ? last_ts_ : now;
+    gating_ = false;  // the sync gate no longer moves a node that is faulting
+    draining_ = true; // the kill switch's step goes ahead even after a halt
+    if (realtime && engine_->open_orders() > 0 && !engine_->kernel().shutdown) {
+      static_cast<void>(
+          feed(core::EventKey{ts, kKernelSource, 0},
+               model::Event{model::Shutdown{model::ShutdownMode::CancelAllThenExit, ts}}));
+    }
+    draining_ = false;
+    if (!engine::is_terminal(lifecycle_.state())) {
+      static_cast<void>(transition(model::LifecycleReason::Fault, ts));
+    }
+    static_cast<void>(close_batch());
+    summary_.faulted = true;
+    summary_.fault = error;
+    summary_.halted = engine_->halt_requested();
+    summary_.left_open = engine_->open_orders();
+    static_cast<void>(finish(out));
+    return error;
+  }
+
+  core::Status run_to_end() {
     core::Status s = core::Status::Ok;
     if constexpr (VenueSource<Source>) {
       s = run_venue();
@@ -164,24 +220,10 @@ public:
     if (!core::ok(s)) {
       return s;
     }
-    s = close_batch();
-    if (!core::ok(s)) {
-      return s;
-    }
-    summary_.state = lifecycle_.state();
-    summary_.last_ts = last_ts_;
-    out = summary_;
-    return core::Status::Ok;
+    return close_batch();
   }
 
-  // The same input sequence in real time: an input is stepped once the clock has reached its
-  // time, and every input the pump delivers is stamped with the clock's reading, so the log is
-  // a backtest input sequence that happened to arrive in real time and replays the same way.
-  // A batch closes when the next input has a later ts or when nothing more is due. The run
-  // ends when the pump asks to stop (ShutdownRequested), an admin shutdown was stepped, or a
-  // strategy error halts the node.
-  template <Pump P> [[nodiscard]] core::Status run_realtime(P& pump, RunSummary& out) {
-    summary_ = RunSummary{};
+  template <Pump P> core::Status run_realtime_to_end(P& pump) {
     core::Status s = start(pump.now());
     while (core::ok(s) && !engine_->halt_requested() && !engine_->stop_requested() &&
            !pump.stop_requested()) {
@@ -195,17 +237,9 @@ public:
     if (!core::ok(s)) {
       return s;
     }
-    s = close_batch();
-    if (!core::ok(s)) {
-      return s;
-    }
-    summary_.state = lifecycle_.state();
-    summary_.last_ts = last_ts_;
-    out = summary_;
-    return core::Status::Ok;
+    return close_batch();
   }
 
-private:
   [[nodiscard]] bool halted() const noexcept { return !draining_ && engine_->halt_requested(); }
 
   // One round of the real-time loop: what the pump delivers, then everything due.

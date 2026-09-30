@@ -48,6 +48,8 @@ strategy::KernelConfig kernel_config(const NodeConfig& config) {
   k.timers = config.node.capacity.timers;
   k.batch = config.node.capacity.batch;
   k.seed = config.node.seed;
+  constexpr std::uint64_t kNanosPerMs = 1'000'000;
+  k.market_data_stale_ns = std::uint64_t{config.node.market_data_stale_ms} * kNanosPerMs;
   // Orders, their fill records (16 per order on average) and the identities they carry: the
   // ClientOrderId prefix is the node id, the trader "<NODE>-001", the account "<VENUE>-001".
   constexpr std::uint64_t kTradesPerOrder = 16;

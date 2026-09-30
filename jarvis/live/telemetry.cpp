@@ -289,6 +289,10 @@ void log_fields(std::string& out, const strategy::LogRecord& r) {
   case strategy::LogCode::KillSwitch:
     out += ",\"cancels\":" + std::to_string(r.args[0]);
     break;
+  case strategy::LogCode::MarketDataStale:
+    out +=
+        ",\"age_ns\":" + std::to_string(r.args[0]) + ",\"stale_ns\":" + std::to_string(r.args[1]);
+    break;
   }
 }
 

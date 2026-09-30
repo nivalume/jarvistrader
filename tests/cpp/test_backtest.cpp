@@ -21,6 +21,7 @@
 #include "jarvis/model/wire.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/strategy/telemetry.hpp"
 #include "jarvis/testkit/alloc.hpp"
 #include "jarvis/testkit/property.hpp"
 
@@ -625,6 +626,69 @@ DrainRun run_drain(std::optional<md::ShutdownMode> mode, std::uint64_t cancel_at
   return r;
 }
 
+// Lifecycle moves and shutdown inputs, as "STATE@ts".
+std::vector<std::string> moves_of(const std::vector<Keyed>& inputs) {
+  std::vector<std::string> out;
+  for (const Keyed& k : inputs) {
+    if (const auto* lc = std::get_if<md::NodeLifecycle>(&k.event)) {
+      out.push_back(std::string{md::to_string(lc->to)} + "@" + std::to_string(k.key.ts.value()));
+    } else if (const auto* sd = std::get_if<md::Shutdown>(&k.event)) {
+      out.push_back(std::string{md::to_string(sd->mode)} + "@" + std::to_string(k.key.ts.value()));
+    }
+  }
+  return out;
+}
+
+md::Event market_status(std::uint64_t ts, bool up) {
+  md::ConnectionStatus c;
+  c.kind = md::ConnectionKind::MarketData;
+  c.up = up;
+  c.ts_init = UnixNanos{ts};
+  return md::Event{c};
+}
+
+// Keeps the kernel's log records of every step (what the telemetry thread would receive).
+class LoggingRecorder : public MemoryRecorder {
+public:
+  template <typename E> void after_step(E& engine, const EventKey& key) {
+    for (const st::LogRecord& r : engine.logs()) {
+      logs.emplace_back(key.ts.value(), r);
+    }
+  }
+  std::vector<std::pair<std::uint64_t, st::LogRecord>> logs;
+};
+
+// The log breaks once `limit` inputs are recorded.
+class FailingRecorder : public MemoryRecorder {
+public:
+  explicit FailingRecorder(std::size_t limit) : limit_{limit} {}
+  Status record(const EventKey& key, const md::Event& event) {
+    return inputs.size() >= limit_ ? Status::IoError : MemoryRecorder::record(key, event);
+  }
+
+private:
+  std::size_t limit_;
+};
+
+// A virtual clock stepping by 100 ns from 500 whose pump fails at `fail_at`.
+class FailingPump {
+public:
+  explicit FailingPump(std::uint64_t fail_at) : fail_at_{fail_at} {}
+  [[nodiscard]] UnixNanos now() const { return UnixNanos{now_}; }
+  [[nodiscard]] Status pump(UnixNanos now) const {
+    return now.value() >= fail_at_ ? Status::IoError : Status::Ok;
+  }
+  Status idle(UnixNanos /*now*/) {
+    now_ += 100;
+    return Status::Ok;
+  }
+  [[nodiscard]] static bool stop_requested() { return false; }
+
+private:
+  std::uint64_t now_ = 500;
+  std::uint64_t fail_at_;
+};
+
 } // namespace
 
 TEST_SUITE("unit") {
@@ -808,6 +872,155 @@ TEST_SUITE("unit") {
     CHECK(calls == std::vector<std::string>{"start@500", "trade@1000", "trade@3000", "trade@5000",
                                             "stop@5500"});
     CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
+  }
+
+  TEST_CASE("a node whose market data goes silent degrades until it flows again") {
+    const std::vector<Keyed> arrivals = {{key(900, 1, 0), market_status(900, true)},
+                                         {key(1000, 1, 1), trade(1000, 1000)},
+                                         {key(5000, 1, 2), trade(5000, 1001)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    st::KernelConfig c = small_config();
+    c.market_data_stale_ns = 1'000; // checked every 500 ns once market data is up
+    jarvis::engine::Engine engine{c, set};
+    LivePushSource source;
+    LoggingRecorder recorder;
+    bt::Driver driver{engine, source, recorder};
+    StepPump pump{arrivals, source, 500, 5500};
+    bt::RunSummary summary;
+    REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+
+    // Checks at 1400, 1900, 2400: 1400 ns without market data at 2400.
+    CHECK(moves_of(recorder.inputs) ==
+          std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500", "RUNNING@500",
+                                   "DEGRADED@2400", "SYNCING@5000", "RUNNING@5000", "STOPPING@5500",
+                                   "STOPPED@5500"});
+    std::vector<std::pair<std::uint64_t, st::LogRecord>> stale;
+    for (const auto& [ts, r] : recorder.logs) {
+      if (r.code == st::LogCode::MarketDataStale) {
+        stale.emplace_back(ts, r);
+      }
+    }
+    REQUIRE(stale.size() == 1);
+    CHECK(stale[0].first == 2400);
+    CHECK(stale[0].second.args[0] == 1'400);
+    CHECK(stale[0].second.args[1] == 1'000);
+    CHECK(calls == std::vector<std::string>{"start@500", "trade@1000", "trade@5000", "stop@5500"});
+    CHECK_FALSE(engine.kernel().health.market_data_stale);
+    CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Active);
+  }
+
+  TEST_CASE("without market data up, or with the check off, silence changes nothing") {
+    for (const bool up : {false, true}) {
+      std::vector<Keyed> arrivals = {{key(1000, 1, 1), trade(1000, 1000)},
+                                     {key(5000, 1, 2), trade(5000, 1001)}};
+      if (up) {
+        arrivals.insert(arrivals.begin(), Keyed{key(900, 1, 0), market_status(900, true)});
+      }
+      std::vector<std::string> calls;
+      Echo echo;
+      echo.log = &calls;
+      st::StaticStrategySet<Echo> set{echo};
+      st::KernelConfig c = small_config();
+      c.market_data_stale_ns = up ? 0 : 1'000;
+      jarvis::engine::Engine engine{c, set};
+      LivePushSource source;
+      MemoryRecorder recorder;
+      bt::Driver driver{engine, source, recorder};
+      StepPump pump{arrivals, source, 500, 5500};
+      bt::RunSummary summary;
+      REQUIRE(driver.run_realtime(pump, summary) == Status::Ok);
+      CHECK(moves_of(recorder.inputs).at(4) == "STOPPING@5500");
+      CHECK(summary.timers == 0);
+    }
+  }
+
+  TEST_CASE("a step that fails ends the run in Faulted, recorded") {
+    // A timer that is not the one due: the engine refuses it (a divergence).
+    const std::vector<Keyed> data = {
+        {key(1000, 1, 1), trade(1000, 1000)},
+        {key(2000, 1, 2),
+         md::Event{md::TimerFired{jarvis::core::TimerKey{0, 7}, UnixNanos{2000}, UnixNanos{2000}}}},
+        {key(3000, 1, 3), trade(3000, 1001)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    VectorSource source{data};
+    MemoryRecorder recorder;
+    bt::Driver driver{engine, source, recorder};
+    bt::RunSummary summary;
+    CHECK(driver.run(summary) == Status::InvalidState);
+    CHECK(summary.faulted);
+    CHECK(summary.fault == Status::InvalidState);
+    CHECK(summary.state == md::NodeState::Faulted);
+    const std::vector<std::string> moves = moves_of(recorder.inputs);
+    REQUIRE_FALSE(moves.empty());
+    CHECK(moves.back() == "FAULTED@2000");
+    const auto* last =
+        std::get_if<md::NodeLifecycle>(&recorder.inputs.at(recorder.inputs.size() - 2).event);
+    REQUIRE(last != nullptr);
+    CHECK(last->reason == md::LifecycleReason::Fault);
+    CHECK(std::holds_alternative<md::BatchEnd>(recorder.inputs.back().event));
+    // No callback after the failure, on_stop included.
+    CHECK(calls == std::vector<std::string>{"start@1000", "trade@1000"});
+  }
+
+  TEST_CASE("when the log fails, the node faults without recording more") {
+    const std::vector<Keyed> data = {{key(1000, 1, 1), trade(1000, 1000)},
+                                     {key(2000, 1, 2), trade(2000, 1001)},
+                                     {key(3000, 1, 3), trade(3000, 1002)}};
+    std::vector<std::string> calls;
+    Echo echo;
+    echo.log = &calls;
+    st::StaticStrategySet<Echo> set{echo};
+    jarvis::engine::Engine engine{small_config(), set};
+    VectorSource source{data};
+    FailingRecorder recorder{6};
+    bt::Driver driver{engine, source, recorder};
+    bt::RunSummary summary;
+    CHECK(driver.run(summary) == Status::IoError);
+    CHECK(summary.faulted);
+    CHECK(summary.fault == Status::IoError);
+    CHECK(summary.state == md::NodeState::Faulted);
+    // Four moves, the first trade and its batch end; the Fault transition could not be recorded.
+    CHECK(recorder.inputs.size() == 6);
+    CHECK(moves_of(recorder.inputs).back() == "RUNNING@1000");
+  }
+
+  TEST_CASE("in real time, a fault cancels every open order first") {
+    std::vector<std::string> log;
+    std::vector<md::ClientOrderId> ids;
+    st::KernelConfig c = small_config();
+    c.trading.risk.check_margin = false;
+    c.trading.risk.margin_ratio_bps = 0;
+    st::StaticStrategySet<Quoter> set{Quoter{&log, &ids}};
+    jarvis::engine::Engine engine{c, set};
+    LivePushSource source;
+    MemoryRecorder recorder;
+    const std::vector<md::Event> preamble = {perpetual(1)};
+    bt::DriverOptions options;
+    options.preamble = preamble;
+    bt::Driver driver{engine, source, recorder, options};
+    FailingPump pump{800};
+    bt::RunSummary summary;
+    CHECK(driver.run_realtime(pump, summary) == Status::IoError);
+    CHECK(moves_of(recorder.inputs) ==
+          std::vector<std::string>{"WIRED@500", "STARTING@500", "SYNCING@500", "RUNNING@500",
+                                   "CANCEL_ALL_THEN_EXIT@800", "FAULTED@800"});
+    std::size_t cancels = 0;
+    for (const KeyedOutput& o : recorder.outputs) {
+      cancels += std::holds_alternative<md::CancelOrder>(o.output) ? 1U : 0U;
+    }
+    CHECK(cancels == 1);
+    CHECK(summary.faulted);
+    CHECK(summary.state == md::NodeState::Faulted);
+    CHECK(summary.left_open == 1); // the venue never confirmed
+    CHECK(engine.kernel().trading.risk.trading_state() == md::TradingState::Halted);
+    CHECK(log == std::vector<std::string>{"submitted", "pending cancel"});
   }
 
   TEST_CASE("the sync gate follows the account's phase and the other connections") {

@@ -96,21 +96,24 @@ enum class LinkState : std::uint8_t { Unknown = 0, Up = 1, Down = 2 };
 struct ConnectionHealth {
   LinkState market_data = LinkState::Unknown;
   LinkState order_entry = LinkState::Unknown;
+  // Market data is up but nothing arrived for node.market_data_stale_ms (the kernel's check).
+  bool market_data_stale = false;
 
   constexpr void apply(model::ConnectionKind kind, bool up) noexcept {
     const LinkState state = up ? LinkState::Up : LinkState::Down;
     if (kind == model::ConnectionKind::MarketData) {
       market_data = state;
+      market_data_stale = false;
     } else if (kind == model::ConnectionKind::OrderEntry) {
       order_entry = state;
     }
   }
-  // Nothing known to be down.
+  // Nothing known to be down, and market data not stale.
   [[nodiscard]] constexpr bool healthy() const noexcept {
-    return market_data != LinkState::Down && order_entry != LinkState::Down;
+    return market_data != LinkState::Down && order_entry != LinkState::Down && !market_data_stale;
   }
 
-  template <typename Ar> void state(Ar& ar) { ar(market_data, order_entry); }
+  template <typename Ar> void state(Ar& ar) { ar(market_data, order_entry, market_data_stale); }
 };
 
 // What happens to a venue order the node does not manage.
