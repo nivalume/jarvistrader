@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +20,7 @@
 #include "jarvis/live/live_source.hpp"
 #include "jarvis/live/market_feed.hpp"
 #include "jarvis/live/persist.hpp"
+#include "jarvis/live/telemetry.hpp"
 #include "jarvis/node/admin_protocol.hpp"
 #include "jarvis/node/backtest_node.hpp"
 #include "jarvis/node/config.hpp"
@@ -45,6 +47,10 @@ struct SandboxRequest {
   std::string rest_base;                   // exchangeInfo; default: from venues[0].endpoint
   const std::atomic<bool>* stop = nullptr; // a shutdown request (signal, admin)
   std::optional<std::chrono::nanoseconds> run_for;
+  // Telemetry: the Python hosts' callback timings, and where to store the Prometheus port once
+  // bound (telemetry.prometheus may name port 0).
+  std::function<void(std::vector<StrategySample>&)> strategy_stats;
+  std::atomic<std::uint16_t>* telemetry_port = nullptr;
 };
 
 struct SandboxResult {
@@ -53,7 +59,18 @@ struct SandboxResult {
   MarketFeedStats feed;
   std::uint64_t admin_commands = 0; // taken from the admin socket
   PersistStats persist;
+  std::uint64_t telemetry_lines = 0;   // JSON lines written
+  std::uint64_t telemetry_dropped = 0; // records dropped for a full telemetry ring
+  std::string telemetry_metrics;       // the last Prometheus text, as /metrics served it
 };
+
+// Starts the node's telemetry (telemetry.hpp) when [telemetry] asks for any: the JSON lines
+// beside the run log (telemetry.jsonl, when the run is recorded) and the Prometheus endpoint.
+// `out` stays empty otherwise.
+[[nodiscard]] core::Status start_telemetry(const node::NodeConfig& config,
+                                           const std::string& directory,
+                                           std::atomic<std::uint16_t>* port,
+                                           std::unique_ptr<Telemetry>& out, std::string& error);
 
 // What is built before the loop starts: the instruments (exchangeInfo), the preamble (their
 // definitions and the simulated account, stamped `now`), and the feed configuration.
@@ -106,9 +123,18 @@ public:
     kernel_ = kernel;
   }
 
+  // Telemetry samples the kernel and the feed every round (it publishes every 100 ms).
+  void attach_telemetry(Telemetry* telemetry, TelemetrySources sources) {
+    telemetry_ = telemetry;
+    sources_ = std::move(sources);
+  }
+
   [[nodiscard]] core::Status pump(core::UnixNanos now) {
     if (const core::Status s = pump_admin(admin_, kernel_, *source_, now); !core::ok(s)) {
       return s;
+    }
+    if (telemetry_ != nullptr) {
+      telemetry_->sample(sources_, now);
     }
     SpscByteRing& ring = feed_->ring();
     for (std::size_t n = 0; n < kMaxPerPump; ++n) {
@@ -150,6 +176,8 @@ private:
   std::optional<core::UnixNanos> deadline_;
   AdminServer* admin_ = nullptr;
   const strategy::KernelServices* kernel_ = nullptr;
+  Telemetry* telemetry_ = nullptr;
+  TelemetrySources sources_;
 };
 
 namespace detail {
@@ -262,12 +290,31 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   SandboxPump<Hook> pump{clock, feed, source, hook, request.stop, deadline};
   pump.attach_admin(admin.get(), &engine.kernel());
+  std::unique_ptr<Telemetry> telemetry;
+  s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error);
+  if (!core::ok(s)) {
+    feed.stop();
+    return s;
+  }
+  pump.attach_telemetry(telemetry.get(), TelemetrySources{&engine.kernel(), &feed, nullptr,
+                                                          persister.get(), request.strategy_stats});
   if (persist) {
-    node::LogRecorder<Hook, Persister> recorder{*persister, hook};
+    node::LogRecorder<Hook, Persister> inner{*persister, hook};
+    TelemetryRecorder<node::LogRecorder<Hook, Persister>> recorder{inner, telemetry.get(), clock};
     s = detail::run_wired(config, engine, plan, source, recorder, pump, start, result, error);
   } else {
-    node::NullRecorder<Hook> recorder{hook};
+    node::NullRecorder<Hook> inner{hook};
+    TelemetryRecorder<node::NullRecorder<Hook>> recorder{inner, telemetry.get(), clock};
     s = detail::run_wired(config, engine, plan, source, recorder, pump, start, result, error);
+  }
+  if (telemetry) {
+    telemetry->sample(
+        TelemetrySources{&engine.kernel(), &feed, nullptr, persister.get(), request.strategy_stats},
+        clock.now(), true);
+    telemetry->stop();
+    result.telemetry_lines = telemetry->written();
+    result.telemetry_dropped = telemetry->dropped();
+    result.telemetry_metrics = telemetry->metrics_text();
   }
   feed.stop();
   if (admin) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -72,6 +73,13 @@ public:
   [[nodiscard]] std::int64_t time_offset_ms() const noexcept { return offset_ms_; }
   void set_time_offset(std::int64_t ms) noexcept { offset_ms_ = ms; } // measured elsewhere
   [[nodiscard]] bool banned() const;
+  // Answers with HTTP 429 and 418 so far (any thread).
+  [[nodiscard]] std::uint64_t too_many_requests() const noexcept {
+    return http_429_.load(std::memory_order_relaxed);
+  }
+  [[nodiscard]] std::uint64_t bans() const noexcept {
+    return http_418_.load(std::memory_order_relaxed);
+  }
   // Rate feedback of every response since the last call to this.
   [[nodiscard]] std::vector<model::RateLimitFeedback> take_limits();
 
@@ -130,6 +138,8 @@ private:
   network::HttpsClient http_;
   std::int64_t offset_ms_ = 0;
   std::int64_t banned_until_ms_ = 0;
+  std::atomic<std::uint64_t> http_429_{0};
+  std::atomic<std::uint64_t> http_418_{0};
   std::vector<model::RateLimitFeedback> limits_;
 };
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -611,6 +612,18 @@ void read_raw_frames(TableReader& r, RawFrames& out) {
   }
 }
 
+// "host:port" with a port from 0 to 65535 (an IPv6 host in brackets).
+bool valid_listen(std::string_view text) {
+  const std::size_t colon = text.rfind(':');
+  if (colon == std::string_view::npos || colon == 0 || colon + 1 >= text.size()) {
+    return false;
+  }
+  std::uint32_t port = 0;
+  const std::string_view digits = text.substr(colon + 1);
+  const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), port);
+  return ec == std::errc{} && end == digits.data() + digits.size() && port <= 65535;
+}
+
 void read_operations(TableReader& root, NodeConfig& c) {
   if (const toml::table* t = root.table("persistence")) {
     TableReader r{*t, "persistence", root.errors()};
@@ -627,6 +640,10 @@ void read_operations(TableReader& root, NodeConfig& c) {
     TableReader r{*t, "telemetry", root.errors()};
     r.string("prometheus", c.telemetry.prometheus);
     r.boolean("jsonl", c.telemetry.jsonl);
+    if (!c.telemetry.prometheus.empty() && !valid_listen(c.telemetry.prometheus)) {
+      root.errors().add("telemetry.prometheus", t,
+                        "expected host:port (such as \"0.0.0.0:9100\" or \"127.0.0.1:0\")");
+    }
     r.finish();
   }
   if (const toml::table* t = root.table("admin")) {

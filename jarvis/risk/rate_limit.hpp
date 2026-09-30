@@ -70,6 +70,18 @@ public:
 
   [[nodiscard]] std::size_t windows() const noexcept { return count_; }
 
+  // Window `i` as of `now`, without rolling it (for telemetry, outside any step).
+  struct WindowUse {
+    std::uint64_t interval_ns = 0;
+    std::uint32_t used = 0;
+    std::uint32_t limit = 0;
+  };
+  [[nodiscard]] WindowUse use(std::size_t i, core::UnixNanos now) const noexcept {
+    const State& s = windows_[i];
+    const bool current = s.index == now.value() / s.window.interval_ns;
+    return WindowUse{s.window.interval_ns, current ? s.used : 0U, s.window.limit};
+  }
+
   // Snapshot encoding (core/state.hpp): each window's current interval and count (the windows
   // themselves come from the configuration).
   template <typename Ar> void state(Ar& ar) {

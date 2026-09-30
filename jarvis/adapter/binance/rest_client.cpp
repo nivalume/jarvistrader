@@ -107,6 +107,9 @@ Status RestClient::call(std::string_view method, std::string_view path, Params p
   }
   if (out.status == 418) {
     banned_until_ms_ = now_ms() + (out.retry_after_s ? *out.retry_after_s * 1000 : kDefaultBanMs);
+    http_418_.fetch_add(1, std::memory_order_relaxed);
+  } else if (out.status == 429) {
+    http_429_.fetch_add(1, std::memory_order_relaxed);
   }
   if (out.status >= 400) {
     static_cast<void>(decode_rest_error(out.body, out.error_code, out.error_msg));

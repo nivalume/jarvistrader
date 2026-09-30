@@ -68,6 +68,7 @@ class RunResult:
     feed: Mapping[str, int] | None = None  # sandbox and live: the market data feed's counters
     venue: Mapping[str, int] | None = None  # live: the account and order entry's counters
     log: Mapping[str, int] | None = None  # sandbox and live: the persist thread's counters
+    telemetry: Mapping[str, int] | None = None  # sandbox and live: JSON lines written, dropped
     epoch: int | None = None  # live: the ClientOrderId epoch this run took
     warnings: tuple[str, ...] = ()  # live: what the startup checks warned about
     # live with persistence.resume: the run it continued ("from"), the snapshot ("snapshot_seq"),

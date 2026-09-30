@@ -821,6 +821,16 @@ struct Assembly {
     }
   }
 
+#if defined(JARVIS_PY_LIVE)
+  // The hosts' timings for the telemetry, on the core thread (plain counters, no GIL needed).
+  void timings(std::vector<live::StrategySample>& out) const {
+    for (const auto& h : hosts) {
+      const HostStats& st = h->stats();
+      out.push_back(live::StrategySample{h->id(), st.calls, st.total_ns, st.max_ns, st.overruns});
+    }
+  }
+#endif
+
   [[nodiscard]] nb::list stats() const {
     nb::list out;
     for (const auto& h : hosts) {
@@ -973,6 +983,13 @@ nb::dict persist_dict(const live::PersistStats& p) {
   return d;
 }
 
+nb::dict telemetry_dict(std::uint64_t lines, std::uint64_t dropped) {
+  nb::dict d;
+  d["lines"] = lines;
+  d["dropped"] = dropped;
+  return d;
+}
+
 nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
                           const std::optional<std::string>& out, std::optional<double> run_for_s) {
   live::SandboxRequest request;
@@ -983,6 +1000,9 @@ nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
   if (run_for_s) {
     request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
   }
+  request.strategy_stats = [&assembly](std::vector<live::StrategySample>& timings) {
+    assembly.timings(timings);
+  };
   live::SandboxResult result;
   std::string error;
   const Status s =
@@ -999,6 +1019,7 @@ nb::dict run_sandbox_node(const NodeSetup& setup, Assembly& assembly,
   nb::dict d = summary_dict(summary);
   d["feed"] = feed_dict(result.feed);
   d["log"] = persist_dict(result.persist);
+  d["telemetry"] = telemetry_dict(result.telemetry_lines, result.telemetry_dropped);
   d["strategies"] = assembly.stats();
   return d;
 }
@@ -1013,6 +1034,9 @@ nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
   if (run_for_s) {
     request.run_for = std::chrono::nanoseconds{static_cast<std::int64_t>(*run_for_s * 1e9)};
   }
+  request.strategy_stats = [&assembly](std::vector<live::StrategySample>& timings) {
+    assembly.timings(timings);
+  };
   live::LiveResult result;
   std::string error;
   const Status s =
@@ -1043,6 +1067,7 @@ nb::dict run_live_node(const NodeSetup& setup, Assembly& assembly,
   venue["unsent_at_stop"] = result.venue.unsent_at_stop;
   d["venue"] = venue;
   d["log"] = persist_dict(result.persist);
+  d["telemetry"] = telemetry_dict(result.telemetry_lines, result.telemetry_dropped);
   d["epoch"] = result.epoch;
   if (!result.recovery.from.empty()) {
     nb::dict resumed;

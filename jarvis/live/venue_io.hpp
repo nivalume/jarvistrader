@@ -15,6 +15,7 @@
 #include "jarvis/core/status.hpp"
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/spsc_ring.hpp"
+#include "jarvis/live/telemetry.hpp"
 #include "jarvis/model/identifiers.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/network/io.hpp"
@@ -72,10 +73,11 @@ using VenueCommand = std::variant<model::SubmitOrder, model::ModifyOrder, model:
 struct QueuedCommand {
   QueuedCommand() = default;
   // NOLINTNEXTLINE(google-explicit-constructor): a command with no barrier
-  QueuedCommand(const VenueCommand& c, std::uint64_t durable = 0)
-      : command{c}, durable_at{durable} {}
+  QueuedCommand(const VenueCommand& c, std::uint64_t durable = 0, std::uint64_t queued = 0)
+      : command{c}, durable_at{durable}, queued_ns{queued} {}
   VenueCommand command;
   std::uint64_t durable_at = 0;
+  std::uint64_t queued_ns = 0; // steady_now_ns() when queued (telemetry); 0: not measured
 };
 
 struct VenueIoConfig {
@@ -125,6 +127,8 @@ struct VenueIoStats {
   std::uint64_t barrier_waits = 0;  // commands that waited for their record to be durable
   std::uint64_t unsent_at_stop = 0; // commands still in the ring when the thread stopped (their
                                     // records never became durable: nothing was sent)
+  std::uint64_t http_429 = 0;       // REST answers: too many requests
+  std::uint64_t http_418 = 0;       // REST answers: the IP is banned
 };
 
 class VenueIo {
@@ -141,6 +145,8 @@ public:
   [[nodiscard]] SpscByteRing& ring() noexcept;                // venue -> core
   [[nodiscard]] SpscRing<QueuedCommand>& commands() noexcept; // core -> venue
   [[nodiscard]] VenueIoStats stats() const noexcept;
+  // Time from a command's queueing to its hand-off to the connection (telemetry).
+  [[nodiscard]] HistogramData command_latency() const noexcept;
   [[nodiscard]] std::uint16_t source_id() const noexcept;
   // The last error of the REST thread (listenKey, snapshot), for the operator.
   [[nodiscard]] std::string last_error() const;

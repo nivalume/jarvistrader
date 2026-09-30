@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "jarvis/adapter/binance/rest_client.hpp"
+#include "jarvis/cost/fees.hpp"
 
 namespace jarvis::live {
 
@@ -177,6 +178,43 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
   } else if (venue.endpoint == node::Endpoint::Testnet) {
     out.feed.endpoints.streams = "wss://fstream.binancefuture.com";
     out.feed.endpoints.ws_api = "wss://testnet.binancefuture.com/ws-fapi/v1";
+  }
+  return Status::Ok;
+}
+
+Status start_telemetry(const node::NodeConfig& config, const std::string& directory,
+                       std::atomic<std::uint16_t>* port, std::unique_ptr<Telemetry>& out,
+                       std::string& error) {
+  TelemetryConfig t;
+  t.listen = config.telemetry.prometheus;
+  if (config.telemetry.jsonl && !directory.empty()) {
+    t.jsonl_path = directory + "/telemetry.jsonl";
+  }
+  if (t.listen.empty() && t.jsonl_path.empty()) {
+    return Status::Ok;
+  }
+  std::string schedule = "binance_usdm_vip0";
+  if (!config.venues.empty()) {
+    const std::optional<node::SimSection>& sim = config.venues.front().sim;
+    if (sim && !sim->fee_schedule.empty()) {
+      schedule = sim->fee_schedule;
+    }
+  }
+  cost::MakerTakerFees fees;
+  if (core::ok(cost::MakerTakerFees::schedule(schedule, fees))) {
+    constexpr double kScale = 1e9;
+    const double off = 1.0 - static_cast<double>(fees.discount().raw()) / kScale;
+    t.maker_rate = static_cast<double>(fees.maker().raw()) / kScale * off;
+    t.taker_rate = static_cast<double>(fees.taker().raw()) / kScale * off;
+  }
+  out = std::make_unique<Telemetry>(t);
+  const Status s = out->start(error);
+  if (!core::ok(s)) {
+    out.reset();
+    return s;
+  }
+  if (port != nullptr) {
+    port->store(out->port(), std::memory_order_release);
   }
   return Status::Ok;
 }

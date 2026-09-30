@@ -543,6 +543,9 @@ private:
     if (!core::ok(s)) {
       return s;
     }
+    if constexpr (requires { recorder_->after_step(*engine_, key); }) {
+      recorder_->after_step(*engine_, key); // telemetry: the step's time and log records
+    }
     if (std::holds_alternative<model::StrategyError>(event)) {
       engine_->clear_failures(); // on_error failed: the policy has already been applied
       return core::Status::Ok;

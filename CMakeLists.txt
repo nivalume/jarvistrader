@@ -241,7 +241,8 @@ if(JARVIS_BUILD_LIVE)
   add_library(jarvis_live STATIC jarvis/live/raw_frames.cpp jarvis/live/market_feed.cpp
                           jarvis/live/redecode.cpp jarvis/live/sandbox_node.cpp
                           jarvis/live/venue_io.cpp jarvis/live/live_node.cpp
-                          jarvis/live/admin_server.cpp jarvis/live/persist.cpp)
+                          jarvis/live/admin_server.cpp jarvis/live/persist.cpp
+                          jarvis/live/telemetry.cpp)
   add_library(jarvis::live ALIAS jarvis_live)
   target_link_libraries(jarvis_live PUBLIC jarvis::kernel jarvis::shell jarvis::network jarvis::adapter)
 

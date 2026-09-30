@@ -29,6 +29,7 @@
 #include "jarvis/model/order_events.hpp"
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/strategy/exec_algo.hpp"
+#include "jarvis/strategy/telemetry.hpp"
 #include "jarvis/strategy/trading.hpp"
 
 // State the engine and the strategies' Context share (docs/architecture.md sections 7.2-7.5 and
@@ -361,6 +362,12 @@ public:
                                     const model::ClientOrderId& id) noexcept {
     return trading.cancel(current, strategy, id, outputs);
   }
+  void log(const LogRecord& record) noexcept {
+    if (!core::ok(logs.push_back(record))) {
+      ++logs_dropped;
+    }
+  }
+
   [[nodiscard]] core::Status cancel_all(StrategyIndex strategy, const model::InstrumentId* id,
                                         std::uint32_t& canceled) noexcept {
     return trading.cancel_all(current, strategy, id, outputs, canceled);
@@ -505,6 +512,9 @@ public:
   core::FixedVector<std::uint32_t> dirty_batches;
   core::FixedVector<model::Output> outputs;
   core::FixedVector<StrategyFailure> failures;
+  // This step's log records (telemetry.hpp); not part of a snapshot, cleared by the next step.
+  core::FixedVector<LogRecord> logs{kLogsPerStep};
+  std::uint64_t logs_dropped = 0;           // records beyond kLogsPerStep in one step
   core::FixedVector<std::uint8_t> disabled; // 1 once a strategy is halted
   bool halt_requested = false;
   bool stop_requested = false; // an admin shutdown: the driver stops the node

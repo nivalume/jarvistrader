@@ -329,7 +329,8 @@ TEST_SUITE("unit") {
     CAPTURE(mode);
     MockVenue venue{first_run_answers()};
     const TempDir dir;
-    const std::string text = config_text(dir, mode);
+    const std::string text =
+        config_text(dir, mode) + "\n[telemetry]\nprometheus = \"127.0.0.1:0\"\n";
     node::NodeConfig config;
     std::vector<node::ConfigError> errors;
     REQUIRE(node::parse_config(text, "live.toml", {}, config, errors) == Status::Ok);
@@ -387,6 +388,26 @@ TEST_SUITE("unit") {
     } else {
       CHECK(result.venue.barrier_waits == 0);
     }
+
+    // Telemetry: every command's time to its connection, the order's trace in the JSON lines.
+    CHECK(result.telemetry_dropped == 0);
+    CHECK(result.telemetry_metrics.find("jarvis_command_to_socket_ns_count 4\n") !=
+          std::string::npos);
+    CHECK(result.telemetry_metrics.find("jarvis_node_state{state=\"STOPPED\"} 1") !=
+          std::string::npos);
+    CHECK(result.telemetry_metrics.find("jarvis_ring_capacity{ring=\"commands\"}") !=
+          std::string::npos);
+    const std::string jsonl = file_text(result.directory + "/telemetry.jsonl");
+    CHECK(result.telemetry_lines > 0);
+    std::size_t traced = 0;
+    std::istringstream lines{jsonl};
+    for (std::string line; std::getline(lines, line);) {
+      traced +=
+          line.find(R"("client_order_id":"lv01-000005-00000001")") != std::string::npos ? 1U : 0U;
+    }
+    CHECK(traced >= 4); // the submit, its fill, the shutdown's cancel, the cancel's confirmation
+    CHECK(jsonl.find(R"("event":"ReconcileOutcome")") != std::string::npos);
+    CHECK(jsonl.find(R"("event":"CountdownCancelAll")") != std::string::npos);
 
     // The environment equivalence: the recorded live session under the backtest wiring.
     st::StaticStrategySet<Buyer> fresh{Buyer{}};

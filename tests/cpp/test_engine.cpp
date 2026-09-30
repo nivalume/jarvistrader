@@ -1541,6 +1541,14 @@ TEST_SUITE("unit") {
     const auto& cancel = std::get<md::CancelOrder>(engine.outputs()[0]);
     CHECK(cancel.client_order_id == id);
     CHECK(log == std::vector<std::string>{"SUBMITTED", "ACCEPTED"}); // nothing after the halt
+    // The step's log record names the halted strategy; the next step drops it.
+    REQUIRE(engine.logs().size() == 1);
+    CHECK(engine.logs()[0].code == st::LogCode::StrategyHalted);
+    CHECK(engine.logs()[0].strategy == 0);
+    CHECK(engine.logs()[0].args[0] == 0); // halt_strategy, not halt_node
+    engine.clear_outputs();
+    REQUIRE(drive(engine, {trade_at(5, "100.0")}, seq) == Status::Ok);
+    CHECK(engine.logs().empty());
   }
 
   TEST_CASE("event ids are derived from the seed and the input, never repeated") {
@@ -1828,6 +1836,14 @@ TEST_SUITE("unit") {
     CHECK(engine.kernel().trading.risk.stats().kill_switches == 1);
     REQUIRE(engine.outputs().size() == 1);
     CHECK(std::get<md::CancelOrder>(engine.outputs()[0]).client_order_id == ids[1]);
+    // The kill switch and the TradingState change are the step's log records.
+    REQUIRE(engine.logs().size() == 2);
+    CHECK(engine.logs()[0].code == st::LogCode::KillSwitch);
+    CHECK(engine.logs()[0].args[0] == 1);
+    CHECK(engine.logs()[1].code == st::LogCode::TradingStateChanged);
+    CHECK(engine.logs()[1].args[0] == static_cast<std::int64_t>(md::TradingState::Active));
+    CHECK(engine.logs()[1].args[1] == static_cast<std::int64_t>(md::TradingState::Halted));
+    CHECK(engine.logs()[1].args[2] == static_cast<std::int64_t>(md::TradingState::Halted));
     log.clear();
     REQUIRE(drive(engine, {trade_at(6, "63900.0")}, seq) == Status::Ok);
     CHECK(log == std::vector<std::string>{"DENIED TRADING_HALTED"}); // even a reducing sell

@@ -372,6 +372,7 @@ public:
   [[nodiscard]] const RiskStats& stats() const noexcept { return stats_; }
   [[nodiscard]] LossMonitor& monitor() noexcept { return monitor_; }
   [[nodiscard]] RateLimiter& limiter() noexcept { return limiter_; }
+  [[nodiscard]] const RateLimiter& limiter() const noexcept { return limiter_; }
 
   // Returns whether the effective state changed.
   bool apply(TradingTrigger trigger) noexcept {

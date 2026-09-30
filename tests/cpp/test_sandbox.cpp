@@ -3,9 +3,11 @@
 // trades on the simulated exchange in real time, and the recorded run replays under the
 // backtest wiring with the same outputs, byte for byte (the environment equivalence test).
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -25,6 +27,7 @@
 #include "jarvis/node/replay.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "support/http_get.hpp"
 #include "support/ws_test.hpp"
 
 namespace {
@@ -400,7 +403,7 @@ TEST_SUITE("unit") {
         }};
     self = &server;
     const TempDir dir;
-    const std::string text = config_text(dir);
+    const std::string text = config_text(dir) + "\n[telemetry]\nprometheus = \"127.0.0.1:0\"\n";
     node::NodeConfig config;
     std::vector<node::ConfigError> errors;
     REQUIRE(node::parse_config(text, "sandbox.toml", {}, config, errors) == Status::Ok);
@@ -419,10 +422,17 @@ TEST_SUITE("unit") {
     std::atomic<bool> stop{false};
     request.stop = &stop;
     request.run_for = std::chrono::seconds{30};
+    std::atomic<std::uint16_t> telemetry_port{0};
+    request.telemetry_port = &telemetry_port;
 
     // After the book syncs: more diffs in the chain, quotes and trades, as the venue streams.
+    // Between them the Prometheus endpoint is scraped.
     std::atomic<bool> pushed{false};
-    std::thread later{[&server, &pushed] {
+    std::string metrics;
+    int metrics_status = 0;
+    int ready_status = 0;
+    std::thread later{[&server, &pushed, &telemetry_port, &metrics, &metrics_status,
+                       &ready_status] {
       std::size_t pub = 99;
       std::size_t mkt = 99;
       const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -443,6 +453,9 @@ TEST_SUITE("unit") {
       server.push(pub, WsReply::send(book_ticker(1001, "84550.0", "84550.2")));
       server.push(mkt, WsReply::send(agg_trade(2, "84550.2")));
       std::this_thread::sleep_for(std::chrono::milliseconds{200});
+      metrics = jarvis::testsupport::http_get(telemetry_port.load(), "/metrics", metrics_status);
+      static_cast<void>(
+          jarvis::testsupport::http_get(telemetry_port.load(), "/ready", ready_status));
       server.push(pub, WsReply::send(diff(111, 115, 110, R"(["84549.8","4.0000"])", "")));
       server.push(pub, WsReply::send(book_ticker(1002, "84550.0", "84550.2")));
       pushed = true;
@@ -471,6 +484,36 @@ TEST_SUITE("unit") {
     CHECK(result.summary.venue_answers >= 4); // accepted, filled, accepted, canceled
     CHECK(result.summary.state == md::NodeState::Stopped);
     REQUIRE_FALSE(result.directory.empty());
+
+    // Telemetry: scraped while running, and the JSON lines of the session beside its log.
+    CHECK(metrics_status == 200);
+    CHECK(ready_status == 200);
+    CHECK(metrics.find("jarvis_node_state{state=\"RUNNING\"} 1") != std::string::npos);
+    CHECK(metrics.find("jarvis_ring_capacity{ring=\"market\"}") != std::string::npos);
+    CHECK(metrics.find("jarvis_market_data_age_ns ") != std::string::npos);
+    CHECK(metrics.find("jarvis_feed_connects_total ") != std::string::npos);
+    CHECK(result.telemetry_dropped == 0);
+    std::ifstream jsonl{result.directory + "/telemetry.jsonl"};
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(jsonl, line);) {
+      lines.push_back(line);
+    }
+    CHECK(lines.size() == result.telemetry_lines);
+    const auto count = [&lines](std::string_view needle) {
+      return std::count_if(lines.begin(), lines.end(), [needle](const std::string& l) {
+        return l.find(needle) != std::string::npos;
+      });
+    };
+    CHECK(count(R"("event":"NodeLifecycle")") >= 4);
+    CHECK(count(R"("event":"ConnectionStatus")") >= 1);
+    CHECK(count(R"("event":"SubmitOrder")") == 2);
+    CHECK(count(R"("event":"OrderFilled")") == 1);
+    CHECK(count(R"("event":"OrderCanceled")") == 1);
+    CHECK(count(R"("event":"trading_state")") >= 1);
+    for (const std::string& l : lines) {
+      CHECK(l.starts_with("{\"ts\":"));
+      CHECK(l.ends_with("}"));
+    }
 
     // The raw frames hold every message, snapshot answers included.
     live::RawFrameReader raw;

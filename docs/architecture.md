@@ -286,8 +286,8 @@ resume = false                    # live：从本节点最近一次运行的快�
 truncate = false                  # sandbox 与 live：每个完整快照之后删除只在它之前的日志段与快照
 
 [telemetry]
-prometheus = "0.0.0.0:9100"
-jsonl = true
+prometheus = "0.0.0.0:9100"       # sandbox 与 live：/metrics、/ready、/live；不设置则不开 HTTP
+jsonl = true                      # telemetry.jsonl 写在运行目录中
 
 [admin]
 socket = "unix:///run/jarvis/{node_id}.sock"   # sandbox 与 live；不设置则没有 admin socket
@@ -1701,6 +1701,24 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | 敞口与限额之比 | 风险 |
 | Python 回调耗时与超限次数 | 策略性能 |
 | 手续费估计与实际之差 | 成本模型偏差 |
+
+实现（M5-J，sandbox 与 live；`jarvis/strategy/telemetry.hpp`、`jarvis/live/telemetry.hpp`）：
+
+- 内核记录：`step` 内出现、但任何输入输出都看不到的决定，写成 `LogRecord{code, strategy, args[4]}`：`trading_state`（TradingState 的前后值、基础状态、同步与降级两个保持位）、`strategy_halted`（被错误策略停用的策略，是否连带停机）、`kill_switch`（撤单数）。每步最多 64 条，超出的计数；它们不写入运行日志也不进入快照，下一步开始时清空，回放产生同样的记录。
+- 采集：driver 每步之后调用记录器的 `after_step`。`TelemetryRecorder` 包在节点的记录器外面，把要记录的输入（生命周期、连接、账户快照摘要、对账、admin、关停、`RunStart`、限速反馈、交易所订单事件）、输出（下单、改单、撤单、拒单、对账差异与结果、`countdownCancelAll`）与内核记录复制成定长记录放进遥测环（8192 条，满了计数丢弃）。行情、定时器与批次边界只计数。core 线程每 100 ms 经 const 访问器读取内核、IO 线程与 persist 线程的计数器，发布一份样本；两步之间不调用任何会改变内核状态的方法（限速窗口用只读视图）。
+- JSON lines：遥测线程把每条记录格式化为一行 `{"ts":…,"seq":…,"event":…, 字段…}`，写入运行目录的 `telemetry.jsonl`（`[telemetry] jsonl`，默认开）。字段名与日志的字段描述符相同；小数与标识符写成字符串，时间写成整数纳秒，枚举写成名字，缺省值为 `null`。订单相关的每一行都带 `client_order_id`，一张订单从 `SubmitOrder` 到成交或撤单可以按它串起来。
+- Prometheus：`[telemetry] prometheus = "host:port"`（端口可为 0，由系统分配）时，遥测线程以文本格式提供 `/metrics`，另有 `/ready`（`Running` 时 200，否则 503）与 `/live`（core 线程 5 秒内发布过样本时 200）。上表各项对应的指标：
+  - 环：`jarvis_ring_used`、`jarvis_ring_high_water`、`jarvis_ring_capacity`（行情环、账户环、命令环），持久化积压 `jarvis_log_durable_lag_bytes`；
+  - 延迟直方图（整数纳秒分桶，250 ns 到 100 ms）：`jarvis_step_ns`（从记录输入到输出交出），`jarvis_tick_to_command_ns`（行情到达到它引起的命令进入 venue-io 命令环），`jarvis_command_to_socket_ns`（命令在环中等待到交给连接，venue-io 线程测量）；
+  - 连接：`jarvis_connection_up` 与 `jarvis_connection_downs_total`（按连接），`jarvis_feed_connects_total`，行情陈旧时长 `jarvis_market_data_age_ns`；
+  - 对账：`jarvis_reconciliations_total`、`jarvis_reconcile_diffs_total{kind}`、`jarvis_light_check_diffs_total`；
+  - 限速：内核窗口的 `jarvis_rate_limit_used` 与 `jarvis_rate_limit_remaining`，交易所上报的 `jarvis_venue_rate_limit_used`，REST 的 `jarvis_http_429_total` 与 `jarvis_http_418_total`；
+  - 拒单：`jarvis_orders_denied_total{reason}`（风控闸）与 `jarvis_orders_rejected_total{reason}`（交易所错误码）；
+  - 状态：`jarvis_node_state{state}`、`jarvis_trading_state{state}`、`jarvis_ready`、`jarvis_alive`；
+  - 风险：`jarvis_exposure_notional` 与 `jarvis_exposure_ratio`（按 instrument，敞口含挂单，除以 `risk.max_position_notional`）；
+  - Python：`jarvis_strategy_callbacks_total`、`jarvis_strategy_callback_ns_total`、`jarvis_strategy_callback_max_ns`、`jarvis_strategy_overruns_total`；
+  - 成本：`jarvis_fees_actual` 与 `jarvis_fees_estimated`（按成交的流动性方向与 `[venues.sim] fee` 费率表，缺省 `binance_usdm_vip0`）。
+- 运行结束时打印 JSON lines 行数与丢弃数；结果（C++ 的 `SandboxResult`、`LiveResult`，Python 的 `RunResult.telemetry`）带这两个数，C++ 结果另带最后一次的指标文本。
 
 ### 19.3 健康检查与 admin
 

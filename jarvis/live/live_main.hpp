@@ -33,6 +33,12 @@ inline void print_persist(std::ostream& out, const PersistStats& p) {
   }
 }
 
+inline void print_telemetry(std::ostream& out, std::uint64_t lines, std::uint64_t dropped) {
+  if (lines != 0 || dropped != 0) {
+    out << "telemetry: " << lines << " JSON lines, " << dropped << " records dropped\n";
+  }
+}
+
 inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
   const auto& s = r.summary;
   out << "run: " << (r.directory.empty() ? std::string{"(not recorded)"} : r.directory) << "\n"
@@ -44,6 +50,7 @@ inline int print_sandbox(std::ostream& out, const SandboxResult& r) {
       << r.feed.snapshots << " (" << r.feed.snapshot_failures << " failed), book syncs "
       << r.feed.book_syncs << ", ring waits " << r.feed.ring_waits << "\n";
   print_persist(out, r.persist);
+  print_telemetry(out, r.telemetry_lines, r.telemetry_dropped);
   if (s.left_open != 0) {
     out << "left open at stop: " << s.left_open << " orders\n";
   }
@@ -76,6 +83,7 @@ inline int print_live(std::ostream& out, const LiveResult& r) {
     out << ")\n";
   }
   print_persist(out, r.persist);
+  print_telemetry(out, r.telemetry_lines, r.telemetry_dropped);
   if (r.venue.unsent_at_stop != 0) {
     out << "not sent at stop: " << r.venue.unsent_at_stop
         << " commands (their records never became durable)\n";

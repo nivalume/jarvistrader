@@ -32,6 +32,7 @@
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/strategy/telemetry.hpp"
 
 // The deterministic kernel (docs/architecture.md sections 3, 4.3 and 5): `step(key, event)`
 // updates the kernel state, calls strategies and collects outputs. It reads nothing but its
@@ -99,14 +100,22 @@ public:
   // Processes one input event.
   [[nodiscard]] core::Status step(const core::EventKey& key, const model::Event& event) {
     k_.current = key;
+    k_.logs.clear();
     k_.trading.begin_step();
+    const Watched before = watched();
     const std::size_t first_output = k_.outputs.size();
     const core::Status s = std::visit([this](const auto& e) { return this->dispatch(e); }, event);
     deliver_order_events();
     cover_submits(first_output);
     arm_algo_timer();
     k_.timers.prune(); // between steps the next timer is the heap's top (TimerQueue::peek)
+    log_changes(before, first_output);
     return s;
+  }
+
+  // The log records of the last step (strategy/telemetry.hpp).
+  [[nodiscard]] std::span<const strategy::LogRecord> logs() const noexcept {
+    return k_.logs.span();
   }
 
   [[nodiscard]] std::span<const model::Output> outputs() const noexcept {
@@ -1173,6 +1182,45 @@ private:
     k_.disabled[s] = 1;
     std::uint32_t canceled = 0;
     static_cast<void>(k_.cancel_all(s, nullptr, canceled));
+    strategy::LogRecord r{strategy::LogCode::StrategyHalted, s, {}};
+    r.args[0] = policy_ == strategy::ErrorPolicy::HaltNode ? 1 : 0;
+    k_.log(r);
+  }
+
+  // What the step's log records compare before and after it.
+  struct Watched {
+    model::TradingState state = model::TradingState::Active;
+    model::TradingState base = model::TradingState::Active;
+    bool syncing = false;
+    bool degraded = false;
+    std::uint64_t kill_switches = 0;
+  };
+
+  [[nodiscard]] Watched watched() const noexcept {
+    const risk::TradingStateMachine& t = k_.trading.risk.state_machine();
+    return Watched{t.state(), t.base(), t.syncing(), t.degraded(),
+                   k_.trading.risk.stats().kill_switches};
+  }
+
+  void log_changes(const Watched& before, std::size_t first_output) noexcept {
+    const Watched after = watched();
+    if (after.kill_switches != before.kill_switches) {
+      std::int64_t cancels = 0;
+      for (std::size_t i = first_output; i < k_.outputs.size(); ++i) {
+        cancels += std::holds_alternative<model::CancelOrder>(k_.outputs[i]) ? 1 : 0;
+      }
+      strategy::LogRecord r{strategy::LogCode::KillSwitch, strategy::kNoLogStrategy, {}};
+      r.args[0] = cancels;
+      k_.log(r);
+    }
+    if (after.state != before.state || after.base != before.base ||
+        after.syncing != before.syncing || after.degraded != before.degraded) {
+      strategy::LogRecord r{strategy::LogCode::TradingStateChanged, strategy::kNoLogStrategy, {}};
+      r.args = {static_cast<std::int64_t>(before.state), static_cast<std::int64_t>(after.state),
+                static_cast<std::int64_t>(after.base),
+                (after.syncing ? 1 : 0) + (after.degraded ? 2 : 0)};
+      k_.log(r);
+    }
   }
 
   KernelServices k_;

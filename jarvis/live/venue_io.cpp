@@ -169,6 +169,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
   Counters counters;
   network::IoContext io;
   binance::OrderTracker tracker;
+  AtomicHistogram command_latency;
   RestThread rest;
   binance::ListenKeyKeeper keeper; // the REST thread's
   bool key_started = false;        // the REST thread's
@@ -617,9 +618,13 @@ struct VenueIo::Impl final : adapter::EventEmitter {
         break;
       }
       const VenueCommand c = q->command;
+      const std::uint64_t queued = q->queued_ns;
       commands.pop();
       head_held = false;
       command(c);
+      if (queued != 0) {
+        command_latency.add(steady_now_ns() - queued);
+      }
       ++n;
     }
     return n;
@@ -725,7 +730,11 @@ VenueIoStats VenueIo::stats() const noexcept {
                       v(c.check_failures),
                       v(c.rest_orders),
                       v(c.barrier_waits),
-                      v(c.unsent_at_stop)};
+                      v(c.unsent_at_stop),
+                      impl_->rest.client().too_many_requests(),
+                      impl_->rest.client().bans()};
 }
+
+HistogramData VenueIo::command_latency() const noexcept { return impl_->command_latency.read(); }
 
 } // namespace jarvis::live

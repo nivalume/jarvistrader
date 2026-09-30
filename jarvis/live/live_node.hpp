@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -26,6 +27,7 @@
 #include "jarvis/live/raw_frames.hpp"
 #include "jarvis/live/sandbox_node.hpp"
 #include "jarvis/live/spsc_ring.hpp"
+#include "jarvis/live/telemetry.hpp"
 #include "jarvis/live/venue_io.hpp"
 #include "jarvis/model/event.hpp"
 #include "jarvis/model/outputs.hpp"
@@ -74,6 +76,10 @@ struct LiveRequest {
   std::optional<node::ApiCredentials> credentials; // default: venues[0].credentials
   std::string epoch_file;  // default: "epoch" beside the run directories of persistence.dir
   std::string resume_from; // with persistence.resume: the run to continue (default: the latest)
+  // Telemetry: the Python hosts' callback timings, and where to store the Prometheus port once
+  // bound (telemetry.prometheus may name port 0).
+  std::function<void(std::vector<StrategySample>&)> strategy_stats;
+  std::atomic<std::uint16_t>* telemetry_port = nullptr;
   bool allow_unrestricted_ip = false;
   const std::atomic<bool>* stop = nullptr;
   std::optional<std::chrono::nanoseconds> run_for;
@@ -89,7 +95,10 @@ struct LiveResult {
   std::uint64_t epoch = 0;
   std::uint64_t admin_commands = 0; // taken from the admin socket
   PersistStats persist;
-  node::RecoveryReport recovery; // persistence.resume: where the run continued from
+  node::RecoveryReport recovery;       // persistence.resume: where the run continued from
+  std::uint64_t telemetry_lines = 0;   // JSON lines written
+  std::uint64_t telemetry_dropped = 0; // records dropped for a full telemetry ring
+  std::string telemetry_metrics;       // the last Prometheus text, as /metrics served it
 };
 
 // What is built before the loop starts.
@@ -125,7 +134,19 @@ public:
     if (core::ok(s)) {
       s = drain(venue_->ring(), venue_->source_id(), now);
     }
-    return core::ok(s) ? drain(feed_->ring(), feed_->source_id(), now) : s;
+    if (core::ok(s)) {
+      s = drain(feed_->ring(), feed_->source_id(), now);
+    }
+    if (telemetry_ != nullptr) {
+      telemetry_->sample(sources_, now);
+    }
+    return s;
+  }
+
+  // Telemetry samples the kernel and the IO threads every round (it publishes every 100 ms).
+  void attach_telemetry(Telemetry* telemetry, TelemetrySources sources) {
+    telemetry_ = telemetry;
+    sources_ = std::move(sources);
   }
 
   // The admin socket's commands come first in every round; `kernel` is published for status.
@@ -175,6 +196,8 @@ private:
   std::optional<core::UnixNanos> deadline_;
   AdminServer* admin_ = nullptr;
   const strategy::KernelServices* kernel_ = nullptr;
+  Telemetry* telemetry_ = nullptr;
+  TelemetrySources sources_;
 };
 
 // A recorder that also hands the venue commands to the venue-io thread. A full command ring is
@@ -218,7 +241,7 @@ public:
 
 private:
   core::Status send(const VenueCommand& c) {
-    const QueuedCommand q{c, barrier_ != nullptr ? barrier_->position() : 0};
+    const QueuedCommand q{c, barrier_ != nullptr ? barrier_->position() : 0, steady_now_ns()};
     while (!commands_->try_push(q)) {
       if (stop_ != nullptr && stop_->load(std::memory_order_relaxed)) {
         return core::Status::IoError;
@@ -298,13 +321,14 @@ void resume_venue(const execution::Oms& oms, VenueIoConfig& venue);
 void await_commands(VenueIo& venue, std::chrono::milliseconds limit);
 
 template <strategy::StrategySet SS, typename Recorder, typename Hook>
-[[nodiscard]] core::Status live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine,
-                                     const LivePlan& plan, LiveSource& source, Recorder& recorder,
-                                     VenueIo& venue, LivePump<Hook>& pump,
-                                     const std::atomic<bool>* stop, const Persister* barrier,
-                                     LiveResult& result, std::string& error) {
+[[nodiscard]] core::Status
+live_loop(const node::NodeConfig& config, engine::Engine<SS>& engine, const LivePlan& plan,
+          LiveSource& source, Recorder& recorder, VenueIo& venue, LivePump<Hook>& pump,
+          const std::atomic<bool>* stop, const Persister* barrier, Telemetry* telemetry,
+          const MonotonicClock& clock, LiveResult& result, std::string& error) {
   const std::uint64_t prior_seq = result.recovery.last_seq;
-  CommandRouter<Recorder> router{recorder, venue.commands(), stop, barrier};
+  CommandRouter<Recorder> command_router{recorder, venue.commands(), stop, barrier};
+  TelemetryRecorder<CommandRouter<Recorder>> router{command_router, telemetry, clock};
   backtest::DriverOptions options;
   options.preamble = plan.preamble.events;
   options.await_sync = true;
@@ -392,14 +416,26 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   LivePump<Hook> pump{clock, feed, venue, source, hook, request.stop, deadline};
   pump.attach_admin(admin.get(), &engine.kernel());
+  std::unique_ptr<Telemetry> telemetry;
+  if (core::ok(s)) {
+    s = start_telemetry(config, result.directory, request.telemetry_port, telemetry, error);
+  }
+  if (!core::ok(s)) {
+    venue.stop();
+    feed.stop();
+    return s;
+  }
+  pump.attach_telemetry(telemetry.get(), TelemetrySources{&engine.kernel(), &feed, &venue,
+                                                          persister.get(), request.strategy_stats});
   if (persist) {
     node::LogRecorder<Hook, Persister> recorder{*persister, hook};
     s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop,
-                          barrier ? persister.get() : nullptr, result, error);
+                          barrier ? persister.get() : nullptr, telemetry.get(), clock, result,
+                          error);
   } else {
     node::NullRecorder<Hook> recorder{hook};
     s = detail::live_loop(config, engine, plan, source, recorder, venue, pump, request.stop,
-                          nullptr, result, error);
+                          nullptr, telemetry.get(), clock, result, error);
   }
   // Nothing is appended once the loop has ended: the log is closed (every record durable) before
   // the last commands, which in barrier mode wait for that, are let out.
@@ -409,6 +445,11 @@ template <strategy::StrategySet SS, node::InputHook Hook>
     result.persist = persister->stats();
   }
   detail::await_commands(venue, std::chrono::milliseconds{2'000});
+  if (telemetry) {
+    telemetry->sample(
+        TelemetrySources{&engine.kernel(), &feed, &venue, persister.get(), request.strategy_stats},
+        clock.now(), true);
+  }
   venue.stop();
   feed.stop();
   if (admin) {
@@ -417,6 +458,12 @@ template <strategy::StrategySet SS, node::InputHook Hook>
   }
   result.feed = feed.stats();
   result.venue = venue.stats();
+  if (telemetry) {
+    telemetry->stop();
+    result.telemetry_lines = telemetry->written();
+    result.telemetry_dropped = telemetry->dropped();
+    result.telemetry_metrics = telemetry->metrics_text();
+  }
   if (core::ok(s) && !core::ok(closed)) {
     error = "cannot finish the run log in " + result.directory + ": " +
             std::string{core::to_string(closed)};
