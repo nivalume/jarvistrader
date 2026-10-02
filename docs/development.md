@@ -140,71 +140,20 @@ C++ 用 clangd，Python 用 Pylance 或 pyright。仓库根目录的 `.clangd` �
 | `tamasfe.even-better-toml` | TOML 配置 |
 | `alygin.vscode-tlaplus` | TLA+ 规约（可选） |
 
-如果装了微软的 C/C++ 扩展（`ms-vscode.cpptools`），关掉它的 IntelliSense，避免和 clangd 重复：`"C_Cpp.intelliSenseEngine": "disabled"`。
+微软的 C/C++ 扩展（`ms-vscode.cpptools`）与 clangd 的功能重复，推荐列表把它列为不推荐；已经装了的，共享设置里关掉了它的 IntelliSense（`"C_Cpp.intelliSenseEngine": "disabled"`）。
 
-`.vscode/settings.json`（不入库，按需调整）：
+`.vscode/` 里的 `settings.json`、`launch.json`、`tasks.json`、`extensions.json` 随仓库提交（`.gitignore` 只放行这四个文件，其余个人文件不入库）。Linux 与 macOS 共用同一份；打开仓库后 VS Code 会提示安装推荐的扩展。个人偏好写在用户设置里，不要改这几个文件。
 
-```jsonc
-{
-  "cmake.useCMakePresets": "always",
-  "cmake.configureSettings": {
-    "Python_EXECUTABLE": "${workspaceFolder}/.venv/bin/python"
-  },
-  "clangd.path": "clangd",             // 18 版；macOS: "/opt/homebrew/opt/llvm@18/bin/clangd"
-  "clangd.arguments": ["--background-index", "--clang-tidy", "--header-insertion=never"],
-  "C_Cpp.intelliSenseEngine": "disabled",
-  "[cpp]": { "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
-             "editor.formatOnSave": true },
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-  "python.testing.pytestEnabled": true,
-  "testMate.cpp.test.advancedExecutables": [
-    { "pattern": "build/dev/tests/test_*", "env": { "ASAN_OPTIONS": "detect_leaks=0" } }
-  ],
-  "files.watcherExclude": { "**/build/**": true, "**/runs/**": true }
-}
-```
+- `settings.json`：CMake Tools 只用 preset，并把 `.venv` 的 Python 传给 CMake；clangd 带 `--background-index --clang-tidy --header-insertion=never`；C++ 保存时用 clangd 格式化（clangd 不是 18 时关掉，见上）；Python 解释器与 pytest 指向 `.venv`；`build/dev/tests/test_*` 交给 TestMate 运行与调试；文件监视排除 `build/` 与 `runs/`。
+- `launch.json`：三个调试配置。`C++: test_engine` 与 `C++: pegged_mm, first 10 minutes` 用 lldb（CodeLLDB）；`Python: mm_quote, first 10 minutes` 用 debugpy，解释器是 `.venv`，`justMyCode` 关闭，所以能进入 `jarvis` 包。需要别的测试或参数时改 `program` 与 `args`。
+- `tasks.json`：`clean runs/mm-dbg`，是两个 mm 配置的 `preLaunchTask`。
 
-- CMake Tools 在状态栏选 configure preset `dev`。它和 `just` 共用 `build/dev`，两边可以混用。
-- pytest 的测试目录写在 `pyproject.toml`（`python/tests`、`tests/tools`）。
+使用时注意：
 
-`.vscode/launch.json`，调试一个测试与一个 Python 策略：
-
-```jsonc
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "C++: test_engine",
-      "type": "lldb",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/dev/tests/test_engine",
-      "args": ["-tc=*degrades*"],
-      "cwd": "${workspaceFolder}",
-      "env": { "ASAN_OPTIONS": "detect_leaks=0" }
-    },
-    {
-      "name": "C++: pegged_mm, first 10 minutes",
-      "type": "lldb",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/dev/bin/pegged_mm",
-      "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
-               "--set", "data.range.end=2024-03-30T00:10:00Z"],
-      "cwd": "${workspaceFolder}",
-      "env": { "ASAN_OPTIONS": "detect_leaks=0" }
-    },
-    {
-      "name": "Python: mm_quote, first 10 minutes",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/examples/py/mm_quote.py",
-      "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
-               "--set", "data.range.end=2024-03-30T00:10:00Z"],
-      "cwd": "${workspaceFolder}",
-      "justMyCode": false
-    }
-  ]
-}
-```
+- **clangd 的路径不写在共享设置里。** Linux 用 `PATH` 上的 clangd（18）；macOS 在用户设置里写 `"clangd.path": "/opt/homebrew/opt/llvm@18/bin/clangd"`（Intel Mac 为 `/usr/local/opt/llvm@18/bin/clangd`）。
+- **两个 mm 配置读 `catalog/`，要先按 5.3 节下载数据**，否则程序以退出码 1 结束。错误信息（`no data for ... NotFound`）在调试终端的输出里；调试器弹出的 `SystemExit: 1` 只表示进程以非零码退出。
+- **两个 mm 配置写 `runs/mm-dbg`。** 程序不覆盖已有的运行日志（`AlreadyExists`，退出码 1），所以每次启动前由 `tasks.json` 清掉这个目录。要保留某次运行，改 `--out`。
+- C++ 配置运行 `build/dev` 里的可执行文件，要先 `just build`。
 
 LeakSanitizer 在调试器下（ptrace）不能工作，所以调试 `dev` 构建的程序时设 `ASAN_OPTIONS=detect_leaks=0`；ASan 的其他检查照常。
 
@@ -344,6 +293,17 @@ build/rel/bin/pegged_mm --replay runs/mm-cpp
 - 回放用写出它的那个程序：Python 策略用策略文件的 `--replay`，C++ 策略用它自己的可执行文件；`jarvis replay` 只认识 `jarvis` 里注册过的 C++ 策略。
 - 一整天的数据约 1400 万条输入。`dev` 构建带 ASan，跑完整一天要很久，所以 C++ 版用 `rel`；调试时用 `--set data.range.end=2024-03-30T00:10:00Z` 只跑前 10 分钟。Python 版的扩展模块总是 Release 构建。
 
+回测指标：`examples/py/backtest_metrics.py` 对任一运行目录输出盈亏、成交、round trip、最大回撤与 Sharpe；`examples/py/trend_follow.py`（EMA 交叉的趋势策略，市价单）回测后直接打印：
+
+```sh
+.venv/bin/python examples/py/trend_follow.py --config examples/config/trend_follow.toml --out runs/trend
+.venv/bin/python examples/py/backtest_metrics.py runs/mm [--interval 60] [--json metrics.json]
+```
+
+- 成交、手续费、盈亏与订单计数来自 `RunReport`（内核自己的 OMS 与账户算的）；权益曲线从运行日志重建，按最后成交价估值（与报表同口径），回撤、Sharpe 与 round trip 由它得出。最后一行 `check` 是曲线与报表净盈亏之差，应为 0。
+- Sharpe 按 `--interval` 秒的权益收益年化，无风险利率为 0；数据只有几十个点时没有意义。只支持线性（USDT 保证金）合约与单币种账户。
+- `trend_follow.py` 用自己的命令行（`--config`、`--env`、`--set`、`--out`、`--run-for`、`--interval`、`--json`），没有 `--replay`。
+
 sandbox（生产行情加本地模拟交易所，需要能访问 Binance）：
 
 ```sh
@@ -409,5 +369,6 @@ CI 的分层与这些命令对应：lint → functional（gcc-13、clang-18、ma
 - **`import jarvis` 用的不是当前代码**：`just test` 或 `just install` 换掉了可编辑安装；`just develop` 再装一次。用 `python -c "import jarvis; print(jarvis.__file__, jarvis.build_info())"` 查看。
 - **`jarvis.Node` 不能跑 sandbox**：安装的是不带 live shell 的包（`build_info()` 的 `live_enabled` 为 False）；用 `just develop` 或 `just install-live`。
 - **在调试器里运行 ASan 程序报 LeakSanitizer 错误**：设 `ASAN_OPTIONS=detect_leaks=0`。
+- **调试 `mm_quote.py` 以 `SystemExit: 1` 结束**：看调试终端里 `mm_quote.py:` 开头的错误行。`no data for ... NotFound`：先下载数据（5.3 节）；`already holds a run log: AlreadyExists`：`--out` 目录里已有一次运行，删掉或换目录（共享的 `launch.json` 在启动前已清理 `runs/mm-dbg`）。
 - **macOS 上 `[threads]` 的节点启动失败**：绑核只支持 Linux，删掉 `[threads]` 中的 CPU 设置。
 - **回放出现偏差（退出码 3）**：见 `docs/runbook.md` 第 8.10 节。

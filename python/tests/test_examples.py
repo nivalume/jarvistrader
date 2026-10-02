@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,39 @@ def test_python_and_cpp_market_makers_write_the_same_log(tmp_path: Path) -> None
     assert row is not None and row.fills > 20
     assert row.taker_fills == 0  # post-only quotes never take
     assert report.orders["mm-001"].submitted > 20
+
+
+@pytest.mark.skipif(not (BIN / "golden_node").exists(), reason="C++ examples not built")
+def test_trend_follower_prints_metrics_that_match_the_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "examples" / "py"))
+    catalog = tmp_path / "catalog"
+    subprocess.run(
+        [BIN / "golden_node", "catalog", "--seed", "7", "--out", catalog, "--instrument"],
+        check=True,
+    )
+    example = _example("trend_follow")
+    code = example.main(
+        [
+            "--config", str(ROOT / "examples" / "config" / "trend_follow.toml"),
+            "--set", f"data.catalog={catalog}",
+            "--set", "data.range.start=2026-09-01T00:00:00Z",
+            "--set", "data.range.end=2026-09-01T00:10:00Z",
+            "--set", "strategies.trend-001.params.sample_s=5",
+            "--set", "strategies.trend-001.params.fast=2",
+            "--set", "strategies.trend-001.params.slow=4",
+            "--set", "strategies.trend-001.params.band_bps=0",
+            "--out", str(tmp_path / "run"),
+            "--interval", "10",
+        ]
+    )
+    assert code == 0
+    assert "check: equity curve minus report net PnL" in capsys.readouterr().out
+    metrics = example.backtest_metrics.compute(str(tmp_path / "run"), 10)
+    assert metrics.fills > 2
+    assert metrics.taker_fills == metrics.fills  # market orders only
+    assert metrics.round_trips >= 1
+    assert metrics.end_equity == metrics.start_equity + metrics.net_pnl
+    assert abs(metrics.check) < Decimal("0.000001")  # the curve ends where the report does
+    assert metrics.max_drawdown >= 0

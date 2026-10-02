@@ -1,0 +1,37 @@
+# Backtest of the trend follower (examples/py/trend_follow.py) against the simulated venue, over
+# the catalog of examples/config/mm_quote.toml (its header says how to write one). Its orders are
+# market orders, so every fill is a taker fill at the venue's fee schedule. Point data.catalog and
+# data.range elsewhere with --set.
+
+[node]
+id = "trend01"
+env = "backtest"
+seed = 1
+
+[data]
+catalog = "catalog"
+range = { start = "2024-03-30T00:00:00Z", end = "2024-03-31T00:00:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[venues.sim]
+fill_model = "queue_position"
+latency = { feed_ns = 2000000, out_ns = 15000000, in_ns = 5000000, jitter_ns = 1000000 }
+fee = { schedule = "binance_usdm_vip0" }
+balances = ["10000 USDT"]
+
+[[strategies]]
+id = "trend-001"
+impl = "py:TrendFollow"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+params = { instrument = "BTCUSDT-PERP.BINANCE", size = "0.010", sample_s = 10, fast = 30, slow = 120, band_bps = 2 }
+
+[persistence]
+dir = "runs/{node_id}/{run_id}"

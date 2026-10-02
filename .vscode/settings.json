@@ -1,0 +1,18 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureSettings": {
+    "Python_EXECUTABLE": "${workspaceFolder}/.venv/bin/python"
+  },
+  // clangd.path is left to each machine: Linux uses the clangd on PATH (18); on macOS set it in
+  // the user settings (docs/development.md section 4.1).
+  "clangd.arguments": ["--background-index", "--clang-tidy", "--header-insertion=never"],
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "[cpp]": { "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+             "editor.formatOnSave": true },
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.testing.pytestEnabled": true,
+  "testMate.cpp.test.advancedExecutables": [
+    { "pattern": "build/dev/tests/test_*", "env": { "ASAN_OPTIONS": "detect_leaks=0" } }
+  ],
+  "files.watcherExclude": { "**/build/**": true, "**/runs/**": true }
+}

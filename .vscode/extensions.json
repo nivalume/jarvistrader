@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd",
+    "ms-vscode.cmake-tools",
+    "vadimcn.vscode-lldb",
+    "matepek.vscode-catch2-test-adapter",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "tamasfe.even-better-toml",
+    "alygin.vscode-tlaplus"
+  ],
+  "unwantedRecommendations": ["ms-vscode.cpptools"]
+}

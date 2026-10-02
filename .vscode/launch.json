@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C++: test_engine",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/dev/tests/test_engine",
+      "args": ["-tc=*degrades*"],
+      "cwd": "${workspaceFolder}",
+      "env": { "ASAN_OPTIONS": "detect_leaks=0" }
+    },
+    {
+      "name": "C++: pegged_mm, first 10 minutes",
+      "type": "lldb",
+      "request": "launch",
+      "preLaunchTask": "clean runs/mm-dbg",
+      "program": "${workspaceFolder}/build/dev/bin/pegged_mm",
+      "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
+               "--set", "data.range.end=2024-03-30T00:10:00Z"],
+      "cwd": "${workspaceFolder}",
+      "env": { "ASAN_OPTIONS": "detect_leaks=0" }
+    },
+    {
+      "name": "Python: mm_quote, first 10 minutes",
+      "type": "debugpy",
+      "request": "launch",
+      "preLaunchTask": "clean runs/mm-dbg",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "program": "${workspaceFolder}/examples/py/mm_quote.py",
+      "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
+               "--set", "data.range.end=2024-03-30T00:10:00Z"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    }
+  ]
+}
