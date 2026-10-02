@@ -12,3 +12,6 @@ dist/
 wheelhouse/
 compile_commands.json
 benchmark-results/
+# example outputs (docs/development.md)
+runs/
+catalog/

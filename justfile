@@ -27,6 +27,13 @@ install: bootstrap
 install-live: bootstrap
     uv pip install --python {{python}} --reinstall ".[parquet]" -C cmake.define.JARVIS_BUILD_LIVE=ON
 
+# Python files load from python/jarvis; after a C++ change the extension rebuilds itself on
+# import (cmake and ninja on PATH). `just install` and `just test` replace it with a regular one.
+# Editable install with the live shell, for daily work (docs/development.md).
+develop: bootstrap
+    uv pip install --python {{python}} --no-build-isolation -e ".[parquet]" \
+      -C cmake.define.JARVIS_BUILD_LIVE=ON -C editable.rebuild=true -C editable.verbose=false
+
 # Everything a contributor runs before pushing: lint, functional tier, benchmark A/B, formal tier.
 check: lint test golden fp bench-compare tla-changed
 
@@ -100,8 +107,18 @@ tsan: bootstrap
     cmake --build --preset tsan
     ctest --preset tsan
 
-soak env="sandbox" hours="1":
-    @echo "soak {{env}} {{hours}}h: SKIPPED - soak runs need the sandbox environment (plan.md M4)"
+# The live node against a faulty venue (tests/cpp/test_chaos.cpp), `seeds` seeds.
+chaos seeds="5": (build "dev")
+    JARVIS_CHAOS_SEEDS={{seeds}} build/dev/tests/test_chaos
+
+# One seed under ASan and UBSan, its run kept in build/soak; TLC needs Java.
+# The nightly soak: the chaos test for `seconds`, then backward trace validation of its log.
+soak seconds="600": (build "dev")
+    rm -rf build/soak && mkdir -p build/soak
+    JARVIS_CHAOS_SEEDS=1 JARVIS_CHAOS_SOAK_S={{seconds}} JARVIS_CHAOS_KEEP=build/soak \
+      build/dev/tests/test_chaos
+    {{python}} tools/tla/check_trace.py --spec OrderLifecycle --log build/soak/seed-1 \
+      --jarvis build/dev/bin/jarvis
 
 sbe-regen:
     @echo "sbe-regen: SKIPPED - the SBE codec arrives with the Spot venue (plan.md M6)"

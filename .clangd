@@ -1,0 +1,4 @@
+# clangd (VS Code's clangd extension, Neovim's LSP client) reads the compile commands of the dev
+# preset; `just configure` writes them (docs/development.md).
+CompileFlags:
+  CompilationDatabase: build/dev

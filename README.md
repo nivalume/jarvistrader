@@ -2,7 +2,8 @@
 
 `jarvis` is a deterministic, event-driven C++20 trading kernel for Binance with a Python strategy
 layer (nanobind). The design is in [`docs/architecture.md`](docs/architecture.md), the
-milestones in [`docs/plan.md`](docs/plan.md), and running nodes in
+milestones in [`docs/plan.md`](docs/plan.md), setting up a development environment and the daily
+workflow in [`docs/development.md`](docs/development.md), and running nodes in
 [`docs/runbook.md`](docs/runbook.md).
 
 Status: milestones M0 to M4 are complete: engineering gates, the core and model, the engine and
@@ -82,15 +83,20 @@ build/rel/bin/jarvis config examples/config/node.toml --env sandbox --set node.s
 - Ninja
 - GCC 13+, Clang 17+, or AppleClang 15+ (the `fuzz` and `tsan` presets need Clang's runtime
   libraries, `libclang-rt-18-dev` on Ubuntu)
+- OpenSSL 3 with headers (`libssl-dev`, or Homebrew's `openssl@3` with `OPENSSL_ROOT_DIR`
+  set): every preset builds the live shell
 - Python 3.11 or newer
 - `uv` and `just` for the documented local workflow (`uv tool install rust-just` provides `just`)
-- clang-format and clang-tidy for linting
+- clang-format and clang-tidy 18 for linting (CI's version; others may format differently)
 - Java 17 or newer for the TLA+ model checker; `tools/tla/run_tlc.py` downloads the pinned
   `tla2tools.jar` on first use
 
 MSVC is intentionally unsupported because the planned kernel requires `__int128`.
 
 ## Local workflow
+
+Platform setup (Linux and macOS), editor configuration (VS Code, Neovim) and the edit, build and
+test loop are in [`docs/development.md`](docs/development.md).
 
 ```sh
 just bootstrap
@@ -99,8 +105,9 @@ just check        # lint, functional tests, golden, fingerprints, benchmark A/B,
 
 Individual tiers: `just test`, `just golden`, `just fp` (Release and `-O0` must write identical
 event logs), `just zero-alloc`, `just layering`, `just bench`, `just bench-py`,
-`just bench-compare base=main`, `just tla`, `just tla-changed`,
-`just fuzz target=decimal|wire|config|smoke`, `just tsan`. `tools/m2_acceptance.sh` repeats the
+`just bench-compare main`, `just tla`, `just tla-changed`, `just fuzz decimal` (or `wire`,
+`config`, `ws`, `http`, `json_codec`, `smoke`), `just tsan`, `just chaos`, `just soak`. Recipe
+arguments are positional. `tools/m2_acceptance.sh` repeats the
 M2 acceptance run on one day of Binance data.
 Recipes whose feature has not landed yet print `SKIPPED` and name the milestone in
 `docs/plan.md` that adds it. The gate order and what each tier checks are described in
