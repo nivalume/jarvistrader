@@ -1,6 +1,6 @@
 # Cross-compiles for Windows x86-64 from Linux with MinGW-w64 GCC (Debian/Ubuntu package
 # g++-mingw-w64-x86-64-posix), and runs the test executables under Wine (docs/development.md
-# section 6.4). Libraries built for MinGW, such as OpenSSL from the MSYS2 mingw64 repository,
+# section 6.5). Libraries built for MinGW, such as OpenSSL from the MSYS2 mingw64 repository,
 # go in a prefix named by the JARVIS_MINGW_PREFIX environment variable (holding include/ and lib/).
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR AMD64)

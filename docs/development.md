@@ -80,13 +80,19 @@ export PATH="$(brew --prefix openjdk@17)/bin:$PATH"
 - `bash`：macOS 自带 bash 3.2，`tools/bench_ab.sh` 需要 bash 4 以上；保证 Homebrew 的 bin 目录在 `PATH` 中排在 `/bin` 前面。
 - 不支持的部分：`[threads]` 绑核只在 Linux 与 Windows 上可用。CI 在 macOS 上只跑 `dev` 的构建与测试；`tsan`、fuzz、lint 与确定性门只在 Linux 上跑，以 Linux 的结果为准。
 
-### 2.3 可选：共享依赖缓存
+### 2.3 Windows
+
+见第 6.2 节。
+
+### 2.4 可选：共享依赖缓存
 
 每个构建目录默认各自下载一份 C++ 依赖。设置缓存目录后各 preset 共用一份，也避免重复下载：
 
 ```sh
 export CPM_SOURCE_CACHE="$HOME/.cache/CPM"
 ```
+
+Windows（PowerShell，用户级）：`[Environment]::SetEnvironmentVariable("CPM_SOURCE_CACHE", "$env:LOCALAPPDATA\CPM", "User")`。
 
 ## 3. 第一次构建
 
@@ -145,7 +151,7 @@ C++ 用 clangd，Python 用 Pylance 或 pyright。仓库根目录的 `.clangd` �
 
 微软的 C/C++ 扩展（`ms-vscode.cpptools`）与 clangd 的功能重复，推荐列表把它列为不推荐；已经装了的，共享设置里关掉了它的 IntelliSense（`"C_Cpp.intelliSenseEngine": "disabled"`）。
 
-`.vscode/` 里的 `settings.json`、`launch.json`、`tasks.json`、`extensions.json` 随仓库提交（`.gitignore` 只放行这四个文件，其余个人文件不入库）。Linux、macOS 与 Windows 共用同一份（Windows 的差别见第 6.2 节）；打开仓库后 VS Code 会提示安装推荐的扩展。个人偏好写在用户设置里，不要改这几个文件。
+`.vscode/` 里的 `settings.json`、`launch.json`、`tasks.json`、`extensions.json` 随仓库提交（`.gitignore` 只放行这四个文件，其余个人文件不入库）。Linux、macOS 与 Windows 共用同一份（Windows 的差别见第 6.3 节）；打开仓库后 VS Code 会提示安装推荐的扩展。个人偏好写在用户设置里，不要改这几个文件。
 
 - `settings.json`：CMake Tools 只用 preset，并把 `.venv` 的 Python 传给 CMake；clangd 带 `--background-index --clang-tidy --header-insertion=never`；C++ 保存时用 clangd 格式化（clangd 不是 18 时关掉，见上）；Python 解释器与 pytest 指向 `.venv`；`build/dev/tests/test_*` 交给 TestMate 运行与调试；文件监视排除 `build/` 与 `runs/`。
 - `launch.json`：三个调试配置。`C++: test_engine` 与 `C++: pegged_mm, first 10 minutes` 用 lldb（CodeLLDB）；`Python: mm_quote, first 10 minutes` 用 debugpy，解释器是 `.venv`，`justMyCode` 关闭，所以能进入 `jarvis` 包。需要别的测试或参数时改 `program` 与 `args`。
@@ -370,24 +376,119 @@ CI 的分层与这些命令对应：lint → functional（gcc-13、clang-18、ma
 - **MinGW-w64 GCC 13+**（MSYS2 或 Linux 上的交叉编译器）：能构建并运行 C++ 部分；不构建 Python 扩展，因为 MinGW 编出的扩展不能被 python.org 的 CPython 加载。
 - 直接用 cl.exe 配置时 CMake 报错并指向本节。
 
-需要的工具：
+### 6.2 安装
 
-| 工具 | 说明 |
-| --- | --- |
-| Visual Studio 2022（或 Build Tools） | 工作负载"使用 C++ 的桌面开发"，加上组件"适用于 Windows 的 C++ Clang 工具"（clang-cl、lld-link）；自带 CMake 与 Ninja |
-| OpenSSL 3（带头文件与导入库） | Shining Light 的 Win64 OpenSSL 完整版安装包，或 `choco install openssl`；装在 `C:\Program Files\OpenSSL` 或 `C:\Program Files\OpenSSL-Win64` 时 CMake 自己能找到，否则设 `OPENSSL_ROOT_DIR`。运行时要找到 `libssl-3-x64.dll`，把它的 `bin` 目录加进 `PATH` |
-| Python 3.11+ | python.org 的安装包 |
-| Git for Windows | 提供 `bash`，`justfile` 的命令在 bash 里运行；`Git\bin` 要在 `PATH` 上 |
-| uv、just | `winget install astral-sh.uv`，`uv tool install rust-just` |
+系统要求 Windows 10 1803 及以后或 Windows 11，x64。下面的命令在普通 PowerShell 里执行，用 winget 安装（`winget --version` 检查；没有时从 Microsoft Store 装"应用安装程序"）。包 ID 以 `winget search <名字>` 为准。
 
-构建要在"Developer PowerShell for VS 2022"（x64）里进行，它提供 MSVC 标准库、Windows SDK 与 clang-cl 的路径。Visual Studio 用"打开文件夹"打开仓库时按 `win-*` preset 自己准备这个环境；VS Code 从开发者 PowerShell 里启动（`code .`），CMake Tools 与 clangd 就继承它。
+| 工具 | 必需 | 用途 |
+| --- | --- | --- |
+| Visual Studio 2022 Build Tools（或 Community 及以上），带 C++ 与 Clang 组件 | 是 | clang-cl、lld-link、MSVC 标准库、Windows SDK、CMake、Ninja |
+| Git for Windows | 是 | 克隆仓库；它的 `sh` 运行 `justfile` 的命令 |
+| OpenSSL 3 完整版（带头文件与导入库） | 是 | 网络层与 live shell；所有 preset 都打开 `JARVIS_BUILD_LIVE` |
+| uv | 是 | 创建 `.venv`；系统上没有 Python 3.11 时自己下载一份 |
+| just | 建议 | 命令入口（`justfile`） |
+| LLVM 18 | 可选 | clang-format、clang-tidy、clangd 18，与 CI 的版本相同 |
+| Java 17 | 可选 | TLA+ 模型检查 |
+| MSYS2 | 可选 | MinGW 构建（第 6.5 节） |
 
-### 6.2 构建与测试
+#### 6.2.1 Visual Studio 2022
+
+只要编译工具、不要 IDE 时装 Build Tools：
 
 ```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --includeRecommended --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.CMake.Project --add Microsoft.VisualStudio.Component.VC.Llvm.Clang --add Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset"
+```
+
+要 IDE 时装 Community（`--id Microsoft.VisualStudio.2022.Community`），把工作负载换成 `Microsoft.VisualStudio.Workload.NativeDesktop`，其余参数相同。已经装了 Visual Studio 的，打开 Visual Studio Installer，对已装的版本点"修改"，勾选：
+
+- 工作负载"使用 C++ 的桌面开发"（推荐项里已含 MSVC v143 与 Windows SDK）；
+- 单个组件 "C++ Clang Compiler for Windows"（`Microsoft.VisualStudio.Component.VC.Llvm.Clang`）：clang-cl、lld-link 与 compiler-rt；
+- 单个组件 "MSBuild support for LLVM (clang-cl) toolset"（`...VC.Llvm.ClangToolset`）：Visual Studio 生成器的 `-T ClangCL` 用它；只用 Ninja 时可以不装；
+- 单个组件 "C++ CMake tools for Windows"（`...VC.CMake.Project`）：CMake 与 Ninja。
+
+版本：Visual Studio 2022 17.10 及以后自带的 CMake ≥ 3.25、clang-cl ≥ 17。更早的版本在 Installer 里"更新"，或另装 CMake（`winget install --id Kitware.CMake`）。
+
+#### 6.2.2 其他工具
+
+```powershell
+winget install --id Git.Git
+winget install --id astral-sh.uv
+winget install --id Casey.Just
+winget install --id ShiningLight.OpenSSL.Dev    # 完整版；ShiningLight.OpenSSL.Light 没有头文件，不能用
+# 可选
+winget install --id LLVM.LLVM --version 18.1.8
+winget install --id EclipseAdoptium.Temurin.17.JDK
+```
+
+- Python 不必单独装：`just bootstrap` 运行 `uv venv --python 3.11`，系统上没有 3.11 时 uv 下载一份（MSVC 构建的 CPython，能加载 clang-cl 编出的扩展）。想用 python.org 的版本时 `winget install --id Python.Python.3.11`。
+- OpenSSL 默认装在 `C:\Program Files\OpenSSL-Win64`，DLL 在其中的 `bin` 目录。winget 里找不到这个包时，从 slproweb.com 下载 "Win64 OpenSSL v3.x"（不是 Light 版）的安装包，或用 `choco install openssl`。
+- just 也可以用 `uv tool install rust-just` 安装。
+
+#### 6.2.3 环境变量
+
+设置一次（用户级，之后新开的终端生效）：
+
+```powershell
+$ssl = "C:\Program Files\OpenSSL-Win64"     # OpenSSL 的安装目录
+[Environment]::SetEnvironmentVariable("OPENSSL_ROOT_DIR", $ssl, "User")
+$path = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$path;$ssl\bin;C:\Program Files\Git\bin", "User")
+# 装了 LLVM 18 时：格式化与 lint 用它，不用 Visual Studio 自带的另一个版本
+[Environment]::SetEnvironmentVariable("CLANG_FORMAT", "C:\Program Files\LLVM\bin\clang-format.exe", "User")
+[Environment]::SetEnvironmentVariable("CLANG_TIDY", "C:\Program Files\LLVM\bin\clang-tidy.exe", "User")
+```
+
+- `OPENSSL_ROOT_DIR`：OpenSSL 装在 `C:\Program Files\OpenSSL` 或 `OpenSSL-Win64` 时 CMake 自己也能找到；设上更稳。
+- `$ssl\bin`：测试程序和节点运行时加载 `libssl-3-x64.dll` 与 `libcrypto-3-x64.dll`。不在 `PATH` 上时程序启动即退出，没有任何输出。
+- `C:\Program Files\Git\bin`：里面有 `sh.exe`，`justfile` 在 Windows 上用它执行命令。Git 安装程序默认只把 `Git\cmd` 加进 `PATH`，所以要自己加。不要加 `Git\usr\bin`：那里的 `link.exe` 等 GNU 工具与 MSVC 工具同名。
+
+#### 6.2.4 进入 x64 开发者环境
+
+clang-cl 要用 MSVC 标准库与 Windows SDK 的头文件和库，这些路径（`INCLUDE`、`LIB`、`PATH`）由 Visual Studio 的开发者环境设置。开始菜单里的 "Developer PowerShell for VS 2022" 默认的目标架构是 x86，链接 x64 程序会失败，所以用下面的函数进入 x64 环境。把它放进 PowerShell 配置文件（`New-Item -Force $PROFILE` 创建，`notepad $PROFILE` 编辑）：
+
+```powershell
+function Enter-VsDev64 {
+  $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+  $vs = & $vswhere -latest -products * -property installationPath   # -products *：也找 Build Tools
+  Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+  Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
+}
+```
+
+PowerShell 默认不运行配置文件（执行策略为 Restricted），先执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。以后每开一个终端先运行 `Enter-VsDev64`，再构建。也可以用开始菜单里的 "x64 Native Tools Command Prompt for VS 2022"（cmd）。
+
+- Visual Studio 用"打开文件夹"打开仓库时，按 `win-*` preset 的 `architecture`、`toolset` 自己准备 x64 环境，不需要这一步。
+- VS Code 在执行过 `Enter-VsDev64` 的终端里启动（`code .`），CMake Tools 与 clangd 就继承这个环境。
+
+#### 6.2.5 检查
+
+在执行过 `Enter-VsDev64` 的终端里：
+
+```powershell
+clang-cl --version                  # 17 或以后；Target: x86_64-pc-windows-msvc
+cmake --version                     # 3.25 或以后
+ninja --version
+$env:VSCMD_ARG_TGT_ARCH             # x64
+Test-Path "$env:OPENSSL_ROOT_DIR\include\openssl\ssl.h"    # True
+where.exe libssl-3-x64.dll          # 能找到
+sh --version                        # GNU bash（Git for Windows）
+git --version; uv --version; just --version
+```
+
+另外两点：
+
+- 仓库放在短路径下（如 `C:\src\jarvistrader`），依赖源码的路径不会超过 260 个字符。
+- Windows Defender 的实时扫描会明显拖慢构建（大量小文件）。可以把仓库目录加入排除项（管理员 PowerShell：`Add-MpPreference -ExclusionPath C:\src\jarvistrader`）。
+
+### 6.3 构建与测试
+
+在 x64 开发者环境里：
+
+```powershell
+cd C:\src
 git clone git@github.com:nivalume/jarvistrader.git; cd jarvistrader
-just bootstrap                  # .venv（.venv\Scripts\python.exe）
-just build                      # Windows 上 just 的默认 preset 是 win-dev
+just bootstrap                  # .venv（.venv\Scripts\python.exe）、scikit-build-core、pytest、pre-commit
+just build                      # Windows 上 just 的默认 preset 是 win-dev（Debug，clang-cl）
 ctest --preset win-dev
 ```
 
@@ -399,13 +500,15 @@ cmake --build --preset win-dev
 ctest --preset win-dev
 ```
 
-可执行文件是 `build\win-dev\bin\jarvis.exe` 等；`tools/golden.py` 与 Python 测试会自己补 `.exe`。
+- 可执行文件是 `build\win-dev\bin\jarvis.exe` 等，测试程序在 `build\win-dev\tests\`；`tools/golden.py` 与 Python 测试会自己补 `.exe`。
+- Release 构建用 `win-rel`：`just build win-rel`。
+- 第一次 configure 要访问 GitHub 下载依赖，与 Linux 相同（第 3 节）。
 
 VS Code：`launch.json` 的配置带 Windows 的路径（`"windows"` 字段）。`settings.json` 不能按系统区分，其中两处指向 `.venv/bin/python`，在 Windows 上用用户设置覆盖成 `.venv\Scripts\python.exe`：`cmake.configureSettings` 的 `Python_EXECUTABLE` 与 `python.defaultInterpreterPath`。`.clangd` 读 `build/dev` 的编译数据库，Windows 上在用户设置的 `clangd.arguments` 中加 `--compile-commands-dir=build/win-dev`。
 
-### 6.3 Python 扩展
+### 6.4 Python 扩展
 
-scikit-build-core 在 Windows 上默认用 Visual Studio 生成器与 cl.exe，所以安装前指定 Ninja 与 clang-cl（同样在开发者 PowerShell 里）：
+scikit-build-core 在 Windows 上默认用 Visual Studio 生成器与 cl.exe，所以安装前指定 Ninja 与 clang-cl（同样在 x64 开发者环境里）：
 
 ```powershell
 $env:CMAKE_GENERATOR = "Ninja"; $env:CC = "clang-cl"; $env:CXX = "clang-cl"
@@ -413,15 +516,25 @@ just install                    # 或 just develop
 .venv\Scripts\python.exe -m pytest
 ```
 
-### 6.4 MinGW
+### 6.5 MinGW
 
-MSYS2 的 MINGW64 shell：
+在 Windows 上用 MSYS2：
+
+```powershell
+winget install --id MSYS2.MSYS2       # 装到 C:\msys64
+```
+
+从开始菜单打开 "MSYS2 MINGW64"（不是 "MSYS2 MSYS" 或 UCRT64）：
 
 ```sh
-pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
+pacman -Syu                           # 第一次更新后窗口可能关闭；重新打开再执行一次
+pacman -S --needed git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
     mingw-w64-x86_64-openssl mingw-w64-x86_64-python
+cd /c/src/jarvistrader
 cmake --preset mingw-dev && cmake --build --preset mingw-dev && ctest --preset mingw-dev
 ```
+
+`mingw-dev` 不构建 Python 扩展；可执行文件依赖 MinGW 的 DLL，在 MINGW64 shell 之外运行要把 `C:\msys64\mingw64\bin` 加进 `PATH`。
 
 在 Linux 上交叉编译并用 Wine 跑测试（CI 的 `mingw-cross` job 也是这样做的）：
 
@@ -436,9 +549,9 @@ cmake --preset mingw-cross && cmake --build --preset mingw-cross -j4
 ctest --preset mingw-cross      # 每个测试程序经 wine64 运行
 ```
 
-工具链文件是 `cmake/toolchains/mingw-w64.cmake`：用 `x86_64-w64-mingw32-g++-posix`（`std::thread` 要 posix 线程模型），静态链接 libstdc++ 与 OpenSSL，所以 `.exe` 不依赖 MinGW 的 DLL。
+工具链文件是 `cmake/toolchains/mingw-w64.cmake`：用 `x86_64-w64-mingw32-g++-posix`（`std::thread` 要 posix 线程模型），静态链接 libstdc++ 与 OpenSSL，所以交叉编译出的 `.exe` 不依赖 MinGW 的 DLL。
 
-### 6.5 与 Linux、macOS 的差别
+### 6.6 与 Linux、macOS 的差别
 
 - **确定性**：Windows 构建写出的事件日志与 Linux 的逐字节相同（`jarvis corpus` 的指纹与全部 golden 用例都验证过）；日志头记录的编译器与平台字符串不同，不计入指纹。
 - **行尾**：`.gitattributes` 让所有文本文件在 Windows 上也以 LF 检出，golden 期望文件、配置与测试输入逐字节比较时才一致。程序写的文件都以二进制模式打开，不会写出 CRLF。
@@ -464,8 +577,10 @@ ctest --preset mingw-cross      # 每个测试程序经 wine64 运行
 - **在调试器里运行 ASan 程序报 LeakSanitizer 错误**：设 `ASAN_OPTIONS=detect_leaks=0`。
 - **调试 `mm_quote.py` 以 `SystemExit: 1` 结束**：看调试终端里 `mm_quote.py:` 开头的错误行。`no data for ... NotFound`：先下载数据（5.3 节）；`already holds a run log: AlreadyExists`：`--out` 目录里已有一次运行，删掉或换目录（共享的 `launch.json` 在启动前已清理 `runs/mm-dbg`）。
 - **macOS 上 `[threads]` 的节点启动失败**：绑核只支持 Linux 与 Windows，删掉 `[threads]` 中的 CPU 设置。
-- **Windows 上 configure 报 cl.exe 不受支持**：在开发者 PowerShell 里用 `win-dev`／`win-rel` preset（指定 clang-cl），或给 Visual Studio 生成器加 `-T ClangCL`（第 6.1 节）。
-- **Windows 上 configure 报找不到 clang_rt.builtins**：Visual Studio Installer 里装"适用于 Windows 的 C++ Clang 工具"；单独装的 LLVM 也带这个库。
+- **Windows 上 configure 报 cl.exe 不受支持**：在 x64 开发者环境里用 `win-dev`／`win-rel` preset（指定 clang-cl），或给 Visual Studio 生成器加 `-T ClangCL`（第 6.1 节）。
+- **Windows 上 configure 找不到 clang-cl、`stddef.h`，或链接报 `machine type x86 conflicts with x64`、找不到 `kernel32.lib`**：终端不在 x64 开发者环境里，先运行 `Enter-VsDev64`（第 6.2.4 节）；用 `$env:VSCMD_ARG_TGT_ARCH` 确认是 `x64`。
+- **Windows 上 `just` 报找不到 `sh`**：`C:\Program Files\Git\bin` 不在 `PATH` 上（第 6.2.3 节）。
+- **Windows 上 configure 报找不到 clang_rt.builtins**：Visual Studio Installer 里装单个组件 "C++ Clang Compiler for Windows"（第 6.2.1 节）；单独装的 LLVM 也带这个库。
 - **Windows 上测试程序启动即退出、没有输出**：找不到 OpenSSL 的 DLL，把 OpenSSL 的 `bin` 目录加进 `PATH`。
-- **Windows 上 TOML 配置报 `Error while parsing unicode scalar sequence`**：双引号字符串里的路径含 `\u`、`\U` 之类被当成转义，改用单引号或正斜杠（第 6.5 节）。
+- **Windows 上 TOML 配置报 `Error while parsing unicode scalar sequence`**：双引号字符串里的路径含 `\u`、`\U` 之类被当成转义，改用单引号或正斜杠（第 6.6 节）。
 - **回放出现偏差（退出码 3）**：见 `docs/runbook.md` 第 8.10 节。

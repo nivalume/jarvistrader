@@ -2,8 +2,9 @@
 # Recipes whose feature has not landed yet print "SKIPPED" and name the milestone that adds it.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
-# Windows: the bash of Git for Windows (on PATH).
-set windows-shell := ["bash", "-euo", "pipefail", "-c"]
+# Windows: Git for Windows' sh (its bash; Git\bin on PATH). Not `bash`, which on a machine with
+# WSL resolves to System32\bash.exe and runs the recipe in Linux.
+set windows-shell := ["sh", "-euo", "pipefail", "-c"]
 
 windows := if os_family() == "windows" { "true" } else { "false" }
 venv_bin := if windows == "true" { ".venv/Scripts" } else { ".venv/bin" }
