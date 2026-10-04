@@ -70,3 +70,10 @@ socket = "unix:///run/jarvis/{node_id}.sock"
 # market_cpu = 3
 # venue_cpu = 4
 # numa_node = 0    # the other threads run on this node's CPUs
+
+# Sandbox and live: when a connection that went silent (no FIN, no RST, as after a VM snapshot
+# or a dead path) counts as dead and reconnects; the client pings at half of it, so a quiet
+# stream is not mistaken for a dead one (docs/architecture.md 13.2). The defaults:
+# [network]
+# market_idle_timeout_ms = 30000 # the market data streams; 0: off
+# venue_idle_timeout_ms = 60000  # the WebSocket API and the user data stream; 0: off

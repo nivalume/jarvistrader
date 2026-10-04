@@ -102,6 +102,9 @@ struct VenueIoConfig {
   std::chrono::milliseconds snapshot_retry{2'000};
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
+  // The WebSocket API and the user data stream: a connection that receives nothing, the pongs to
+  // its own pings included, for this long is closed and reconnects. Zero: off. [network].
+  std::chrono::milliseconds idle_timeout{60'000};
   std::chrono::milliseconds rest_tick{1'000};    // the REST thread's listenKey check
   std::chrono::milliseconds check_every{60'000}; // the light check while synced; 0: off
   bool rest_fallback = true;                     // orders over REST while the WebSocket API is down

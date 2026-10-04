@@ -103,6 +103,7 @@ struct WsApiSession::Impl : std::enable_shared_from_this<Impl> {
     network::WsConfig wc;
     wc.url = config.url;
     wc.tls = config.tls;
+    wc.idle_timeout = config.idle_timeout;
     Conn& c = conns[gen];
     c.ws = std::make_shared<network::WsClient>(io, std::move(wc), std::move(h));
     ++stats.connects;

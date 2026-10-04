@@ -165,6 +165,20 @@ struct Tapper {
   }
 };
 
+// Counts the trades it sees and stops the node at `want`.
+struct TradeCounter {
+  int trades = 0;
+  int want = 2;
+  std::atomic<bool>* stop = nullptr;
+
+  static Status on_start(st::Context& ctx) { return ctx.subscribe_trades(btc()); }
+  void on_trade(st::Context& /*ctx*/, const md::TradeTick& /*t*/) {
+    if (++trades >= want && stop != nullptr) {
+      stop->store(true);
+    }
+  }
+};
+
 std::string config_text(const TempDir& dir) {
   return R"(
 [node]
@@ -435,6 +449,181 @@ TEST_SUITE("unit") {
     }
     feed.stop();
     CHECK(seen == std::vector<std::string>{"up", "trade", "down", "up", "trade"});
+    CHECK(server.error().empty());
+  }
+
+  TEST_CASE("the market feed reconnects and resyncs the book after a stream goes silent") {
+    // The depth connection delivers a diff and a quote and then goes silent without closing (no
+    // FIN, no RST): only the idle deadline can notice. The other connections are quiet but
+    // answer pings, so they must live. After the reconnect the book syncs again from a fresh
+    // snapshot and the new connection's data arrives.
+    ScriptedWssServer* self = nullptr;
+    std::atomic<int> public_opens{0};
+    std::atomic<int> snapshots{0};
+    ScriptedWssServer server{
+        10, [&self, &public_opens, &snapshots](std::size_t conn, const std::string& m) {
+          const std::string target = self->target(conn);
+          std::vector<WsReply> out;
+          if (m.empty() && target.starts_with("/public/stream")) {
+            out.push_back(WsReply::send(diff(95, 105, 90, R"(["84550.0","1.2000"])", "")));
+            if (public_opens++ == 0) {
+              out.push_back(WsReply::send(book_ticker(1000, "84550.0", "84550.1")));
+              out.push_back(WsReply::silent());
+            } else {
+              out.push_back(WsReply::send(book_ticker(2000, "84551.0", "84551.1")));
+            }
+          } else if (m.empty() && target.starts_with("/market/stream")) {
+            out.push_back(WsReply::send(agg_trade(1, "84550.1")));
+          } else if (field(m, "method") == "depth") {
+            ++snapshots;
+            out.push_back(WsReply::send(snapshot_answer(field(m, "id"))));
+          }
+          return out;
+        }};
+    self = &server;
+    const TempDir dir;
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::parse_config(config_text(dir), "sandbox.toml", {}, config, errors) == Status::Ok);
+    live::SandboxRequest request;
+    request.config = &config;
+    live::FeedEndpoints endpoints;
+    endpoints.streams = server.url("");
+    endpoints.ws_api = server.url("/ws-fapi/v1");
+    endpoints.tls.ca_file = server.ca_file();
+    request.endpoints = endpoints;
+    live::SandboxPlan plan;
+    std::string error;
+    REQUIRE(live::plan_sandbox(request, UnixNanos{1}, plan, error) == Status::Ok);
+    CHECK(plan.feed.idle_timeout == std::chrono::seconds{30}); // the default
+    CHECK(plan.feed.api_idle_timeout == std::chrono::seconds{60});
+    plan.feed.reconnect_initial = std::chrono::milliseconds{20};
+    plan.feed.idle_timeout = std::chrono::milliseconds{500};
+    plan.feed.api_idle_timeout = std::chrono::milliseconds{500};
+
+    const live::ArrivalClock anchor;
+    live::MarketFeed feed{anchor, plan.feed};
+    REQUIRE(feed.start(error) == Status::Ok);
+    std::vector<std::string> status; // ConnectionStatus(MarketData), in order
+    int clears = 0;
+    int quotes_after_up_again = 0;
+    wire::DecodeScratch scratch{4096};
+    const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+    while ((quotes_after_up_again < 1 || feed.stats().snapshots < 2 || clears < 2) &&
+           std::chrono::steady_clock::now() < give_up) {
+      bool empty = false;
+      const std::span<const std::byte> record = feed.ring().peek(empty);
+      if (empty) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        continue;
+      }
+      wire::RecordView v;
+      md::Event e;
+      REQUIRE(wire::decode_record(record, v) == Status::Ok);
+      REQUIRE(wire::decode_event(v, scratch, e) == Status::Ok);
+      if (const auto* c = std::get_if<md::ConnectionStatus>(&e)) {
+        status.emplace_back(c->up ? "up" : "down");
+      } else if (const auto* d = std::get_if<md::OrderBookDeltas>(&e)) {
+        clears += (!d->deltas.empty() && d->deltas.front().action == md::BookAction::Clear) ? 1 : 0;
+      } else if (std::holds_alternative<md::QuoteTick>(e) && status.size() >= 3 &&
+                 status.back() == "up") {
+        ++quotes_after_up_again;
+      }
+      feed.ring().release();
+    }
+    const live::MarketFeedStats stats = feed.stats();
+    feed.stop();
+    CHECK(status == std::vector<std::string>{"up", "down", "up"});
+    CHECK(quotes_after_up_again == 1);
+    CHECK(stats.idle_timeouts == 1); // the depth connection only; the quiet ones answered pings
+    CHECK(stats.connects == 3);      // two stream connections, the depth one twice
+    CHECK(stats.snapshots >= 2);     // the book synced from a fresh snapshot after the stall
+    CHECK(snapshots.load() >= 2);
+    CHECK(clears >= 2); // the book was cleared when it synced and again when its stream closed
+    CHECK(server.error().empty());
+  }
+
+  TEST_CASE("a sandbox node degrades on a silent stall and returns to Running") {
+    // The stream connection says one trade and goes silent. With [network] market_idle_timeout_ms
+    // = 1000 the client gives up, the sync gate takes the node to Degraded when the connection
+    // is recorded down, and the reconnect (a second trade) brings it back through Syncing.
+    ScriptedWssServer* self = nullptr;
+    std::atomic<int> opens{0};
+    ScriptedWssServer server{
+        8, [&self, &opens](std::size_t conn, const std::string& m) {
+          std::vector<WsReply> out;
+          if (m.empty() && self->target(conn).starts_with("/market/stream")) {
+            const int n = ++opens;
+            out.push_back(WsReply::send(agg_trade(static_cast<std::uint64_t>(n), "84550.1")));
+            if (n == 1) {
+              out.push_back(WsReply::silent());
+            }
+          }
+          return out;
+        }};
+    self = &server;
+    const TempDir dir;
+    std::string text = config_text(dir);
+    const std::string all = R"(streams = ["aggTrade", "bookTicker", "depth@100ms"])";
+    text.replace(text.find(all), all.size(), R"(streams = ["aggTrade"])");
+    text.replace(text.find("cpp:Tapper"), 10, "cpp:TradeCounter");
+    text += "\n[network]\nmarket_idle_timeout_ms = 1000\n";
+    node::NodeConfig config;
+    std::vector<node::ConfigError> errors;
+    REQUIRE(node::parse_config(text, "sandbox.toml", {}, config, errors) == Status::Ok);
+    CHECK(config.network.market_idle_timeout_ms == 1000);
+    CHECK(config.network.venue_idle_timeout_ms == 60'000);
+    live::SandboxRequest request;
+    request.config = &config;
+    request.manifest.config_text = text;
+    request.manifest.source = "sandbox.toml";
+    live::FeedEndpoints endpoints;
+    endpoints.streams = server.url("");
+    endpoints.ws_api = server.url("/ws-fapi/v1");
+    endpoints.tls.ca_file = server.ca_file();
+    request.endpoints = endpoints;
+    std::atomic<bool> stop{false};
+    request.stop = &stop;
+    request.run_for = std::chrono::seconds{30};
+
+    TradeCounter counter;
+    counter.stop = &stop;
+    st::StaticStrategySet<TradeCounter> set{counter};
+    live::SandboxResult result;
+    std::string error;
+    node::NoHook hook;
+    const auto started = std::chrono::steady_clock::now();
+    const Status s = live::run_sandbox(request, set, result, error, hook);
+    INFO(error);
+    REQUIRE(s == Status::Ok);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{15});
+    CHECK(set.get<0>().trades == 2);
+    CHECK(result.feed.idle_timeouts == 1);
+    CHECK(result.feed.connects == 2);
+    CHECK(result.summary.state == md::NodeState::Stopped);
+
+    // The lifecycle in the telemetry lines: Running, then Degraded, then Running again.
+    std::ifstream jsonl{result.directory + "/telemetry.jsonl"};
+    std::vector<std::string> states;
+    for (std::string line; std::getline(jsonl, line);) {
+      if (line.find(R"("event":"NodeLifecycle")") == std::string::npos) {
+        continue;
+      }
+      INFO(line);
+      for (const std::string_view name : {"RUNNING", "DEGRADED", "SYNCING"}) {
+        if (line.find(R"("to":")" + std::string{name} + "\"") != std::string::npos) {
+          states.emplace_back(name);
+        }
+      }
+    }
+    const auto first = [&states](std::string_view n, std::size_t from) {
+      return std::find(states.begin() + static_cast<std::ptrdiff_t>(from), states.end(), n);
+    };
+    const auto running = first("RUNNING", 0);
+    REQUIRE(running != states.end());
+    const auto degraded = first("DEGRADED", static_cast<std::size_t>(running - states.begin()));
+    REQUIRE(degraded != states.end());
+    CHECK(first("RUNNING", static_cast<std::size_t>(degraded - states.begin())) != states.end());
     CHECK(server.error().empty());
   }
 

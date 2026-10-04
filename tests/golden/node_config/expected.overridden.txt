@@ -70,4 +70,6 @@ threads.core_cpu = none
 threads.market_cpu = none
 threads.venue_cpu = none
 threads.numa_node = none
+network.market_idle_timeout_ms = 30000
+network.venue_idle_timeout_ms = 60000
 config_hash = 27982323b63d101a0de67d5ef806612d17e6f1c5dc53ffc9729b0fabb246e439

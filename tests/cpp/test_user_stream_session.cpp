@@ -14,6 +14,7 @@
 #include "jarvis/adapter/binance/user_stream.hpp"
 #include "jarvis/adapter/binance/user_stream_session.hpp"
 #include "jarvis/network/io.hpp"
+#include "jarvis/network/ws_client.hpp"
 #include "support/ws_test.hpp"
 
 namespace {
@@ -157,6 +158,43 @@ TEST_SUITE("unit") {
     CHECK(st.subscribe_errors == 1);
     CHECK(rec.frames[0].find("\"A\"") != std::string::npos);
     CHECK(rec.frames[1].find("\"B\"") != std::string::npos);
+    CHECK(server.error().empty());
+  }
+
+  TEST_CASE("a user stream that goes silent is dropped by the idle deadline and reconnects") {
+    // Connection 0 confirms, delivers an event and goes silent without closing. Connection 1
+    // is a healthy but quiet stream: it must outlive several idle deadlines because the
+    // session's pings are answered.
+    ScriptedWssServer server{2, [](std::size_t conn, const std::string& m) {
+                               if (m.empty()) {
+                                 return std::vector<WsReply>{};
+                               }
+                               if (conn == 0) {
+                                 return std::vector<WsReply>{WsReply::send(confirmed(m)),
+                                                             WsReply::send(event("LK1", "A")),
+                                                             WsReply::silent()};
+                               }
+                               return std::vector<WsReply>{WsReply::send(confirmed(m)),
+                                                           WsReply::send(event("LK1", "B"))};
+                             }};
+    net::IoContext io;
+    Recorder rec;
+    binance::UserStreamConfig config = config_for(server);
+    config.idle_timeout = std::chrono::milliseconds{500};
+    binance::UserStreamSession session{io, config, rec.handlers()};
+    session.start("LK1");
+    REQUIRE(run_until(io, [&] { return rec.frames.size() == 2; }));
+    REQUIRE(rec.downs.size() == 1);
+    CHECK(rec.downs[0].starts_with(net::kWsIdleTimeout));
+    CHECK(rec.lives == 2);
+    CHECK(session.live());
+    CHECK(session.stats().connects == 2);
+    io.restart();
+    io.run_for(std::chrono::milliseconds{1600}); // three deadlines of silence from the server
+    CHECK(rec.downs.size() == 1);
+    CHECK(session.live());
+    CHECK(session.stats().connects == 2);
+    session.stop();
     CHECK(server.error().empty());
   }
 

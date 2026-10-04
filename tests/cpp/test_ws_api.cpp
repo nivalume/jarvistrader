@@ -13,6 +13,7 @@
 #include "jarvis/adapter/binance/ws_api.hpp"
 #include "jarvis/network/io.hpp"
 #include "jarvis/network/signer.hpp"
+#include "jarvis/network/ws_client.hpp"
 #include "support/ws_test.hpp"
 
 namespace {
@@ -289,6 +290,45 @@ TEST_SUITE("unit") {
     CHECK(rec.outcomes[4].kind == binance::OutcomeKind::Acknowledged);
     CHECK(session.stats().lost == 1);
     CHECK(session.stats().connects == 2);
+    CHECK(server.error().empty());
+  }
+
+  TEST_CASE("a WebSocket API connection that goes silent is dropped by the idle deadline") {
+    // Connection 0 logs on, then swallows an order and goes silent without closing (a VM fork,
+    // a dead path). The idle deadline closes it well before the request timeout: the order ends
+    // Unknown with the reason, order entry is reported down, and the session reconnects. A quiet
+    // but healthy connection (answering pings) is not touched.
+    ScriptedWssServer server{2, [](std::size_t conn, const std::string& m) {
+                               if (conn == 0 && field(m, "method") == "order.place") {
+                                 return std::vector<WsReply>{WsReply::silent()};
+                               }
+                               return venue(conn, m);
+                             }};
+    net::IoContext io;
+    Recorder rec;
+    binance::WsApiConfig config = config_for(server, true);
+    config.idle_timeout = std::chrono::milliseconds{500};
+    binance::WsApiSession session{io, config, rec.handlers()};
+    session.start();
+    REQUIRE(run_until(io, [&] { return session.ready(); }));
+    std::string error;
+    REQUIRE(session.place(limit_buy("jarvis-Z"), "BTCUSDT", error) == Status::Ok);
+    REQUIRE(run_until(io, [&] { return rec.outcomes.size() == 1; }));
+    CHECK(rec.outcomes[0].kind == binance::OutcomeKind::Unknown);
+    CHECK(rec.outcomes[0].reason.starts_with(net::kWsIdleTimeout));
+    REQUIRE(rec.downs.size() == 1);
+    CHECK(rec.downs[0].starts_with(net::kWsIdleTimeout));
+    REQUIRE(run_until(io, [&] { return session.ready(); }));
+    CHECK(rec.readies == 2);
+    io.restart();
+    io.run_for(std::chrono::milliseconds{1600}); // three deadlines of quiet on the new connection
+    CHECK(session.ready());
+    CHECK(rec.downs.size() == 1);
+    REQUIRE(session.place(limit_buy("jarvis-A"), "BTCUSDT", error) == Status::Ok);
+    REQUIRE(run_until(io, [&] { return rec.outcomes.size() == 2; }));
+    CHECK(rec.outcomes[1].kind == binance::OutcomeKind::Acknowledged);
+    CHECK(session.stats().connects == 2);
+    CHECK(session.stats().lost == 1);
     CHECK(server.error().empty());
   }
 

@@ -211,7 +211,7 @@ live 的实现（M5-C3，`jarvis/live/live_node.hpp`）：
 - **报错方式。** 所有错误一次性报告，每条带路径与行号，例如 `node.toml:7: venues[0].oms: must be hedging when account_mode is hedge`。
 - **不允许浮点。** 任何位置出现 TOML 浮点都报错，小数一律写成字符串（`size = "0.010"`），这样它们能精确解析为定点数。时间戳同理，写成带引号的 RFC 3339 字符串。
 - **覆盖语法。** 先应用 `--env`，再按顺序应用每个 `--set`。路径段可以是表的键、数组下标，或者按 `id` 选中数组中的表（`--set strategies.mm-001.params.size=0.020`）。值能解析为 TOML 的字符串、整数、布尔、数组或内联表时按 TOML 解释；否则（裸词、小数、时间戳）按原文字符串处理。
-- **hash 的范围。** 规范形式是每个字段一行 `path = value`，包含默认值，顺序固定，策略参数按键排序；因此显式写出默认值与省略它得到同一个 hash，文件中键的顺序也不影响 hash。hash 只覆盖影响内核计算结果的字段：`[node]` 的 id、seed、strict_determinism、capacity，venue 的 id、kind、account_mode、oms、sim，`[[strategies]]`，`[risk]`，`[python]`。`node.env`、`[data]`、venue 的 endpoint 与凭据引用、`[persistence]`、`[telemetry]`、`[admin]`、`[threads]` 不进 hash：它们决定输入从哪里来、输出写到哪里，而输入本身已经记录在事件日志中。这样 sandbox 录制在 backtest 中回放时 hash 仍然相同（4.6 节的环境等价测试依赖这一点）。`jarvis config <file>` 打印两部分规范形式与 hash。
+- **hash 的范围。** 规范形式是每个字段一行 `path = value`，包含默认值，顺序固定，策略参数按键排序；因此显式写出默认值与省略它得到同一个 hash，文件中键的顺序也不影响 hash。hash 只覆盖影响内核计算结果的字段：`[node]` 的 id、seed、strict_determinism、capacity，venue 的 id、kind、account_mode、oms、sim，`[[strategies]]`，`[risk]`，`[python]`。`node.env`、`[data]`、venue 的 endpoint 与凭据引用、`[persistence]`、`[telemetry]`、`[admin]`、`[threads]`、`[network]` 不进 hash：它们决定输入从哪里来、输出写到哪里，而输入本身已经记录在事件日志中。这样 sandbox 录制在 backtest 中回放时 hash 仍然相同（4.6 节的环境等价测试依赖这一点）。`jarvis config <file>` 打印两部分规范形式与 hash。
 - **凭据。** `credentials` 只能是引用（`env:NAME` 或 `file:PATH`），写入明文密钥会被拒绝。
 
 ```toml
@@ -299,6 +299,10 @@ core_cpu = 2                      # core 线程的 CPU；不设置则不绑
 market_cpu = 3                    # 行情线程
 venue_cpu = 4                     # venue-io 线程
 numa_node = 0                     # 其余线程在这个节点的 CPU 上运行；绑定的 CPU 也须在它上面
+
+[network]                         # sandbox 与 live（13.2 节）；整节可省略
+market_idle_timeout_ms = 30000    # 行情流连接：这么久没有收到任何字节即判定连接已死并重连；0 关闭
+venue_idle_timeout_ms = 60000     # WS API（下单）与用户数据流，以及行情线程里取快照的 WS API 连接；0 关闭
 ```
 
 ### 4.3 组成
@@ -1199,6 +1203,12 @@ concept Transport = requires(T t, std::span<const std::byte> bytes) {
   - HTTP/1.1 客户端：keep-alive 请求构造，响应与 chunked 编码由 picohttpparser 解析。
 - TLS 使用 `asio::ssl::stream` 与系统 OpenSSL 3。Ed25519 签名经 `EVP_DigestSign` 实现，封装在 `Signer` 接口后（第 19 节）。
 - 连接管理：24 小时强制断线按计划重连处理；服务端 ping 自动回 pong；断线指数退避，退避期间 Node 进入 `Degraded`。
+- 静默断线：虚拟机快照或 fork、NAT 表项过期、网线被拔之后，连接在 TCP 上既没有 FIN 也没有 RST，客户端只是读不到任何东西；此前只有握手与关闭有定时器，这类连接会永远挂着，行情线程不会重连，节点停在 `Degraded`（M4 的 24 小时浸泡中虚拟机 fork 之后就是如此，那次运行因此作废）。`WsClient` 现在给每条已打开的连接一个读空闲期限与两道内核防线：
+  - **读空闲期限**（`WsConfig::idle_timeout`，0 为关闭）：收到的每个字节（数据、服务端 ping、对我们 ping 的 pong，甚至半个帧）都把期限重新计时。过期则以 `idle timeout: nothing received for N ms` 为原因让连接失败，走与其他断线完全相同的 `on_close` 路径：退避重连、行情簿 `disconnected`/`connected` 重新同步、`ConnectionStatus` down/up、节点 `Degraded` 再回到 `Running`。原因以 `network::kWsIdleTimeout` 开头，`MarketFeedStats::idle_timeouts` 与 `jarvis_feed_idle_timeouts_total` 对行情流连接计数。
+  - **客户端 ping**（`client_ping`，默认开；`ping_interval`，0 取 `idle_timeout / 2`）：连接安静了 `ping_interval` 就发一个 ping，pong 算作活动，所以低成交量品种或安静的用户流不会被误杀；只有连 pong 也不来才会触发期限。一条看门狗定时器每个 ping 间隔醒一次（不是每帧重设定时器），所以热路径上没有额外开销。Binance 对客户端 ping 回 pong（2026-10 在 `fstream.binance.com` 与 `ws-fapi.binance.com` 上实测），服务端每 3 分钟的 ping 照旧由 `WsClient` 回 pong。
+  - **内核层**：`SO_KEEPALIVE`，Linux 与 macOS 上探测参数为空闲 15 s、间隔 5 s、3 次（`keepalive_*`）；Linux 另设 `TCP_USER_TIMEOUT`（默认等于 `idle_timeout`，`tcp_user_timeout` 可单独设置）：已发出的数据这么久没被确认就由内核关闭 socket，写方向上的死路因此也不会无限等待。macOS 没有 `TCP_USER_TIMEOUT`，只有 keepalive。这些选项尽力而为，设置失败时读空闲期限仍是兜底。
+  - **默认值**（`[network]`，不进 hash）：行情流连接 30 s（ping 每 15 s）；WS API 与用户数据流 60 s（ping 每 30 s）。行情线程里取快照用的 WS API 连接与 venue-io 的相同（60 s）。`WsApiSession` 的在途请求在连接因空闲期限而关闭时按"连接断开"结果未知处理，留给对账（第 14.4 节）；用户流关闭则 `on_down`，之后重连并重新对账（第 15 节）。
+  - 局限：期限是应用层的，行情线程若被环满的背压卡住超过期限，恢复后看门狗可能先于积压的数据触发，连接会多重连一次，无害。`market_data_stale_ms`（10 s）仍然独立判断"连接 up 但没有行情"，两者互补：陈旧让节点先降级，空闲期限负责把死连接拆掉。
 - 实现要点（`jarvis/network/`，M4-A）：
   - `jarvis_network` 是静态库。Asio、OpenSSL 与 picohttpparser 都是私有依赖，其他层 include 的头文件只含标准库与 jarvis 类型。
   - `WsClient` 每次连接新建一个 TLS stream，并分配一个代际号。每个完成回调都持有自己的 stream 与代际号：stream 不会先于它的异步操作释放；旧连接被中止的操作即使在 `on_close` 里重连之后才送达，也会被丢弃。

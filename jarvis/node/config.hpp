@@ -180,6 +180,14 @@ struct ThreadsSection {
   std::optional<std::uint32_t> numa_node;
 };
 
+// Sandbox and live: when a silent connection counts as dead (docs/architecture.md 13.2). A
+// connection that receives nothing, not even the pong to its own ping, for this long is closed
+// and reconnects with backoff. Zero turns the deadline off. Operational: not in the config hash.
+struct NetworkSection {
+  std::uint32_t market_idle_timeout_ms = 30'000; // the market data stream connections
+  std::uint32_t venue_idle_timeout_ms = 60'000;  // the WebSocket API and the user data stream
+};
+
 struct NodeConfig {
   NodeSection node;
   DataSection data;
@@ -191,6 +199,7 @@ struct NodeConfig {
   TelemetrySection telemetry;
   AdminSection admin;
   ThreadsSection threads;
+  NetworkSection network;
 };
 
 struct ConfigError {

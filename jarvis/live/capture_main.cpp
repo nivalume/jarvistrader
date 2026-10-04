@@ -197,6 +197,7 @@ int record(const Options& o) {
     Connection* self = c.get();
     net::WsConfig config;
     config.url = url;
+    config.idle_timeout = std::chrono::seconds{30}; // a recording must not hang on a dead flow
     net::WsHandlers h;
     h.on_open = [&, self] {
       self->backoff.reset();

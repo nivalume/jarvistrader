@@ -253,18 +253,22 @@ jarvis admin --config /etc/jarvis/mm01.toml halt
 
 - 现象：`jarvis_connection_up{connection="MARKET_DATA"} == 0`，或 `jarvis_market_data_age_ns` 超过 `market_data_stale_ms`；节点 `Degraded`，`/ready` 为 503。
 - 节点的动作：停止交易；行情线程按退避重连（500 ms 起，最长 30 s），深度簿重新取快照同步；行情恢复后回到 `Running`。
+- 静默断线：虚拟机快照/fork、NAT 超时或链路中断时，连接没有 FIN/RST，只是不再有数据。行情流连接 `[network] market_idle_timeout_ms`（默认 30 s）内没有收到任何字节（含对客户端 ping 的 pong；安静时每 15 s 发一次 ping）就被判定为已死，原因 `idle timeout: nothing received for N ms` 记入原始帧文件的 `Close` 记录，`jarvis_feed_idle_timeouts_total` 加一，之后与普通断线一样退避重连并重新同步深度簿。节点先因行情陈旧（`market_data_stale_ms`，默认 10 s）进入 `Degraded`，约 30 s 时连接被拆掉并重连，重连成功、数据恢复后回到 `Running`。
+- 排查：`ss -tnoi` 能看到已连接 socket 上的 keepalive 定时器（`timer:(keepalive,...)`）；原始帧里反复出现 `idle timeout` 说明链路本身不稳。该期限可调：`market_idle_timeout_ms = 0` 关闭，但不建议。
 - 人工：一般不需要。长时间不恢复时查网络与交易所状态。需要撤单时用 `cancel_all`。
 
 ### 8.2 用户流断开
 
 - 现象：`jarvis_connection_up{connection="USER_STREAM"} == 0`；节点 `Degraded`。
 - 节点的动作：暂存交易所事件，重连用户流，重连后取一次对账快照（REST），对账完成后回到 `Running`。listenKey 过期时 REST 线程重建。
+- 用户流安静（没有订单、没有成交）时由客户端 ping 保活；`[network] venue_idle_timeout_ms`（默认 60 s）内连 pong 也没有才判定为静默断线，走同一条重连与对账路径。
 - 人工：`jarvis_venue_snapshot_failures_total` 持续增加说明 REST 不通，查网络与限速。
 
 ### 8.3 下单通道（WS API）断开
 
 - 现象：`jarvis_connection_up{connection="ORDER_ENTRY"} == 0`。
 - 节点的动作：命令改走 REST（`jarvis_rest_orders_total` 增加）；关闭 REST 兜底时命令在本地被拒，原因 `BINANCE_0 order entry is down`。结果未知的订单留给对账。
+- 静默断线同样由 `venue_idle_timeout_ms`（默认 60 s）发现：在途请求按结果未知处理，留给对账。
 
 ### 8.4 对账差异
 
