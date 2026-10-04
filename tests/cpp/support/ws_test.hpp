@@ -4,8 +4,6 @@
 // and a scripted WSS server that answers each client message with the replies a test function
 // returns (docs/architecture.md section 17.2, the mock venue).
 
-#include <poll.h>
-
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -27,6 +25,7 @@
 #include <openssl/ssl.h>
 
 #include "jarvis/network/ws_frame.hpp"
+#include "jarvis/sys/socket.hpp"
 #include "tls_test.hpp"
 
 namespace jarvis::testsupport {
@@ -266,8 +265,7 @@ private:
         BIO_ctrl_pending(SSL_get_rbio(ssl)) > 0) {
       return true;
     }
-    pollfd p{s.lowest_layer().native_handle(), POLLIN, 0};
-    return ::poll(&p, 1, 1) > 0;
+    return sys::wait_readable(static_cast<sys::Socket>(s.lowest_layer().native_handle()), 1) > 0;
   }
 
   void session(Stream& s, std::size_t conn) {

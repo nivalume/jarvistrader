@@ -6,6 +6,7 @@
       "type": "lldb",
       "request": "launch",
       "program": "${workspaceFolder}/build/dev/tests/test_engine",
+      "windows": { "program": "${workspaceFolder}/build/win-dev/tests/test_engine.exe" },
       "args": ["-tc=*degrades*"],
       "cwd": "${workspaceFolder}",
       "env": { "ASAN_OPTIONS": "detect_leaks=0" }
@@ -16,6 +17,7 @@
       "request": "launch",
       "preLaunchTask": "clean runs/mm-dbg",
       "program": "${workspaceFolder}/build/dev/bin/pegged_mm",
+      "windows": { "program": "${workspaceFolder}/build/win-dev/bin/pegged_mm.exe" },
       "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
                "--set", "data.range.end=2024-03-30T00:10:00Z"],
       "cwd": "${workspaceFolder}",
@@ -27,6 +29,7 @@
       "request": "launch",
       "preLaunchTask": "clean runs/mm-dbg",
       "python": "${workspaceFolder}/.venv/bin/python",
+      "windows": { "python": "${workspaceFolder}/.venv/Scripts/python.exe" },
       "program": "${workspaceFolder}/examples/py/mm_quote.py",
       "args": ["--config", "examples/config/mm_quote.toml", "--out", "runs/mm-dbg",
                "--set", "data.range.end=2024-03-30T00:10:00Z"],

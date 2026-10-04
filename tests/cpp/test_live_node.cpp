@@ -434,11 +434,14 @@ TEST_SUITE("unit") {
     INFO((report.divergence ? report.divergence->recorded + " / " + report.divergence->replayed
                             : std::string{}));
     CHECK_FALSE(report.divergence.has_value());
-    // Every snapshot the persist thread wrote matches the replayed state.
+    // Every snapshot the persist thread wrote matches the replayed state. A snapshot still
+    // waiting for its log position to be durable is replaced by a newer one (two may wait), so
+    // with slow syncs (Windows' FlushFileBuffers) fewer are written than taken.
     CHECK(result.summary.snapshots > 0);
     CHECK(result.summary.snapshot_failures == 0);
-    CHECK(result.persist.snapshots == result.summary.snapshots);
-    CHECK(report.snapshots_checked == result.summary.snapshots);
+    CHECK(result.persist.snapshots > 0);
+    CHECK(result.persist.snapshots + result.persist.snapshots_dropped == result.summary.snapshots);
+    CHECK(report.snapshots_checked == result.persist.snapshots);
     // The last one is the final snapshot, after the last input (section 19.4).
     const std::vector<node::SnapshotEntry> files = node::list_snapshots(result.directory);
     REQUIRE_FALSE(files.empty());

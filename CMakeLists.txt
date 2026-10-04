@@ -2,8 +2,17 @@ cmake_minimum_required(VERSION 3.25)
 
 project(jarvis VERSION 0.0.0 LANGUAGES CXX)
 
-if(MSVC)
-  message(FATAL_ERROR "jarvis requires GCC, Clang, or AppleClang; MSVC is not supported")
+# The kernel computes in __int128, which cl.exe lacks. On Windows use clang-cl (the MSVC ABI, so
+# python.org CPython loads the extension) or MinGW-w64 GCC/Clang; docs/development.md section 6.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  message(FATAL_ERROR "jarvis requires GCC, Clang, AppleClang, or clang-cl; cl.exe is not "
+                      "supported. On Windows configure with -T ClangCL or the win-* presets.")
+endif()
+# clang-cl takes MSVC-style options (/W4, /WX, /Od); GCC, Clang, AppleClang and MinGW take GNU ones.
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(JARVIS_MSVC_FRONTEND ON)
+else()
+  set(JARVIS_MSVC_FRONTEND OFF)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -40,6 +49,9 @@ option(JARVIS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(JARVIS_ENABLE_FUZZ "Build libFuzzer targets (Clang only)" OFF)
 option(JARVIS_FORCE_O0 "Force first-party targets to compile without optimization" OFF)
 
+if(WIN32 AND (JARVIS_ENABLE_SANITIZERS OR JARVIS_ENABLE_TSAN OR JARVIS_ENABLE_FUZZ))
+  message(FATAL_ERROR "the sanitizer and fuzz builds run on Linux and macOS only")
+endif()
 if(JARVIS_ENABLE_TSAN AND (JARVIS_ENABLE_SANITIZERS OR JARVIS_ENABLE_FUZZ))
   message(FATAL_ERROR "JARVIS_ENABLE_TSAN cannot be combined with ASan/UBSan or fuzzing")
 endif()
@@ -53,31 +65,96 @@ set(JARVIS_KERNEL_LAYERS core model data cost portfolio execution risk strategy 
 add_library(jarvis_strict INTERFACE)
 add_library(jarvis::strict ALIAS jarvis_strict)
 target_compile_features(jarvis_strict INTERFACE cxx_std_20)
-target_compile_options(
-  jarvis_strict
-  INTERFACE
-    -Wall
-    -Wextra
-    -Werror
-    -Wconversion
-    -Wsign-conversion
-    -Wshadow
-    -Wswitch-enum
-    -Wnon-virtual-dtor
-    -Wold-style-cast
-    -ffp-contract=off
-    -fno-fast-math
-    $<$<BOOL:${JARVIS_FORCE_O0}>:-O0>
-    $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
-)
+if(JARVIS_MSVC_FRONTEND)
+  # clang-cl reads -Wall as -Weverything, so the warning level comes from /W4 (-Wall -Wextra).
+  # The GNU -f options pass through /clang:.
+  target_compile_options(
+    jarvis_strict
+    INTERFACE
+      /W4
+      /WX
+      -Wconversion
+      -Wsign-conversion
+      -Wshadow
+      -Wswitch-enum
+      -Wnon-virtual-dtor
+      -Wold-style-cast
+      /clang:-ffp-contract=off
+      /clang:-fno-fast-math
+      $<$<BOOL:${JARVIS_FORCE_O0}>:/Od>
+      $<$<CONFIG:Debug>:/Oy->
+  )
+else()
+  target_compile_options(
+    jarvis_strict
+    INTERFACE
+      -Wall
+      -Wextra
+      -Werror
+      -Wconversion
+      -Wsign-conversion
+      -Wshadow
+      -Wswitch-enum
+      -Wnon-virtual-dtor
+      -Wold-style-cast
+      -ffp-contract=off
+      -fno-fast-math
+      $<$<BOOL:${JARVIS_FORCE_O0}>:-O0>
+      $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
+  )
+endif()
 
 if(APPLE)
   target_compile_definitions(
     jarvis_strict
     INTERFACE $<$<CONFIG:Debug>:_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE>
   )
-else()
+elseif(NOT JARVIS_MSVC_FRONTEND) # the MSVC library checks iterators in Debug by itself
   target_compile_definitions(jarvis_strict INTERFACE $<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+endif()
+
+if(WIN32)
+  # Windows 10 1803 or newer (AF_UNIX sockets); no min/max macros from <windows.h>; the CRT's
+  # "use the _s variant" deprecations are not warnings. The third-party code needs the same.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS)
+  # The test executables pass the COFF limit of 65536 sections per object file.
+  if(JARVIS_MSVC_FRONTEND)
+    add_compile_options(/bigobj)
+  else()
+    add_compile_options(-Wa,-mbig-obj)
+  endif()
+endif()
+
+if(JARVIS_MSVC_FRONTEND)
+  # The MSVC runtime has no __int128 division and multiplication helpers (__divti3, __muloti4)
+  # nor the CPU feature table behind __builtin_cpu_supports; clang ships them in compiler-rt.
+  execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name
+    OUTPUT_VARIABLE JARVIS_CLANG_BUILTINS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(NOT JARVIS_CLANG_BUILTINS OR NOT EXISTS "${JARVIS_CLANG_BUILTINS}")
+    # LLVM releases differ in where they keep it: lib/windows/clang_rt.builtins-x86_64.lib or
+    # lib/x86_64-pc-windows-msvc/clang_rt.builtins.lib under the resource directory.
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+      OUTPUT_VARIABLE _jarvis_clang_resource
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    file(GLOB _jarvis_builtins "${_jarvis_clang_resource}/lib/windows/clang_rt.builtins-x86_64.lib"
+         "${_jarvis_clang_resource}/lib/x86_64-pc-windows-msvc/clang_rt.builtins.lib")
+    if(_jarvis_builtins)
+      list(GET _jarvis_builtins 0 JARVIS_CLANG_BUILTINS)
+    endif()
+  endif()
+  if(NOT JARVIS_CLANG_BUILTINS OR NOT EXISTS "${JARVIS_CLANG_BUILTINS}")
+    message(FATAL_ERROR "cannot find clang's compiler-rt builtins library (clang_rt.builtins); "
+                        "${CMAKE_CXX_COMPILER} printed \"${JARVIS_CLANG_BUILTINS}\"")
+  endif()
+  message(STATUS "clang-cl builtins: ${JARVIS_CLANG_BUILTINS}")
+  link_libraries("${JARVIS_CLANG_BUILTINS}")
 endif()
 
 if(JARVIS_ENABLE_SANITIZERS)
@@ -127,7 +204,13 @@ foreach(header IN LISTS _jarvis_kernel_headers)
 endforeach()
 add_library(jarvis_kernel_freestanding OBJECT ${_jarvis_freestanding_sources})
 target_link_libraries(jarvis_kernel_freestanding PRIVATE jarvis::kernel)
-target_compile_options(jarvis_kernel_freestanding PRIVATE -fno-exceptions -fno-rtti)
+if(JARVIS_MSVC_FRONTEND)
+  # The MSVC library throws unless _HAS_EXCEPTIONS is 0.
+  target_compile_options(jarvis_kernel_freestanding PRIVATE /EHs-c- /GR-)
+  target_compile_definitions(jarvis_kernel_freestanding PRIVATE _HAS_EXCEPTIONS=0)
+else()
+  target_compile_options(jarvis_kernel_freestanding PRIVATE -fno-exceptions -fno-rtti)
+endif()
 
 include(cmake/Dependencies.cmake)
 
@@ -152,6 +235,26 @@ endif()
 set(JARVIS_PLATFORM "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 configure_file(jarvis/node/build_config.hpp.in
                "${CMAKE_CURRENT_BINARY_DIR}/generated/include/jarvis/node/build_config.hpp" @ONLY)
+
+# Operating system calls (docs/architecture.md section 3): files written to survive a crash,
+# sockets, shared libraries, stop requests. The other shell layers name no platform API.
+add_library(
+  jarvis_sys STATIC
+  jarvis/sys/error.cpp
+  jarvis/sys/file.cpp
+  jarvis/sys/library.cpp
+  jarvis/sys/process.cpp
+  jarvis/sys/shutdown.cpp
+  jarvis/sys/socket.cpp
+  jarvis/sys/time.cpp
+)
+add_library(jarvis::sys ALIAS jarvis_sys)
+target_link_libraries(jarvis_sys PUBLIC jarvis::kernel)
+if(WIN32)
+  target_link_libraries(jarvis_sys PRIVATE ws2_32)
+else()
+  target_link_libraries(jarvis_sys PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 add_library(
   jarvis_shell STATIC
@@ -179,9 +282,7 @@ add_library(
   jarvis/node/run_report.cpp
 )
 add_library(jarvis::shell ALIAS jarvis_shell)
-target_link_libraries(jarvis_shell PUBLIC jarvis::kernel)
-# dlopen for strategy plugins (jarvis/node/strategy_plugin.hpp).
-target_link_libraries(jarvis_shell PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(jarvis_shell PUBLIC jarvis::kernel jarvis::sys)
 include(cmake/StrategyPlugin.cmake)
 target_include_directories(jarvis_shell PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 jarvis_add_tomlplusplus()
@@ -214,7 +315,7 @@ if(JARVIS_BUILD_LIVE)
   target_link_libraries(
     jarvis_network
     PUBLIC jarvis::kernel
-    PRIVATE jarvis_asio jarvis_picohttpparser OpenSSL::SSL OpenSSL::Crypto
+    PRIVATE jarvis::sys jarvis_asio jarvis_picohttpparser OpenSSL::SSL OpenSSL::Crypto
   )
 
   # Venue adapters (docs/architecture.md section 14): codecs, instrument loading.
@@ -275,9 +376,15 @@ if(JARVIS_BUILD_PYTHON)
   jarvis_add_nanobind()
   # NOMINSIZE: nanobind builds with -Os by default; the kernel templates instantiated here (the
   # engine and the backtest driver behind jarvis.Node) run at -O3 like the rest of the build.
+  # On Windows nanobind's headers are system headers: their MSVC paths are not held to the
+  # project's warning set.
+  set(_jarvis_nanobind_options NOMINSIZE)
+  if(WIN32)
+    list(APPEND _jarvis_nanobind_options NB_SUPPRESS_WARNINGS)
+  endif()
   nanobind_add_module(
     _core
-    NOMINSIZE
+    ${_jarvis_nanobind_options}
     python/src/bindings.cpp
     python/src/bind_values.cpp
     python/src/bind_events.cpp

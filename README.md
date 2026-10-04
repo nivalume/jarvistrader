@@ -82,7 +82,8 @@ build/rel/bin/jarvis config examples/config/node.toml --env sandbox --set node.s
 - CMake 3.25 or newer
 - Ninja
 - GCC 13+, Clang 17+, or AppleClang 15+ (the `fuzz` and `tsan` presets need Clang's runtime
-  libraries, `libclang-rt-18-dev` on Ubuntu)
+  libraries, `libclang-rt-18-dev` on Ubuntu); on Windows, clang-cl 17+ from Visual Studio 2022
+  or MinGW-w64 GCC 13+
 - OpenSSL 3 with headers (`libssl-dev`, or Homebrew's `openssl@3` with `OPENSSL_ROOT_DIR`
   set): every preset builds the live shell
 - Python 3.11 or newer
@@ -91,12 +92,14 @@ build/rel/bin/jarvis config examples/config/node.toml --env sandbox --set node.s
 - Java 17 or newer for the TLA+ model checker; `tools/tla/run_tlc.py` downloads the pinned
   `tla2tools.jar` on first use
 
-MSVC is intentionally unsupported because the planned kernel requires `__int128`.
+The kernel computes in `__int128`, which MSVC's cl.exe lacks: Windows builds use clang-cl (the
+MSVC ABI, so the Python extension loads into python.org CPython; presets `win-dev`, `win-rel`) or
+MinGW-w64 (`mingw-dev`, or `mingw-cross` from Linux with the tests run under Wine).
 
 ## Local workflow
 
-Platform setup (Linux and macOS), editor configuration (VS Code, Neovim) and the edit, build and
-test loop are in [`docs/development.md`](docs/development.md).
+Platform setup (Linux, macOS and Windows), editor configuration (VS Code, Neovim) and the edit,
+build and test loop are in [`docs/development.md`](docs/development.md).
 
 ```sh
 just bootstrap

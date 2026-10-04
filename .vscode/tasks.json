@@ -3,11 +3,12 @@
   "tasks": [
     {
       // The examples refuse to write into a run directory that already holds a run log
-      // (AlreadyExists), so the debug configurations that write runs/mm-dbg clear it first.
+      // (AlreadyExists), so the debug configurations that write runs/mm-dbg clear it first
+      // (cmake -E rm: the same command on Linux, macOS and Windows).
       "label": "clean runs/mm-dbg",
       "type": "process",
-      "command": "rm",
-      "args": ["-rf", "${workspaceFolder}/runs/mm-dbg"],
+      "command": "cmake",
+      "args": ["-E", "rm", "-rf", "${workspaceFolder}/runs/mm-dbg"],
       "presentation": { "reveal": "never" },
       "problemMatcher": []
     }

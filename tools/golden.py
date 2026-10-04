@@ -18,6 +18,10 @@ digest of every expected file and is verified first, so a hand-edited expectatio
 
 Outputs are compared byte for byte. ``--update`` rewrites the expected files and their digests
 so the change shows up in review.
+
+A Windows build names its programs ``jarvis.exe`` and so on; the ``.exe`` is added when the
+program named has none. ``--emulator`` runs those programs through a command, such as Wine for
+a build cross-compiled from Linux.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,7 +120,18 @@ def write_digests(case: Case) -> None:
     (case.directory / DIGEST_FILE).write_text("\n".join(lines) + "\n")
 
 
-def run_commands(case: Case, bin_dir: Path, out_dir: Path) -> subprocess.CompletedProcess[bytes]:
+def program_argv(argv: list[str], emulator: list[str]) -> list[str]:
+    """The command as it runs here: a Windows program with its .exe, through the emulator."""
+    program = Path(argv[0])
+    windows = program.with_name(program.name + ".exe")
+    if program.suffix == "" and not program.exists() and windows.exists():
+        return [*emulator, str(windows), *argv[1:]]
+    return argv
+
+
+def run_commands(
+    case: Case, bin_dir: Path, out_dir: Path, emulator: list[str]
+) -> subprocess.CompletedProcess[bytes]:
     """Runs the case's commands in order; returns the first failing result, else the last."""
     substitutions = {
         "bin": str(bin_dir),
@@ -126,8 +142,10 @@ def run_commands(case: Case, bin_dir: Path, out_dir: Path) -> subprocess.Complet
     }
     result: subprocess.CompletedProcess[bytes] | None = None
     for command in case.commands:
-        argv = [arg.format(**substitutions) for arg in command]
-        result = subprocess.run(argv, cwd=case.directory, capture_output=True, check=False)
+        argv = program_argv([arg.format(**substitutions) for arg in command], emulator)
+        result = subprocess.run(
+            argv, cwd=case.directory, capture_output=True, check=False, stdin=subprocess.DEVNULL
+        )
         if result.returncode != 0:
             break
     assert result is not None
@@ -153,7 +171,7 @@ def describe_difference(produced: bytes, expected: bytes) -> str:
     return "\n".join("    " + line for line in list(diff)[:40])
 
 
-def check_case(case: Case, bin_dir: Path, update: bool) -> list[str]:
+def check_case(case: Case, bin_dir: Path, update: bool, emulator: list[str]) -> list[str]:
     problems: list[str] = []
     if not update:
         digests = read_digests(case)
@@ -172,7 +190,7 @@ def check_case(case: Case, bin_dir: Path, update: bool) -> list[str]:
 
     with tempfile.TemporaryDirectory(prefix="golden-") as scratch:
         out_dir = Path(scratch)
-        result = run_commands(case, bin_dir, out_dir)
+        result = run_commands(case, bin_dir, out_dir, emulator)
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             return [f"  command exited with {result.returncode}", f"    {stderr[-2000:]}"]
@@ -202,7 +220,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bin", type=Path, default=REPO_ROOT / "build" / "dev")
     parser.add_argument("--update", action="store_true", help="rewrite expected outputs")
     parser.add_argument("--case", action="append", default=[], help="run only the named case")
+    parser.add_argument(
+        "--emulator", default="", help="command that runs the Windows programs (e.g. wine64)"
+    )
     args = parser.parse_args(argv)
+    emulator = shlex.split(args.emulator)
 
     try:
         cases = discover(args.root)
@@ -219,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
 
     failed = 0
     for case in cases:
-        problems = check_case(case, args.bin.resolve(), args.update)
+        problems = check_case(case, args.bin.resolve(), args.update, emulator)
         status = "updated" if args.update and not problems else ("ok" if not problems else "FAIL")
         print(f"golden: {case.name}: {status}")
         for line in problems:

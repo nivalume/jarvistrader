@@ -1,7 +1,5 @@
 // The backtest node end to end: catalog logs -> run -> run directory -> replay.
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -34,6 +32,7 @@
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/sys/process.hpp"
 
 namespace {
 
@@ -41,6 +40,7 @@ namespace node = jarvis::node;
 namespace st = jarvis::strategy;
 namespace m = jarvis::model;
 namespace wire = jarvis::model::wire;
+namespace sys = jarvis::sys;
 using jarvis::core::EventKey;
 using jarvis::core::Status;
 using jarvis::core::UnixNanos;
@@ -50,7 +50,7 @@ public:
   explicit TempDir(std::string_view name) {
     static int counter = 0;
     path_ = std::filesystem::temp_directory_path() /
-            ("jarvis-run-" + std::string{name} + "-" + std::to_string(::getpid()) + "-" +
+            ("jarvis-run-" + std::string{name} + "-" + std::to_string(sys::process_id()) + "-" +
              std::to_string(counter++));
     std::filesystem::remove_all(path_);
     std::filesystem::create_directories(path_);
@@ -61,7 +61,10 @@ public:
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);
   }
-  [[nodiscard]] std::string sub(std::string_view name) const { return (path_ / name).string(); }
+  // Forward slashes on every platform: the paths go into TOML strings, and Windows takes them.
+  [[nodiscard]] std::string sub(std::string_view name) const {
+    return (path_ / name).generic_string();
+  }
 
 private:
   std::filesystem::path path_;

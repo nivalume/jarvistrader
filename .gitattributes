@@ -1,0 +1,9 @@
+# Text stays LF on every platform. Golden expectations, configurations and test inputs are compared
+# byte for byte, and Git for Windows would otherwise check text out with CRLF.
+* text=auto eol=lf
+
+# Raw protocol bytes and binary records: never converted.
+tests/fuzz/corpus/** binary
+*.jlog binary
+*.raw binary
+*.parquet binary

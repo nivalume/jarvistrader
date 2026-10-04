@@ -18,6 +18,7 @@
 #include "jarvis/node/build_info.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/fingerprint.hpp"
+#include "jarvis/sys/time.hpp"
 
 namespace jarvis::node {
 
@@ -41,8 +42,7 @@ std::string replace_all(std::string text, std::string_view from, std::string_vie
 
 std::string utc_stamp() {
   const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-  std::tm tm{};
-  gmtime_r(&now, &tm);
+  const std::tm tm = sys::utc_calendar(now);
   std::array<char, 32> buffer{};
   const std::size_t n = std::strftime(buffer.data(), buffer.size(), "%Y%m%dT%H%M%SZ", &tm);
   return std::string{buffer.data(), n};
@@ -193,12 +193,19 @@ std::vector<std::string> node_runs(const NodeConfig& config) {
     return has_log(base) ? std::vector<std::string>{base} : std::vector<std::string>{};
   }
   // The path component holding {run_id}: its parent is listed, and the entries matching the
-  // component's text around {run_id} are the runs.
-  const std::size_t slash = base.rfind('/', at);
+  // component's text around {run_id} are the runs. Windows separates components with either
+  // slash.
+#if defined(_WIN32)
+  constexpr std::string_view kSeparators = "/\\";
+#else
+  constexpr std::string_view kSeparators = "/";
+#endif
+  const std::size_t slash = base.find_last_of(kSeparators, at);
   const std::size_t begin = slash == std::string::npos ? 0 : slash + 1;
-  const std::size_t end = std::min(base.find('/', at), base.size());
-  const std::string parent =
-      slash == std::string::npos ? "." : base.substr(0, std::max<std::size_t>(slash, 1));
+  const std::size_t end = std::min(base.find_first_of(kSeparators, at), base.size());
+  // With its trailing separator: "/" for a run id under the root, "C:/" rather than "C:" (the
+  // drive's current directory) on Windows.
+  const std::string parent = slash == std::string::npos ? "." : base.substr(0, slash + 1);
   const std::string prefix = base.substr(begin, at - begin);
   const std::string suffix = base.substr(at + kRunId.size(), end - at - kRunId.size());
   const std::string rest = base.substr(end);
@@ -211,7 +218,8 @@ std::vector<std::string> node_runs(const NodeConfig& config) {
       continue;
     }
     std::string id = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
-    const std::string dir = entry.path().string() + replace_all(rest, kRunId, id);
+    // Spelled as create_run_directory spells it: persistence.dir with the run id put in.
+    const std::string dir = base.substr(0, begin) + name + replace_all(rest, kRunId, id);
     if (has_log(dir)) {
       runs.emplace_back(std::move(id), dir);
     }

@@ -88,6 +88,83 @@
         "JARVIS_ENABLE_SANITIZERS": "OFF",
         "JARVIS_ENABLE_FUZZ": "ON"
       }
+    },
+    {
+      "name": "win-base",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF",
+        "CMAKE_C_COMPILER": "clang-cl"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "win-dev",
+      "inherits": "win-base",
+      "displayName": "Windows Debug with clang-cl (from a VS developer prompt)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "win-rel",
+      "inherits": "win-base",
+      "displayName": "Windows Release with clang-cl (from a VS developer prompt)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "mingw-dev",
+      "inherits": "base",
+      "displayName": "Windows Debug with MinGW-w64 GCC (MSYS2 MINGW64 shell)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++",
+        "JARVIS_BUILD_PYTHON": "OFF",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF"
+      }
+    },
+    {
+      "name": "mingw-cross",
+      "inherits": "base",
+      "displayName": "Windows cross build from Linux with MinGW-w64; tests under Wine",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JARVIS_BUILD_PYTHON": "OFF",
+        "JARVIS_BUILD_TESTS": "ON",
+        "JARVIS_BUILD_BENCHMARKS": "OFF",
+        "JARVIS_ENABLE_SANITIZERS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -120,6 +197,22 @@
       "targets": [
         "jarvis_fuzz"
       ]
+    },
+    {
+      "name": "win-dev",
+      "configurePreset": "win-dev"
+    },
+    {
+      "name": "win-rel",
+      "configurePreset": "win-rel"
+    },
+    {
+      "name": "mingw-dev",
+      "configurePreset": "mingw-dev"
+    },
+    {
+      "name": "mingw-cross",
+      "configurePreset": "mingw-cross"
     }
   ],
   "testPresets": [
@@ -147,6 +240,34 @@
     {
       "name": "tsan",
       "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "win-dev",
+      "configurePreset": "win-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "win-rel",
+      "configurePreset": "win-rel",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mingw-dev",
+      "configurePreset": "mingw-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mingw-cross",
+      "configurePreset": "mingw-cross",
       "output": {
         "outputOnFailure": true
       }

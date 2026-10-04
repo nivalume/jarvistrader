@@ -113,6 +113,13 @@ sandbox 用 `[venues.sim]` 设定模拟交易所（余额、费率、成交模�
 
 保存 secret 的文件（TOML 文件与私钥文件）权限必须是 0600 或 0400，属主是运行节点的用户。组或其他用户可读时节点拒绝启动，报错给出当前权限和 `chmod 600` 命令。错误信息从不包含 secret。
 
+Windows 的文件没有这些权限位，节点不检查，访问由 ACL 决定。去掉继承的权限，只给运行节点的账户读权限：
+
+```powershell
+icacls C:\jarvis\keys\mm01.toml /inheritance:r /grant:r "${env:USERNAME}:(R)"
+icacls C:\jarvis\keys\mm01.toml          # 核对：只剩这一个账户
+```
+
 建议用 Ed25519 key：签名用私钥，交易所只保存公钥。
 
 ### 3.2 key 的要求（启动检查）
@@ -161,7 +168,7 @@ TradingState（`jarvis_trading_state`，§10.2）：`Active` 正常；`Reducing`
 
 ### 4.3 停止
 
-- `SIGTERM`、`SIGINT`、`jarvis admin <socket> shutdown` 与 `--run-for` 到期效果相同：步进一个记录的 `Shutdown` 输入。
+- `SIGTERM`、`SIGINT`、`jarvis admin <socket> shutdown` 与 `--run-for` 到期效果相同：步进一个记录的 `Shutdown` 输入。Windows 上对应的是 Ctrl+C 与 Ctrl+Break；关闭控制台窗口、注销或关机时系统最多等约 5 秒就结束进程，撤单可能来不及确认，所以停 Windows 上的节点用 Ctrl+C 或 admin 的 `shutdown`。
 - `cancel_all_then_exit`（默认）：
   1. TradingState 置 `Halted`，撤销全部挂单；
   2. 等撤单确认，最多 `shutdown_timeout_ms`；

@@ -1,22 +1,11 @@
 #include "jarvis/live/telemetry.hpp"
 
-#include <fcntl.h>
-#include <netdb.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-
-#include <netinet/in.h>
-
 #include <algorithm>
-#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -37,6 +26,8 @@
 #include "jarvis/model/schema.hpp"
 #include "jarvis/model/uuid.hpp"
 #include "jarvis/model/wire.hpp"
+#include "jarvis/sys/error.hpp"
+#include "jarvis/sys/socket.hpp"
 
 namespace jarvis::live {
 
@@ -686,7 +677,7 @@ struct Telemetry::Impl {
   std::atomic<std::uint64_t> dropped{0};
   std::atomic<std::uint64_t> written{0};
   std::FILE* file = nullptr;
-  int listener = -1;
+  sys::SocketHandle listener;
   std::uint16_t port = 0;
 
   // The core thread's.
@@ -726,52 +717,22 @@ struct Telemetry::Impl {
       error = "telemetry.prometheus: expected host:port, got '" + config.listen + "'";
       return Status::InvalidArgument;
     }
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
-    addrinfo* found = nullptr;
-    if (::getaddrinfo(host.empty() ? nullptr : host.c_str(), service.c_str(), &hints, &found) !=
-            0 ||
-        found == nullptr) {
-      error = "telemetry.prometheus: cannot resolve " + config.listen;
-      return Status::InvalidArgument;
+    std::string why;
+    const Status s = sys::listen_tcp(host, service, 16, listener, port, why);
+    if (!core::ok(s)) {
+      error = "telemetry.prometheus: " + why;
     }
-    const int fd = ::socket(found->ai_family, found->ai_socktype | SOCK_CLOEXEC, 0);
-    int yes = 1;
-    const bool bound = fd >= 0 &&
-                       ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == 0 &&
-                       ::bind(fd, found->ai_addr, found->ai_addrlen) == 0 && ::listen(fd, 16) == 0;
-    ::freeaddrinfo(found);
-    if (!bound) {
-      error =
-          "telemetry.prometheus: cannot listen on " + config.listen + ": " + std::strerror(errno);
-      if (fd >= 0) {
-        ::close(fd);
-      }
-      return Status::IoError;
-    }
-    sockaddr_storage addr{};
-    socklen_t length = sizeof(addr);
-    ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &length); // NOLINT
-    if (addr.ss_family == AF_INET) {
-      port = ntohs(reinterpret_cast<const sockaddr_in*>(&addr)->sin_port); // NOLINT
-    } else if (addr.ss_family == AF_INET6) {
-      port = ntohs(reinterpret_cast<const sockaddr_in6*>(&addr)->sin6_port); // NOLINT
-    }
-    listener = fd;
-    return Status::Ok;
+    return s;
   }
 
   // One request per connection.
-  void serve(int fd) {
-    timeval timeout{0, 500'000};
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+  void serve(const sys::SocketHandle& client) {
+    const sys::Socket fd = client.get();
+    sys::set_timeouts(fd, 500);
     std::string request;
     std::array<char, 2048> chunk{};
     while (request.find("\r\n\r\n") == std::string::npos && request.size() < 8192) {
-      const ssize_t n = ::recv(fd, chunk.data(), chunk.size(), 0);
+      const long n = sys::receive(fd, chunk.data(), chunk.size());
       if (n <= 0) {
         break;
       }
@@ -812,15 +773,7 @@ struct Telemetry::Impl {
                            "\r\nContent-Type: " + type +
                            "\r\nContent-Length: " + std::to_string(body.size()) +
                            "\r\nConnection: close\r\n\r\n" + body;
-    std::string_view rest{response};
-    while (!rest.empty()) {
-      const ssize_t n = ::send(fd, rest.data(), rest.size(), MSG_NOSIGNAL);
-      if (n <= 0) {
-        break;
-      }
-      rest.remove_prefix(static_cast<std::size_t>(n));
-    }
-    ::close(fd);
+    static_cast<void>(sys::send_all(fd, response));
   }
 
   std::size_t drain(std::string& lines) {
@@ -862,11 +815,10 @@ struct Telemetry::Impl {
         flush(lines);
         last_flush = now;
       }
-      if (listener >= 0) {
-        pollfd p{listener, POLLIN, 0};
-        if (::poll(&p, 1, drained > 0 ? 0 : 5) > 0 && (p.revents & POLLIN) != 0) {
-          const int client = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
-          if (client >= 0) {
+      if (listener.valid()) {
+        if (sys::wait_readable(listener.get(), drained > 0 ? 0 : 5) > 0) {
+          const sys::SocketHandle client = sys::accept_connection(listener.get());
+          if (client.valid()) {
             serve(client);
           }
         }
@@ -889,9 +841,10 @@ Status Telemetry::start(std::string& error) {
     return Status::InvalidState;
   }
   if (!t.config.jsonl_path.empty()) {
-    t.file = std::fopen(t.config.jsonl_path.c_str(), "ae");
+    // Binary: the lines end in \n on every platform.
+    t.file = std::fopen(t.config.jsonl_path.c_str(), "ab"); // NOLINT(*-owning-memory)
     if (t.file == nullptr) {
-      error = "cannot open " + t.config.jsonl_path + ": " + std::strerror(errno);
+      error = "cannot open " + t.config.jsonl_path + ": " + sys::last_error_text();
       return Status::IoError;
     }
   }
@@ -913,10 +866,7 @@ void Telemetry::stop() {
     t.stopping.store(true, std::memory_order_release);
     t.thread.join();
   }
-  if (t.listener >= 0) {
-    ::close(t.listener);
-    t.listener = -1;
-  }
+  t.listener.reset();
   if (t.file != nullptr) {
     std::fclose(t.file);
     t.file = nullptr;

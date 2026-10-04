@@ -501,6 +501,9 @@ def test_load_native_refuses_what_is_not_a_plugin(tmp_path: Path) -> None:
     if sys.platform == "linux":
         with pytest.raises(ValueError, match="not a jarvis strategy plugin"):
             jarvis.load_native("libm.so.6")
+    elif sys.platform == "win32":
+        with pytest.raises(ValueError, match="not a jarvis strategy plugin"):
+            jarvis.load_native("kernel32.dll")
 
 
 def test_a_plugin_strategy_runs_in_a_python_node(echo_plugin: Path, tmp_path: Path) -> None:

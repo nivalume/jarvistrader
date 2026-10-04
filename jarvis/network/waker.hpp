@@ -7,9 +7,11 @@
 #include "jarvis/network/io.hpp"
 
 // Wakes the thread running an IoContext from another thread (docs/architecture.md 7.1). notify()
-// is one write(2) to a descriptor the loop watches (an eventfd on Linux, a pipe elsewhere): no
-// lock and no allocation, so the core thread may call it. On the IO thread a handler reads the
-// descriptor empty and watches it again; that handler ending is what ends a run_one_for.
+// is one system call, with no lock and no allocation, so the core thread may call it: a write(2)
+// to a descriptor the loop watches (an eventfd on Linux, a pipe on macOS), or SetEvent on an
+// auto-reset event the loop waits on (Windows). On the IO thread a handler empties the
+// descriptor (or the wait resets the event) and watches it again; that handler ending is what
+// ends a run_one_for.
 
 namespace jarvis::network {
 

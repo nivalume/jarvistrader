@@ -94,6 +94,83 @@ jobs:
       - name: Python and tooling tests
         run: python -m pytest
 
+  # Windows with clang-cl (the MSVC ABI; python.org CPython loads the extension). The VS developer
+  # shell supplies the MSVC library and the Windows SDK; clang-cl comes with the VS image's LLVM.
+  windows:
+    needs: lint
+    name: functional (clang-cl, Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Ninja, Python build tools and OpenSSL
+        shell: pwsh
+        run: |
+          python -m pip install "scikit-build-core==1.0.3" "pytest==9.1.1" "ninja==1.13.2"
+          $candidates = "C:\Program Files\OpenSSL", "C:\Program Files\OpenSSL-Win64"
+          $ssl = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+          if (-not $ssl) {
+            choco install openssl --no-progress --yes
+            $ssl = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+          }
+          if (-not $ssl) { throw "OpenSSL 3 with headers not found" }
+          "OPENSSL_ROOT_DIR=$ssl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$ssl\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Build, C++ tests, wheel and Python tests (VS developer shell)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
+          clang-cl --version
+          $py = (Get-Command python).Source
+          cmake --preset win-dev "-DPython_EXECUTABLE=$py"
+          cmake --build --preset win-dev
+          ctest --preset win-dev
+          $env:CMAKE_GENERATOR = "Ninja"
+          $env:CC = "clang-cl"
+          $env:CXX = "clang-cl"
+          python -m pip install --force-reinstall ".[parquet]"
+          python -m pytest
+
+  # The MinGW-w64 build, cross-compiled from Linux, its tests run under Wine (the mingw-cross preset).
+  mingw-cross:
+    needs: lint
+    name: functional (MinGW-w64 cross, Wine)
+    runs-on: ubuntu-24.04
+    env:
+      WINEDEBUG: -all
+      JARVIS_MINGW_PREFIX: ${{ github.workspace }}/build/mingw-prefix/mingw64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the cross compiler and Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build g++-mingw-w64-x86-64-posix wine64 zstd
+      - name: OpenSSL for MinGW (the MSYS2 mingw64 package)
+        run: |
+          pkg=mingw-w64-x86_64-openssl-3.6.5-1-any.pkg.tar.zst
+          mkdir -p build/mingw-prefix
+          curl -fsSL -o "build/mingw-prefix/$pkg" "https://repo.msys2.org/mingw/mingw64/$pkg"
+          echo "389d1af21e99223d9e2cd32d4c073131b276da85be7636bd8d23571f6938864f  build/mingw-prefix/$pkg" |
+            sha256sum --check
+          tar --zstd -xf "build/mingw-prefix/$pkg" -C build/mingw-prefix
+      - name: Configure and build
+        run: |
+          cmake --preset mingw-cross
+          cmake --build --preset mingw-cross
+      - name: Tests under Wine
+        run: |
+          /usr/lib/wine/wine64 wineboot --init # create the prefix once, before tests run
+          ctest --preset mingw-cross
+
   determinism:
     needs: functional
     runs-on: ubuntu-24.04
@@ -243,20 +320,23 @@ jobs:
 
   gate:
     if: always()
-    needs: [lint, functional, determinism, fuzz, bench-compare, formal]
+    needs: [lint, functional, windows, mingw-cross, determinism, fuzz, bench-compare, formal]
     runs-on: ubuntu-24.04
     steps:
       - name: Check tier results
         env:
           LINT: ${{ needs.lint.result }}
           FUNCTIONAL: ${{ needs.functional.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          MINGW: ${{ needs.mingw-cross.result }}
           DETERMINISM: ${{ needs.determinism.result }}
           BENCH: ${{ needs.bench-compare.result }}
           FORMAL: ${{ needs.formal.result }}
           FUZZ: ${{ needs.fuzz.result }}
         run: |
           ok=1
-          for pair in "lint:$LINT" "functional:$FUNCTIONAL" "determinism:$DETERMINISM" "fuzz:$FUZZ" "formal:$FORMAL"; do
+          for pair in "lint:$LINT" "functional:$FUNCTIONAL" "windows:$WINDOWS" "mingw-cross:$MINGW" \
+                      "determinism:$DETERMINISM" "fuzz:$FUZZ" "formal:$FORMAL"; do
             if [[ "${pair#*:}" != success ]]; then echo "${pair%%:*}: ${pair#*:}"; ok=0; fi
           done
           case "$BENCH" in

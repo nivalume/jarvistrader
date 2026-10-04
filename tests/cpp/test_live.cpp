@@ -6,15 +6,15 @@
 #include <string>
 #include <string_view>
 
-#include <unistd.h>
-
 #include <doctest/doctest.h>
 
 #include "jarvis/live/raw_frames.hpp"
+#include "jarvis/sys/process.hpp"
 
 namespace {
 
 namespace live = jarvis::live;
+namespace sys = jarvis::sys;
 using jarvis::core::Status;
 
 std::span<const std::byte> bytes(std::string_view s) {
@@ -24,8 +24,8 @@ std::span<const std::byte> bytes(std::string_view s) {
 // Unique per process, so that test binaries may run side by side.
 std::string temp_file(std::string_view name) {
   return (std::filesystem::temp_directory_path() /
-          (std::to_string(::getpid()) + "-" + std::string{name}))
-      .string();
+          (std::to_string(sys::process_id()) + "-" + std::string{name}))
+      .generic_string();
 }
 
 } // namespace

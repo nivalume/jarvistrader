@@ -10,7 +10,8 @@ function(jarvis_add_strategy_plugin target)
   target_link_libraries(${target} PRIVATE jarvis::shell)
   set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET hidden
                                              VISIBILITY_INLINES_HIDDEN ON PREFIX "lib")
-  if(NOT APPLE)
+  # A Windows DLL exports only what is marked dllexport; ELF needs the static libraries hidden.
+  if(NOT APPLE AND NOT WIN32)
     target_link_options(${target} PRIVATE "LINKER:--exclude-libs,ALL")
   endif()
 endfunction()

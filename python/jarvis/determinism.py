@@ -26,6 +26,7 @@ import datetime as _datetime
 import functools
 import os
 import random as _random
+import subprocess
 import sys
 import threading
 import time as _time
@@ -225,4 +226,16 @@ def ensure_hash_seed(seed: int) -> None:
     sys.stdout.flush()
     sys.stderr.flush()
     # orig_argv keeps interpreter options and "-c <code>", which sys.argv drops.
-    os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+    argv = [sys.executable, *sys.orig_argv[1:]]
+    if sys.platform != "win32":
+        os.execv(sys.executable, argv)
+    # Windows has no exec: os.execv starts a new process and ends this one at once, so whoever
+    # started this one would see it exit while the run goes on. Wait for the child and exit with
+    # its code. Ctrl+C reaches both processes; the child stops the node in order, and this one
+    # keeps waiting for it.
+    child = subprocess.Popen(argv)
+    while True:
+        try:
+            sys.exit(child.wait())
+        except KeyboardInterrupt:
+            continue

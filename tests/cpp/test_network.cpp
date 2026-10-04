@@ -2,8 +2,6 @@
 // response parsing, signing against published vectors, and the TLS clients against loopback
 // servers with a certificate made at test time.
 
-#include <unistd.h>
-
 #include <array>
 #include <atomic>
 #include <chrono>

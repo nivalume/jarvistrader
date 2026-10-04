@@ -1,11 +1,7 @@
 #include "jarvis/node/event_log.hpp"
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -26,39 +22,6 @@ constexpr std::size_t kMaxRecordBytes =
     wire::kRecordHeaderSize + wire::kMaxPayload + wire::kRecordTrailerSize;
 constexpr std::size_t kMaxHeaderBytes = 1024;
 
-Status write_all(int fd, std::span<const std::byte> bytes) {
-  while (!bytes.empty()) {
-    const ssize_t n = ::write(fd, bytes.data(), bytes.size());
-    if (n < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return Status::IoError;
-    }
-    bytes = bytes.subspan(static_cast<std::size_t>(n));
-  }
-  return Status::Ok;
-}
-
-Status sync_file(int fd) {
-#if defined(__APPLE__)
-  return ::fsync(fd) == 0 ? Status::Ok : Status::IoError;
-#else
-  return ::fdatasync(fd) == 0 ? Status::Ok : Status::IoError;
-#endif
-}
-
-// A new directory entry survives a crash once the directory itself is synced.
-Status sync_directory(const std::string& directory) {
-  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) {
-    return Status::IoError;
-  }
-  const Status s = ::fsync(fd) == 0 ? Status::Ok : Status::IoError;
-  ::close(fd);
-  return s;
-}
-
 bool same_log(const wire::LogHeader& a, const wire::LogHeader& b) {
   return a.format_version == b.format_version && a.schema_version == b.schema_version &&
          a.config_hash == b.config_hash && a.seed == b.seed &&
@@ -74,7 +37,7 @@ std::string segment_name(std::uint32_t index) {
 }
 
 EventLogWriter::EventLogWriter(EventLogWriter&& other) noexcept
-    : fd_{std::exchange(other.fd_, -1)}, directory_{std::move(other.directory_)},
+    : file_{std::move(other.file_)}, directory_{std::move(other.directory_)},
       header_{other.header_}, first_seqs_{std::move(other.first_seqs_)},
       first_segment_{other.first_segment_}, options_{other.options_},
       segment_size_{other.segment_size_}, records_{other.records_}, position_{other.position_},
@@ -83,7 +46,7 @@ EventLogWriter::EventLogWriter(EventLogWriter&& other) noexcept
 EventLogWriter& EventLogWriter::operator=(EventLogWriter&& other) noexcept {
   if (this != &other) {
     static_cast<void>(close());
-    fd_ = std::exchange(other.fd_, -1);
+    file_ = std::move(other.file_);
     directory_ = std::move(other.directory_);
     header_ = other.header_;
     first_seqs_ = std::move(other.first_seqs_);
@@ -102,7 +65,7 @@ EventLogWriter::~EventLogWriter() { static_cast<void>(close()); }
 
 Status EventLogWriter::open(const std::string& directory, const wire::LogHeader& header,
                             EventLogOptions options) {
-  if (fd_ >= 0) {
+  if (file_.is_open()) {
     return Status::InvalidState;
   }
   std::error_code ec;
@@ -131,12 +94,12 @@ Status EventLogWriter::open(const std::string& directory, const wire::LogHeader&
 
 Status EventLogWriter::open_segment() {
   const std::string path = directory_ + "/" + segment_name(header_.segment_index);
-  fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-  if (fd_ < 0) {
-    return errno == EEXIST ? Status::AlreadyExists : Status::IoError;
+  if (const Status opened = file_.open(path, sys::File::Mode::CreateNew); !core::ok(opened)) {
+    return opened;
   }
+  // A new directory entry survives a crash once the directory itself is synced.
   if (options_.durable) {
-    const Status s = sync_directory(directory_);
+    const Status s = sys::sync_directory(directory_);
     if (!core::ok(s)) {
       return s;
     }
@@ -172,7 +135,7 @@ Status EventLogWriter::append_output(const core::EventKey& key, const model::Out
 }
 
 Status EventLogWriter::append_record(std::span<const std::byte> record) {
-  if (fd_ < 0) {
+  if (!file_.is_open()) {
     return Status::InvalidState;
   }
   if (segment_size_ + record.size() > options_.segment_bytes && records_ > 0) {
@@ -183,8 +146,7 @@ Status EventLogWriter::append_record(std::span<const std::byte> record) {
     if (!core::ok(s)) {
       return s;
     }
-    ::close(fd_);
-    fd_ = -1;
+    static_cast<void>(file_.close());
     ++header_.segment_index;
     s = open_segment();
     if (!core::ok(s)) {
@@ -215,13 +177,15 @@ Status EventLogWriter::write_snapshot(const SnapshotInfo& info, std::span<const 
 
 Status EventLogWriter::truncate_before(std::uint64_t seq, std::uint32_t& removed) {
   removed = 0;
-  if (fd_ < 0) {
+  if (!file_.is_open()) {
     return Status::InvalidState;
   }
   // Segment i holds only records up to `seq` when the next one starts at or before it.
   while (first_segment_ < header_.segment_index && first_seqs_[first_segment_ + 1U] <= seq) {
     const std::string path = directory_ + "/" + segment_name(first_segment_);
-    if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+    std::error_code ec;
+    std::filesystem::remove(path, ec); // false without an error when it is already gone
+    if (ec) {
       return Status::IoError;
     }
     ++first_segment_;
@@ -237,14 +201,14 @@ Status EventLogWriter::truncate_before(std::uint64_t seq, std::uint32_t& removed
       std::filesystem::remove(old.path, ec);
     }
   }
-  return options_.durable ? sync_directory(directory_) : Status::Ok;
+  return options_.durable ? sys::sync_directory(directory_) : Status::Ok;
 }
 
 Status EventLogWriter::flush() {
-  if (fd_ < 0) {
+  if (!file_.is_open()) {
     return Status::InvalidState;
   }
-  const Status s = write_all(fd_, buffer_);
+  const Status s = file_.write_all(buffer_);
   if (!core::ok(s)) {
     return s;
   }
@@ -252,7 +216,7 @@ Status EventLogWriter::flush() {
   return options_.sync_on_flush ? sync_fd() : Status::Ok;
 }
 
-Status EventLogWriter::sync_fd() const { return sync_file(fd_); }
+Status EventLogWriter::sync_fd() { return file_.sync_data(); }
 
 Status EventLogWriter::sync() {
   Status s = flush();
@@ -263,16 +227,15 @@ Status EventLogWriter::sync() {
 }
 
 Status EventLogWriter::close() {
-  if (fd_ < 0) {
+  if (!file_.is_open()) {
     return Status::Ok;
   }
   Status s = flush();
   if (core::ok(s) && options_.durable && !options_.sync_on_flush) {
     s = sync_fd();
   }
-  ::close(fd_);
-  fd_ = -1;
-  return s;
+  const Status closed = file_.close();
+  return core::ok(s) ? closed : s;
 }
 
 EventLogReader::EventLogReader() : scratch_{wire::kMaxPayload / 16} {}

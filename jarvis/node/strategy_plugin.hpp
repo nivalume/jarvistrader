@@ -14,6 +14,7 @@
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/sys/library.hpp"
 
 // Native strategies in a shared library that a node loads at run time (docs/architecture.md
 // section 7.3), so a Python node can host C++ strategies built outside the jarvis wheel:
@@ -154,8 +155,7 @@ inline constexpr bool kDebugContainers = false;
 // The entry point, once per plugin library.
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define JARVIS_STRATEGY_PLUGIN()                                                                   \
-  extern "C" __attribute__((visibility("default"))) const ::jarvis::node::PluginInfo*              \
-  jarvis_strategy_plugin_v1() {                                                                    \
+  extern "C" JARVIS_EXPORT const ::jarvis::node::PluginInfo* jarvis_strategy_plugin_v1() {         \
     return ::jarvis::node::plugin_info();                                                          \
   }                                                                                                \
   static_assert(true, "")

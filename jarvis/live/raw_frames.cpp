@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstring>
 
+#include "jarvis/sys/error.hpp"
+
 namespace jarvis::live {
 
 namespace {
@@ -42,7 +44,7 @@ core::Status RawFrameWriter::open(const std::string& path, std::string& error) {
   }
   file_ = std::fopen(path.c_str(), "wb"); // NOLINT(cppcoreguidelines-owning-memory)
   if (file_ == nullptr) {
-    error = "cannot create " + path + ": " + std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
+    error = "cannot create " + path + ": " + sys::last_error_text();
     return core::Status::IoError;
   }
   std::array<std::byte, kRawHeaderSize> header{};
@@ -91,7 +93,7 @@ core::Status RawFrameWriter::close() {
 core::Status RawFrameReader::open(const std::string& path, std::string& error) {
   std::FILE* f = std::fopen(path.c_str(), "rb"); // NOLINT(cppcoreguidelines-owning-memory)
   if (f == nullptr) {
-    error = "cannot open " + path + ": " + std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
+    error = "cannot open " + path + ": " + sys::last_error_text();
     return core::Status::NotFound;
   }
   data_.clear();

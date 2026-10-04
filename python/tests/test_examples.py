@@ -1,8 +1,8 @@
 """The examples: the Python and C++ versions of each write the same run log.
 
 Needs the C++ binaries (golden_node, trade_logger, pegged_mm) of a CMake build; set
-JARVIS_BIN_DIR to their directory, or build the dev preset (build/dev/bin). Skipped when they
-are missing.
+JARVIS_BIN_DIR to their directory, or build the dev preset (build/dev/bin; win-dev on Windows).
+Skipped when they are missing.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,7 +19,13 @@ import pytest
 from jarvis import log
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = Path(os.environ.get("JARVIS_BIN_DIR", ROOT / "build" / "dev" / "bin"))
+_PRESET = "win-dev" if sys.platform == "win32" else "dev"
+BIN = Path(os.environ.get("JARVIS_BIN_DIR", ROOT / "build" / _PRESET / "bin"))
+_EXE = ".exe" if sys.platform == "win32" else ""
+
+
+def _program(name: str) -> Path:
+    return BIN / f"{name}{_EXE}"
 CONFIG = ROOT / "examples" / "config" / "trade_logger.toml"
 
 
@@ -30,11 +37,11 @@ def _example(name: str = "trade_logger"):
     return module
 
 
-@pytest.mark.skipif(not (BIN / "trade_logger").exists(), reason="C++ examples not built")
+@pytest.mark.skipif(not _program("trade_logger").exists(), reason="C++ examples not built")
 def test_python_and_cpp_trade_loggers_write_the_same_log(tmp_path: Path) -> None:
     catalog = tmp_path / "catalog"
     subprocess.run(
-        [BIN / "golden_node", "catalog", "--seed", "7", "--out", catalog], check=True
+        [_program("golden_node"), "catalog", "--seed", "7", "--out", catalog], check=True
     )
     sets = [
         "--set", f"data.catalog={catalog}",
@@ -44,7 +51,7 @@ def test_python_and_cpp_trade_loggers_write_the_same_log(tmp_path: Path) -> None
         "--set", "strategies.tlog-001.params.sample_ms=20000",
     ]
     subprocess.run(
-        [BIN / "trade_logger", "--config", CONFIG, *sets, "--out", tmp_path / "cpp"],
+        [_program("trade_logger"), "--config", CONFIG, *sets, "--out", tmp_path / "cpp"],
         check=True,
         stdout=subprocess.DEVNULL,
     )
@@ -59,11 +66,11 @@ def test_python_and_cpp_trade_loggers_write_the_same_log(tmp_path: Path) -> None
     assert sum(1 for r in log.read(str(tmp_path / "py")) if r.is_output) > 40
 
 
-@pytest.mark.skipif(not (BIN / "pegged_mm").exists(), reason="C++ examples not built")
+@pytest.mark.skipif(not _program("pegged_mm").exists(), reason="C++ examples not built")
 def test_python_and_cpp_market_makers_write_the_same_log(tmp_path: Path) -> None:
     catalog = tmp_path / "catalog"
     subprocess.run(
-        [BIN / "golden_node", "catalog", "--seed", "7", "--out", catalog, "--instrument"],
+        [_program("golden_node"), "catalog", "--seed", "7", "--out", catalog, "--instrument"],
         check=True,
     )
     config = ROOT / "examples" / "config" / "mm_quote.toml"
@@ -73,7 +80,7 @@ def test_python_and_cpp_market_makers_write_the_same_log(tmp_path: Path) -> None
         "--set", "data.range.end=2026-09-01T00:05:00Z",
     ]
     subprocess.run(
-        [BIN / "pegged_mm", "--config", config, *sets, "--out", tmp_path / "cpp"],
+        [_program("pegged_mm"), "--config", config, *sets, "--out", tmp_path / "cpp"],
         check=True,
         stdout=subprocess.DEVNULL,
     )
@@ -91,14 +98,14 @@ def test_python_and_cpp_market_makers_write_the_same_log(tmp_path: Path) -> None
     assert report.orders["mm-001"].submitted > 20
 
 
-@pytest.mark.skipif(not (BIN / "golden_node").exists(), reason="C++ examples not built")
+@pytest.mark.skipif(not _program("golden_node").exists(), reason="C++ examples not built")
 def test_trend_follower_prints_metrics_that_match_the_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.syspath_prepend(str(ROOT / "examples" / "py"))
     catalog = tmp_path / "catalog"
     subprocess.run(
-        [BIN / "golden_node", "catalog", "--seed", "7", "--out", catalog, "--instrument"],
+        [_program("golden_node"), "catalog", "--seed", "7", "--out", catalog, "--instrument"],
         check=True,
     )
     example = _example("trend_follow")

@@ -1,6 +1,6 @@
 # 开发环境与日常工作流
 
-本文讲如何在 Linux 与 macOS 上搭建开发环境、配置 VS Code 与 Neovim，以及编译、测试、运行的日常流程。设计见 `docs/architecture.md`，里程碑见 `docs/plan.md`，运行节点见 `docs/runbook.md`。
+本文讲如何在 Linux 与 macOS 上搭建开发环境、配置 VS Code 与 Neovim，以及编译、测试、运行的日常流程；Windows 见第 6 节。设计见 `docs/architecture.md`，里程碑见 `docs/plan.md`，运行节点见 `docs/runbook.md`。
 
 ## 1. 工具与目录
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | CMake | ≥ 3.25 | 构建，配置写在 `CMakePresets.json` |
 | Ninja | 任意 | preset 的生成器 |
-| C++ 编译器 | GCC 13+、Clang 17+ 或 AppleClang 15+ | C++20，用到 `__int128`，不支持 MSVC |
+| C++ 编译器 | GCC 13+、Clang 17+ 或 AppleClang 15+；Windows 上 clang-cl 17+ 或 MinGW-w64 GCC 13+ | C++20，用到 `__int128`，所以不支持 MSVC 的 cl.exe（第 6 节） |
 | OpenSSL | 3.x，带头文件 | 网络层与 live shell；所有 preset 都打开 `JARVIS_BUILD_LIVE` |
 | Python | ≥ 3.11 | 策略层、工具、pytest；由 `uv` 管理 |
 | uv | 任意 | 创建 `.venv`、安装 Python 包 |
@@ -78,7 +78,7 @@ export PATH="$(brew --prefix openjdk@17)/bin:$PATH"
   build/fuzz/tests/fuzz/fuzz_ws -max_total_time=60 build/fuzz/corpus-scratch/ws tests/fuzz/corpus/ws
   ```
 - `bash`：macOS 自带 bash 3.2，`tools/bench_ab.sh` 需要 bash 4 以上；保证 Homebrew 的 bin 目录在 `PATH` 中排在 `/bin` 前面。
-- 不支持的部分：`[threads]` 绑核只在 Linux 上可用。CI 在 macOS 上只跑 `dev` 的构建与测试；`tsan`、fuzz、lint 与确定性门只在 Linux 上跑，以 Linux 的结果为准。
+- 不支持的部分：`[threads]` 绑核只在 Linux 与 Windows 上可用。CI 在 macOS 上只跑 `dev` 的构建与测试；`tsan`、fuzz、lint 与确定性门只在 Linux 上跑，以 Linux 的结果为准。
 
 ### 2.3 可选：共享依赖缓存
 
@@ -114,6 +114,9 @@ just develop                 # 可编辑安装 Python 包（带 live shell）
 | `bench` | Release，只构建基准 | `just bench`、延迟基准 |
 | `tsan` | Debug，ThreadSanitizer，不构建 Python | 多线程代码（环、IO 线程、live 节点） |
 | `fuzz` | RelWithDebInfo，Clang + libFuzzer | 解析器与解码器的 fuzz 目标 |
+| `win-dev`、`win-rel` | Debug、Release，clang-cl | Windows 上的日常构建（第 6 节），没有 sanitizer |
+| `mingw-dev` | Debug，MinGW-w64 GCC，不构建 Python | 在 MSYS2 的 MINGW64 shell 里构建 |
+| `mingw-cross` | Debug，MinGW-w64 交叉编译，不构建 Python | 在 Linux 上构建 Windows 程序，ctest 经 Wine 运行 |
 
 ```sh
 just build rel                         # 或 cmake --preset rel && cmake --build --preset rel
@@ -142,7 +145,7 @@ C++ 用 clangd，Python 用 Pylance 或 pyright。仓库根目录的 `.clangd` �
 
 微软的 C/C++ 扩展（`ms-vscode.cpptools`）与 clangd 的功能重复，推荐列表把它列为不推荐；已经装了的，共享设置里关掉了它的 IntelliSense（`"C_Cpp.intelliSenseEngine": "disabled"`）。
 
-`.vscode/` 里的 `settings.json`、`launch.json`、`tasks.json`、`extensions.json` 随仓库提交（`.gitignore` 只放行这四个文件，其余个人文件不入库）。Linux 与 macOS 共用同一份；打开仓库后 VS Code 会提示安装推荐的扩展。个人偏好写在用户设置里，不要改这几个文件。
+`.vscode/` 里的 `settings.json`、`launch.json`、`tasks.json`、`extensions.json` 随仓库提交（`.gitignore` 只放行这四个文件，其余个人文件不入库）。Linux、macOS 与 Windows 共用同一份（Windows 的差别见第 6.2 节）；打开仓库后 VS Code 会提示安装推荐的扩展。个人偏好写在用户设置里，不要改这几个文件。
 
 - `settings.json`：CMake Tools 只用 preset，并把 `.venv` 的 Python 传给 CMake；clangd 带 `--background-index --clang-tidy --header-insertion=never`；C++ 保存时用 clangd 格式化（clangd 不是 18 时关掉，见上）；Python 解释器与 pytest 指向 `.venv`；`build/dev/tests/test_*` 交给 TestMate 运行与调试；文件监视排除 `build/` 与 `runs/`。
 - `launch.json`：三个调试配置。`C++: test_engine` 与 `C++: pegged_mm, first 10 minutes` 用 lldb（CodeLLDB）；`Python: mm_quote, first 10 minutes` 用 debugpy，解释器是 `.venv`，`justMyCode` 关闭，所以能进入 `jarvis` 包。需要别的测试或参数时改 `program` 与 `args`。
@@ -355,9 +358,99 @@ just trace-backward runs/mm  # 运行日志投影到 OrderLifecycle 后交给 TL
 
 `just` 的参数按位置传：`just fuzz ws 120`、`just bench-compare main 3`；写成 `target=ws` 会把这串文字当成参数值。
 
-CI 的分层与这些命令对应：lint → functional（gcc-13、clang-18、macOS）→ determinism、fuzz、bench-compare、formal；nightly 另跑 tsan、20 个种子的混沌测试、1 小时 soak 与更长的 fuzz（`.github/workflows/`）。
+CI 的分层与这些命令对应：lint → functional（gcc-13、clang-18、macOS、Windows clang-cl、MinGW 交叉编译加 Wine）→ determinism、fuzz、bench-compare、formal；nightly 另跑 tsan、20 个种子的混沌测试、1 小时 soak 与更长的 fuzz（`.github/workflows/`）。
 
-## 6. 常见问题
+## 6. Windows
+
+### 6.1 工具链
+
+内核用 `__int128`，MSVC 的 cl.exe 没有这个类型，所以 Windows 上用 Clang 或 GCC：
+
+- **clang-cl**（推荐）：Visual Studio 2022 自带的 Clang，用 MSVC 的 ABI 与标准库，编出的 Python 扩展能被 python.org 的 CPython 加载。`__int128` 的除法与乘法溢出检查要用 compiler-rt 的 builtins 库（`clang_rt.builtins-x86_64.lib`），CMake 在 configure 时向 clang-cl 查询它的路径并链接到每个目标。
+- **MinGW-w64 GCC 13+**（MSYS2 或 Linux 上的交叉编译器）：能构建并运行 C++ 部分；不构建 Python 扩展，因为 MinGW 编出的扩展不能被 python.org 的 CPython 加载。
+- 直接用 cl.exe 配置时 CMake 报错并指向本节。
+
+需要的工具：
+
+| 工具 | 说明 |
+| --- | --- |
+| Visual Studio 2022（或 Build Tools） | 工作负载"使用 C++ 的桌面开发"，加上组件"适用于 Windows 的 C++ Clang 工具"（clang-cl、lld-link）；自带 CMake 与 Ninja |
+| OpenSSL 3（带头文件与导入库） | Shining Light 的 Win64 OpenSSL 完整版安装包，或 `choco install openssl`；装在 `C:\Program Files\OpenSSL` 或 `C:\Program Files\OpenSSL-Win64` 时 CMake 自己能找到，否则设 `OPENSSL_ROOT_DIR`。运行时要找到 `libssl-3-x64.dll`，把它的 `bin` 目录加进 `PATH` |
+| Python 3.11+ | python.org 的安装包 |
+| Git for Windows | 提供 `bash`，`justfile` 的命令在 bash 里运行；`Git\bin` 要在 `PATH` 上 |
+| uv、just | `winget install astral-sh.uv`，`uv tool install rust-just` |
+
+构建要在"Developer PowerShell for VS 2022"（x64）里进行，它提供 MSVC 标准库、Windows SDK 与 clang-cl 的路径。Visual Studio 用"打开文件夹"打开仓库时按 `win-*` preset 自己准备这个环境；VS Code 从开发者 PowerShell 里启动（`code .`），CMake Tools 与 clangd 就继承它。
+
+### 6.2 构建与测试
+
+```powershell
+git clone git@github.com:nivalume/jarvistrader.git; cd jarvistrader
+just bootstrap                  # .venv（.venv\Scripts\python.exe）
+just build                      # Windows 上 just 的默认 preset 是 win-dev
+ctest --preset win-dev
+```
+
+不用 just 时：
+
+```powershell
+cmake --preset win-dev "-DPython_EXECUTABLE=$PWD\.venv\Scripts\python.exe"
+cmake --build --preset win-dev
+ctest --preset win-dev
+```
+
+可执行文件是 `build\win-dev\bin\jarvis.exe` 等；`tools/golden.py` 与 Python 测试会自己补 `.exe`。
+
+VS Code：`launch.json` 的配置带 Windows 的路径（`"windows"` 字段）。`settings.json` 不能按系统区分，其中两处指向 `.venv/bin/python`，在 Windows 上用用户设置覆盖成 `.venv\Scripts\python.exe`：`cmake.configureSettings` 的 `Python_EXECUTABLE` 与 `python.defaultInterpreterPath`。`.clangd` 读 `build/dev` 的编译数据库，Windows 上在用户设置的 `clangd.arguments` 中加 `--compile-commands-dir=build/win-dev`。
+
+### 6.3 Python 扩展
+
+scikit-build-core 在 Windows 上默认用 Visual Studio 生成器与 cl.exe，所以安装前指定 Ninja 与 clang-cl（同样在开发者 PowerShell 里）：
+
+```powershell
+$env:CMAKE_GENERATOR = "Ninja"; $env:CC = "clang-cl"; $env:CXX = "clang-cl"
+just install                    # 或 just develop
+.venv\Scripts\python.exe -m pytest
+```
+
+### 6.4 MinGW
+
+MSYS2 的 MINGW64 shell：
+
+```sh
+pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
+    mingw-w64-x86_64-openssl mingw-w64-x86_64-python
+cmake --preset mingw-dev && cmake --build --preset mingw-dev && ctest --preset mingw-dev
+```
+
+在 Linux 上交叉编译并用 Wine 跑测试（CI 的 `mingw-cross` job 也是这样做的）：
+
+```sh
+sudo apt-get install g++-mingw-w64-x86-64-posix wine64 zstd
+# OpenSSL：MSYS2 mingw64 仓库的包，解开后用环境变量指过去
+pkg=mingw-w64-x86_64-openssl-3.6.5-1-any.pkg.tar.zst
+mkdir -p build/mingw-prefix && curl -fsSL -o build/mingw-prefix/$pkg https://repo.msys2.org/mingw/mingw64/$pkg
+tar --zstd -xf build/mingw-prefix/$pkg -C build/mingw-prefix
+export JARVIS_MINGW_PREFIX=$PWD/build/mingw-prefix/mingw64 WINEDEBUG=-all
+cmake --preset mingw-cross && cmake --build --preset mingw-cross -j4
+ctest --preset mingw-cross      # 每个测试程序经 wine64 运行
+```
+
+工具链文件是 `cmake/toolchains/mingw-w64.cmake`：用 `x86_64-w64-mingw32-g++-posix`（`std::thread` 要 posix 线程模型），静态链接 libstdc++ 与 OpenSSL，所以 `.exe` 不依赖 MinGW 的 DLL。
+
+### 6.5 与 Linux、macOS 的差别
+
+- **确定性**：Windows 构建写出的事件日志与 Linux 的逐字节相同（`jarvis corpus` 的指纹与全部 golden 用例都验证过）；日志头记录的编译器与平台字符串不同，不计入指纹。
+- **行尾**：`.gitattributes` 让所有文本文件在 Windows 上也以 LF 检出，golden 期望文件、配置与测试输入逐字节比较时才一致。程序写的文件都以二进制模式打开，不会写出 CRLF。
+- **TOML 里的路径**：双引号字符串中的 `\` 是转义符，写 `"C:\data"` 会解析失败。用单引号的字面字符串 `'C:\data\catalog'` 或正斜杠 `"C:/data/catalog"`。命令行 `--set data.catalog=C:\data\catalog` 不受影响。
+- **admin socket**：Unix 域 socket 需要 Windows 10 1803 及以后，路径如 `unix://C:/jarvis/run/mm01.sock`（最长 107 字节）；更早的系统上 admin 线程启动失败并说明原因。socket 的访问由所在目录的 ACL 决定。
+- **密钥文件**：没有 0600 这样的权限位，节点不检查，用 ACL 限制（`docs/runbook.md` 第 3.1 节）。
+- **停止**：Ctrl+C、Ctrl+Break 等同 SIGINT；关闭控制台窗口、注销或关机时系统最多给约 5 秒。`ensure_hash_seed` 在 Windows 上不能 exec，改为启动子进程并等待它结束，退出码相同。
+- **绑核**：`[threads]` 可用，CPU 编号限于进程所在 processor group 的 0–63。
+- **持久化**：`FlushFileBuffers` 代替 `fdatasync`，通常更慢；`barrier` 模式的命令延迟相应更高。
+- **只在 Linux、macOS 上有的**：`dev` 的 ASan/UBSan、`tsan`、`fuzz`、`bench` 与 `det-o0` preset，`just fp`、`just tla`、`just bench-compare` 等脚本类命令。生产实盘只支持 Linux（`docs/architecture.md` 第 19.6 节）。
+
+## 7. 常见问题
 
 - **configure 报找不到 OpenSSL**：Linux 装 `libssl-dev`；macOS 设 `OPENSSL_ROOT_DIR`（第 2.2 节）。
 - **configure 时下载依赖失败**：检查到 GitHub 的网络与代理；设 `CPM_SOURCE_CACHE` 后，已下载的依赖不再重复下载。
@@ -370,5 +463,9 @@ CI 的分层与这些命令对应：lint → functional（gcc-13、clang-18、ma
 - **`jarvis.Node` 不能跑 sandbox**：安装的是不带 live shell 的包（`build_info()` 的 `live_enabled` 为 False）；用 `just develop` 或 `just install-live`。
 - **在调试器里运行 ASan 程序报 LeakSanitizer 错误**：设 `ASAN_OPTIONS=detect_leaks=0`。
 - **调试 `mm_quote.py` 以 `SystemExit: 1` 结束**：看调试终端里 `mm_quote.py:` 开头的错误行。`no data for ... NotFound`：先下载数据（5.3 节）；`already holds a run log: AlreadyExists`：`--out` 目录里已有一次运行，删掉或换目录（共享的 `launch.json` 在启动前已清理 `runs/mm-dbg`）。
-- **macOS 上 `[threads]` 的节点启动失败**：绑核只支持 Linux，删掉 `[threads]` 中的 CPU 设置。
+- **macOS 上 `[threads]` 的节点启动失败**：绑核只支持 Linux 与 Windows，删掉 `[threads]` 中的 CPU 设置。
+- **Windows 上 configure 报 cl.exe 不受支持**：在开发者 PowerShell 里用 `win-dev`／`win-rel` preset（指定 clang-cl），或给 Visual Studio 生成器加 `-T ClangCL`（第 6.1 节）。
+- **Windows 上 configure 报找不到 clang_rt.builtins**：Visual Studio Installer 里装"适用于 Windows 的 C++ Clang 工具"；单独装的 LLVM 也带这个库。
+- **Windows 上测试程序启动即退出、没有输出**：找不到 OpenSSL 的 DLL，把 OpenSSL 的 `bin` 目录加进 `PATH`。
+- **Windows 上 TOML 配置报 `Error while parsing unicode scalar sequence`**：双引号字符串里的路径含 `\u`、`\U` 之类被当成转义，改用单引号或正斜杠（第 6.5 节）。
 - **回放出现偏差（退出码 3）**：见 `docs/runbook.md` 第 8.10 节。

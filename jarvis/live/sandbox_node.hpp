@@ -28,6 +28,7 @@
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/run_dir.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/sys/shutdown.hpp"
 
 // The sandbox node (docs/architecture.md sections 4.1 and 4.6): real market data from the
 // venue, orders against the simulated exchange, in real time. The md-io thread (MarketFeed)
@@ -102,19 +103,9 @@ struct SandboxPlan {
 feed_instruments(std::span<const adapter::binance::PerpetualDefinition> instruments,
                  MarketFeedConfig& feed, node::Preamble& preamble, std::string& error);
 
-// While alive, SIGINT and SIGTERM set `flag` (the handlers only store to the atomic); the
-// previous handlers (Python's, in a Python process) come back when it goes.
-class ShutdownSignals {
-public:
-  explicit ShutdownSignals(std::atomic<bool>& flag);
-  ~ShutdownSignals();
-  ShutdownSignals(const ShutdownSignals&) = delete;
-  ShutdownSignals& operator=(const ShutdownSignals&) = delete;
-
-private:
-  struct Saved;
-  std::unique_ptr<Saved> saved_;
-};
+// While alive, a stop request from outside (SIGINT and SIGTERM; Ctrl-C and console events on
+// Windows) sets `flag`; the previous handlers come back when it goes (jarvis/sys/shutdown.hpp).
+using ShutdownSignals = sys::ShutdownSignals;
 
 // The driver's pump in real time: the node clock, the feed ring drained into the live source,
 // the idle hook, the stop request.

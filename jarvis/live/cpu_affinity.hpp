@@ -12,8 +12,9 @@
 #include "jarvis/node/config.hpp"
 
 // Thread placement (docs/architecture.md 19.6): which CPUs each thread of a sandbox or live node
-// may run on, from [threads]. Pinning needs Linux; elsewhere a [threads] section that pins
-// anything fails the node's start.
+// may run on, from [threads]. Pinning needs Linux or Windows (CPUs 0 to 63 of the process's
+// processor group there); on macOS a [threads] section that pins anything fails the node's
+// start.
 //
 // The core thread and the IO threads with a CPU of their own run on that CPU. Every other thread
 // (the venue REST thread, persist, telemetry, admin), and an IO thread without its own CPU, runs
@@ -48,9 +49,10 @@ struct ThreadPlacement {
 [[nodiscard]] core::Status place_threads(const node::ThreadsSection& threads, ThreadPlacement& out,
                                          std::string& error);
 
-// The CPUs the calling thread may run on.
+// The CPUs the calling thread may run on (on Windows, which has no call reading a thread's
+// mask: the CPUs the process may run on).
 [[nodiscard]] core::Status allowed_cpus(std::vector<int>& out, std::string& error);
-// /sys/devices/system/node/node<N>/cpulist.
+// /sys/devices/system/node/node<N>/cpulist (GetNumaNodeProcessorMaskEx on Windows).
 [[nodiscard]] core::Status numa_node_cpus(std::uint32_t node, std::vector<int>& out,
                                           std::string& error);
 

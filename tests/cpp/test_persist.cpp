@@ -14,8 +14,6 @@
 #include <thread>
 #include <vector>
 
-#include <unistd.h>
-
 #include <doctest/doctest.h>
 
 #include "jarvis/live/persist.hpp"
@@ -23,6 +21,7 @@
 #include "jarvis/node/corpus.hpp"
 #include "jarvis/node/event_log.hpp"
 #include "jarvis/node/snapshot_file.hpp"
+#include "jarvis/sys/process.hpp"
 
 namespace {
 
@@ -30,6 +29,7 @@ namespace live = jarvis::live;
 namespace m = jarvis::model;
 namespace node = jarvis::node;
 namespace wire = jarvis::model::wire;
+namespace sys = jarvis::sys;
 using jarvis::core::EventKey;
 using jarvis::core::Status;
 
@@ -38,7 +38,7 @@ public:
   explicit TempDir(std::string_view name) {
     static int counter = 0;
     path_ = std::filesystem::temp_directory_path() /
-            ("jarvis-persist-" + std::string{name} + "-" + std::to_string(::getpid()) + "-" +
+            ("jarvis-persist-" + std::string{name} + "-" + std::to_string(sys::process_id()) + "-" +
              std::to_string(counter++));
     std::filesystem::remove_all(path_);
   }
@@ -48,7 +48,8 @@ public:
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);
   }
-  [[nodiscard]] std::string str() const { return path_.string(); }
+  // Forward slashes on every platform: the paths go into TOML strings, and Windows takes them.
+  [[nodiscard]] std::string str() const { return path_.generic_string(); }
 
 private:
   std::filesystem::path path_;

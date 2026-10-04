@@ -1,21 +1,14 @@
 #include "jarvis/live/admin_server.hpp"
 
 #include <array>
-#include <cerrno>
-#include <cstring>
 #include <filesystem>
 #include <string_view>
 #include <thread>
 
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <unistd.h>
-
 #include "jarvis/live/cpu_affinity.hpp"
 #include "jarvis/network/io.hpp"
 #include "jarvis/node/admin_protocol.hpp"
+#include "jarvis/sys/socket.hpp"
 
 namespace jarvis::live {
 
@@ -51,19 +44,18 @@ struct AdminServer::Impl {
   std::vector<int> cpus;
   NodeStatus status;
   std::string path;
-  int listener = -1;
+  sys::SocketHandle listener;
   std::atomic<bool> stopping{false};
 
   // One command: read a line (bounded in size and time), answer it.
-  void serve(int fd) {
+  void serve(sys::Socket fd) {
     std::string line;
     std::array<char, 512> buffer{};
     while (line.find('\n') == std::string::npos && line.size() < buffer.size()) {
-      pollfd p{fd, POLLIN, 0};
-      if (::poll(&p, 1, kReadMs) <= 0) {
+      if (sys::wait_readable(fd, kReadMs) <= 0) {
         return;
       }
-      const ssize_t n = ::recv(fd, buffer.data(), buffer.size(), 0);
+      const long n = sys::receive(fd, buffer.data(), buffer.size());
       if (n <= 0) {
         return;
       }
@@ -72,7 +64,7 @@ struct AdminServer::Impl {
     line.resize(line.find_first_of("\r\n") == std::string::npos ? line.size()
                                                                 : line.find_first_of("\r\n"));
     const std::string reply = answer(line) + "\n";
-    static_cast<void>(::send(fd, reply.data(), reply.size(), MSG_NOSIGNAL));
+    static_cast<void>(sys::send_all(fd, reply));
   }
 
   std::string answer(std::string_view line) {
@@ -93,14 +85,12 @@ struct AdminServer::Impl {
 
   void run() {
     while (!stopping.load(std::memory_order_relaxed)) {
-      pollfd p{listener, POLLIN, 0};
-      if (::poll(&p, 1, kPollMs) <= 0) {
+      if (sys::wait_readable(listener.get(), kPollMs) <= 0) {
         continue;
       }
-      const int fd = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
-      if (fd >= 0) {
-        serve(fd);
-        ::close(fd);
+      const sys::SocketHandle client = sys::accept_connection(listener.get());
+      if (client.valid()) {
+        serve(client.get());
       }
     }
   }
@@ -116,30 +106,10 @@ Status AdminServer::start(std::string& error) {
   if (a.thread.joinable()) {
     return Status::Ok;
   }
-  sockaddr_un addr{};
-  if (a.path.empty() || a.path.size() >= sizeof(addr.sun_path)) {
-    error = "admin socket path \"" + a.path + "\" is empty or too long";
-    return Status::InvalidArgument;
-  }
-  addr.sun_family = AF_UNIX;
-  std::memcpy(addr.sun_path, a.path.data(), a.path.size());
-  std::error_code ec;
-  std::filesystem::remove(a.path, ec); // a socket left by a node that did not stop cleanly
-  a.listener = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-  const mode_t before = ::umask(0177); // the socket file is created 0600
-  const bool bound =
-      a.listener >= 0 &&
-      ::bind(a.listener, reinterpret_cast<const sockaddr*>(&addr), // NOLINT: the sockets API
-             sizeof(addr)) == 0;
-  ::umask(before);
-  if (!bound || ::listen(a.listener, 8) != 0) {
-    error =
-        "cannot listen on " + a.path + ": " + std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
-    if (a.listener >= 0) {
-      ::close(a.listener);
-      a.listener = -1;
-    }
-    return Status::IoError;
+  // The socket file is created 0600 where files carry permission bits; a stale one left by a
+  // node that did not stop cleanly is replaced.
+  if (const Status s = sys::listen_unix(a.path, 8, a.listener, error); !core::ok(s)) {
+    return s;
   }
   a.stopping.store(false);
   a.thread = std::thread{[&a] { a.run(); }};
@@ -157,8 +127,7 @@ void AdminServer::stop() {
   }
   a.stopping.store(true);
   a.thread.join();
-  ::close(a.listener);
-  a.listener = -1;
+  a.listener.reset();
   std::error_code ec;
   std::filesystem::remove(a.path, ec);
 }

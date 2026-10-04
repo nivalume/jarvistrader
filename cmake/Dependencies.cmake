@@ -84,6 +84,9 @@ function(jarvis_add_asio)
   target_include_directories(jarvis_asio SYSTEM INTERFACE "${asio_SOURCE_DIR}/asio/include")
   target_compile_definitions(jarvis_asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
   target_link_libraries(jarvis_asio INTERFACE Threads::Threads)
+  if(WIN32) # Winsock; MSVC finds these from Asio's #pragma comment(lib), MinGW does not
+    target_link_libraries(jarvis_asio INTERFACE ws2_32 mswsock)
+  endif()
 endfunction()
 
 function(jarvis_add_picohttpparser)

@@ -229,7 +229,8 @@ class Node:
 
     def run(self, *, run_for: float | None = None) -> RunResult:
         """Runs the node and writes the run directory: a backtest over its [data], or a sandbox
-        or live session until SIGINT, SIGTERM or `run_for` seconds."""
+        or live session until SIGINT, SIGTERM (on Windows: Ctrl+C, Ctrl+Break or closing the
+        console) or `run_for` seconds."""
         if not self._strategies:
             raise ValueError("the node has no strategies; add_strategy() first")
         with self._guard():

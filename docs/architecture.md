@@ -112,7 +112,8 @@ jarvis 自己的组件不使用 `Actor`、`MessageBus`、`Cache`、`Trader`、`K
 ### 内核与外壳
 
 - **kernel**（`jarvis::kernel`）：header-only，经 `jarvis_kernel_freestanding` 以 `-fno-exceptions -fno-rtti` 编译守门。包含 `core`、`model`、`data`、`cost`、`portfolio`、`risk`、`execution`、`strategy`、`engine`、`backtest`。错误用 `enum class Status` 加输出参数表达。
-- **shell**（`jarvis_shell` 静态库与 `_core` 绑定模块）：`node`、`network`、`adapter/binance`、`live`、`python`。内部可以使用异常与第三方库，跨入内核前翻译成 `Status`。`node` 层（配置解析、Node 组合、命令行入口、构建信息）回测也需要，因此总是构建；`network`、`adapter`、`live` 只在 `JARVIS_BUILD_LIVE=ON` 时编入，纯回测构建不依赖网络栈。
+- **shell**（`jarvis_shell` 静态库与 `_core` 绑定模块）：`sys`、`node`、`network`、`adapter/binance`、`live`、`python`。内部可以使用异常与第三方库，跨入内核前翻译成 `Status`。`node` 层（配置解析、Node 组合、命令行入口、构建信息）回测也需要，因此总是构建；`network`、`adapter`、`live` 只在 `JARVIS_BUILD_LIVE=ON` 时编入，纯回测构建不依赖网络栈。
+- **sys**（`jarvis_sys` 静态库）：外壳里唯一调用操作系统 API 的层，Linux、macOS 与 Windows 的差别都在这里：崩溃安全的文件写入（`fdatasync`／`FlushFileBuffers`、原子替换、目录同步）、阻塞 socket（Unix 域 socket 与 TCP；Windows 上是 Winsock 与 AF_UNIX）、共享库加载、停止信号（`sigaction`／`SetConsoleCtrlHandler`）、进程与环境变量、错误文本。其余外壳层不 include 平台头文件，也不写平台 `#ifdef`；绑核（`live/cpu_affinity.cpp`）与 `network::Waker` 两处与线程、Asio 绑得紧，留在各自的层里。
 
 ### 分层与依赖规则
 
@@ -129,10 +130,11 @@ jarvis 自己的组件不使用 `Actor`、`MessageBus`、`Cache`、`Trader`、`K
 | strategy | `jarvis/strategy` | kernel | 以上各层，不得 include backtest、live、adapter |
 | engine | `jarvis/engine` | kernel | 以上各层 |
 | backtest | `jarvis/backtest` | kernel | 以上各层 |
-| node | `jarvis/node` | shell | 全部 kernel 层；toml++ |
-| network | `jarvis/network` | shell | core；Asio、OpenSSL、picohttpparser |
-| adapter | `jarvis/adapter/binance` | shell | network 与全部 kernel 层；simdjson、SBE 生成代码 |
-| live | `jarvis/live` | shell | node、network、adapter 与全部 kernel 层 |
+| sys | `jarvis/sys` | shell | core；操作系统 API（POSIX、Win32、Winsock） |
+| node | `jarvis/node` | shell | 全部 kernel 层、sys；toml++ |
+| network | `jarvis/network` | shell | core、sys；Asio、OpenSSL、picohttpparser |
+| adapter | `jarvis/adapter/binance` | shell | network、sys 与全部 kernel 层；simdjson、SBE 生成代码 |
+| live | `jarvis/live` | shell | node、network、adapter、sys 与全部 kernel 层 |
 | python | `python/src`、`python/jarvis` | shell | 全部；nanobind |
 | examples | `examples/py`、`examples/cpp` | 使用方 | 只允许公开 API：core、model、data、strategy、node |
 
@@ -150,6 +152,7 @@ jarvis/
   strategy/     Strategy concept, Context, StrategySet (Static/Dynamic), registry
   engine/       Engine<StrategySet>, EventSource/CommandSink concepts, EngineState
   backtest/     ReplaySource, ReplayClock, matching/ (SimulatedExchange, fill models)
+  sys/          platform calls: durable files, sockets, shared libraries, stop signals, process
   node/         build info, NodeConfig parsing, Node composition, command-line entry points
   network/      Transport, WsClient (RFC 6455), HttpClient, Signer
   adapter/binance/  codec/ (json, sbe/gen), streams, user_stream, ws_api, rest, instruments
@@ -293,7 +296,7 @@ jsonl = true                      # telemetry.jsonl 写在运行目录中
 [admin]
 socket = "unix:///run/jarvis/{node_id}.sock"   # sandbox 与 live；不设置则没有 admin socket
 
-[threads]                         # sandbox 与 live，只支持 Linux（19.6 节）；不设置则不绑核
+[threads]                         # sandbox 与 live，支持 Linux 与 Windows（19.6 节）；不设置则不绑核
 busy_poll = false                 # 行情线程与 venue-io 线程从不休眠
 core_cpu = 2                      # core 线程的 CPU；不设置则不绑
 market_cpu = 3                    # 行情线程
@@ -661,7 +664,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - 实现（M4-E）：环是 `jarvis/live/spsc_ring.hpp` 的 `SpscRing<T>`（定长值）与 `SpscByteRing`（变长记录，原地读取，一条记录最多占环的一半）；两端各自缓存对方的下标，稳态下一次读写只触碰一条共享缓存行。基准 `ring/spsc_roundtrip`（两个线程之间一去一回）在本机 4 vCPU 虚拟机上中位数约 690 ns，`ring/byte_record` 约 9 ns。
 - venue-io 线程（M5-C2，`jarvis/live/venue_io.hpp`）：与上面的线程划分不同，WS API（下单）与用户数据流放在同一个 IO 线程上。两者的回报都要经过同一个 `OrderTracker`，一个线程就是它唯一的写者；账户相关的输入（`ConnectionStatus`、订单事件、`AccountState`、`RateLimitFeedback`、`VenueSnapshot`）按发生顺序进入同一个环，内核因此总是先看到用户流 up，再看到快照。命令经 SPSC 环 `SpscRing<QueuedCommand>` 从 core 送来，IO 线程在两轮网络处理之间取命令；`busy_poll` 时从不休眠，否则无事可做的一轮最多等 1 ms，等到一个 handler（网络事件或唤醒）为止；core 推入命令后调用 `VenueIo::wake()` 结束这次等待（M5-Q，见下一条）。会阻塞的部分（listenKey 的创建、续期与过期重建，REST 快照，`countdownCancelAll`，每 60 秒的轻量对账）在第二个线程上，结果经 `IoContext::post` 交回 IO 线程。停止时先停 IO 线程（它先处理完命令环里剩下的命令），再停 REST 线程；REST 线程丢弃尚未执行的快照与 listenKey 任务，但仍发出已排队的 `countdownCancelAll` 与 REST 下单请求。快照只在发起它的那次用户流连接仍然在线时记录（中途断线即作废），失败则稍后重取。WS API 未就绪时命令经 REST 线程走 REST 下单（M5-F，`VenueIoConfig::rest_fallback`，默认打开），结果与 WS API 的一样交回 `OrderTracker`：已确认、被拒（带交易所错误码）或未知（5xx、超时）；REST 线程正忙于快照时，命令排在它后面。关闭兜底时命令在本地拒绝（`OrderRejected` 等，原因 `BINANCE_0 order entry is down`）：命令没有到达交易所。结果未知（超时、在途断线）的订单留给对账。
 - venue-io 线程的唤醒（M5-Q）：
-  - `network::Waker` 是 IO 线程的 `IoContext` 监听的一个描述符（Linux 上是 eventfd，其他平台是 pipe）。core 只对它做一次 `write(2)`，不加锁、不分配内存；IO 线程上的 handler 把它读空后重新监听。
+  - `network::Waker` 是 IO 线程的 `IoContext` 监听的一个描述符（Linux 上是 eventfd，macOS 上是 pipe），Windows 上是 IO 线程等待的自动复位事件。core 只做一次系统调用（`write(2)` 或 `SetEvent`），不加锁、不分配内存；IO 线程上的 handler 把描述符读空（事件在等待结束时自动复位）后重新监听。
   - IO 线程在等待之前、core 在推入命令之后，各自交换同一个原子标志 `sleeping`。两次交换总有一次读到另一次的结果：要么 core 看到 IO 线程在等待并写描述符，要么 IO 线程看到命令而不等待，唤醒不会丢。
   - 一次等待只唤醒一次，同一批的后续命令不再付系统调用；`busy_poll` 时不唤醒。
 - 没有单独的 timer 线程：内核定时器由 core 循环在时钟越过截止时间时触发（作为记录输入 `TimerFired`），网络层的定时器（重连退避、快照节拍）在各自 IO 线程的 `IoContext` 上运行。
@@ -701,7 +704,7 @@ jarvis 采用 nautilus 的 standard precision 模式。
 - Python 启动的节点里，主线程就是 core 线程。`Node.run()` 进入时释放 GIL，所有 IO 线程都是 C++ 线程，从不触碰 Python。
 - 一批输入中第一次需要调用 Python 回调时，`PyStrategyHost` 获取 GIL（`python/src/bind_node.cpp` 的 `GilBatch`）；策略没有定义的回调直接跳过，不触碰 Python，所以只路由到 C++ 策略的批次不获取 GIL。批次结束后，节点在写下一批的第一条输入之前释放 GIL（backtest 的输入钩子 `InputHook`）。回放在调用方持有 GIL 的情况下进行。
 - 空闲时不持有 GIL。空闲钩子按 `python.idle_hook_ms`（默认 100，运维参数，不进入配置 hash）的节奏在持有 GIL 的情况下运行：先 `gc.collect(0)`，再调用各 Python 策略的 `on_idle()`；backtest 没有空闲期，不运行它。`on_idle` 不接收 `ctx`：它在任何 `step` 之外运行，它对内核做的任何事都无法在回放中重现；它抛出的异常只打印，不产生 `StrategyError`，原因相同。
-- 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。实现（M4-E）：运行期间 `live::ShutdownSignals` 把 SIGINT、SIGTERM 换成只写一个原子标志的处理器，运行结束时恢复原来的处理器（Python 的）；实时循环见到标志后以 `ShutdownRequested` 收尾。
+- 进程信号由 C++ 的 `sigaction` 处理，写入 admin 环，变成 `Shutdown` 事件。不使用 Python 信号处理器。实现（M4-E）：运行期间 `live::ShutdownSignals`（即 `sys::ShutdownSignals`）把 SIGINT、SIGTERM 换成只写一个原子标志的处理器，运行结束时恢复原来的处理器（Python 的）；实时循环见到标志后以 `ShutdownRequested` 收尾。Windows 没有这两个信号，同一个类用 `SetConsoleCtrlHandler`：Ctrl+C、Ctrl+Break 置标志；关闭控制台、注销、关机也置标志，并让系统等待最多约 5 秒（系统给的上限），供节点撤单后退出。
 - `on_start` 结束后调用 `gc.freeze()`，第二代回收只在 `on_idle` 中进行。运行结束时调用 `gc.unfreeze()`：冻结的对象连解释器退出时也不回收，不解冻会在退出时留下未释放的对象。
 
 ### 7.5 让 Python 远离逐 tick 热循环
@@ -1476,7 +1479,7 @@ seq: u64 | ts: u64 | source_id: u16 | kind: u16 | payload_len: u32 | payload | c
 
 实现（M5-I1）：
 
-- 日志位置是已追加记录的字节数（不计段头）。persist 线程每次 `fdatasync` 后公布 durable 位置：崩溃后日志至少保留到这里。段写满时旧段先 `fdatasync` 再关闭，新段创建后同步目录，所以 durable 位置之前的记录在崩溃后都能读到。
+- 日志位置是已追加记录的字节数（不计段头）。persist 线程每次 `fdatasync` 后公布 durable 位置：崩溃后日志至少保留到这里。段写满时旧段先 `fdatasync` 再关闭，新段创建后同步目录，所以 durable 位置之前的记录在崩溃后都能读到。macOS 上用 `fsync`；Windows 上用 `FlushFileBuffers`，目录不需要同步（NTFS 的元数据有日志），快照的原子替换用 `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`。`FlushFileBuffers` 比 `fdatasync` 慢，Windows 上 `barrier` 模式的命令延迟相应更高。
 - `async`：persist 线程最多每 `persistence.sync_every_ms`（默认 100）同步一次，为 0 时每取一批同步一次；core 从不等待。崩溃最多丢失最近一个同步间隔内的记录。
 - `barrier`：persist 线程每取一批就同步。`CommandRouter` 在命令的输出记录追加之后把当前日志位置随命令放入 venue-io 的命令环（`QueuedCommand::durable_at`）；venue-io 只在 durable 位置达到它之后才发出这条命令，排在它后面的命令也一起等待，顺序不变。等待期间 IO 线程不休眠（让出 CPU），延迟约为一次 `fdatasync`。sandbox 的命令只发给进程内的模拟交易所，`barrier` 与 `async` 相同；backtest 不 `fdatasync`。
 - 读取崩溃留下的日志：最后一段末尾可能是半条记录，或刚创建、段头不完整的段。`EventLogReadOptions::tolerate_torn_tail` 把最后一段中第一条解不开的记录（长度不足或 CRC 不符）当作日志结尾，并报告丢弃的字节数；更早的段出现同样问题仍是错误。
@@ -1736,7 +1739,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 - `NodeConfig` 的 hash 写入日志头。testnet 与 prod 是不同的 endpoint 配置值，不存在默认指向 prod 的布尔开关。
 - 密钥只以引用形式出现在配置中（`env:` 或权限为 0600 的文件路径）。签名经 `Signer` 接口实现，Ed25519 使用 OpenSSL 3。启动时校验 key 的权限（有交易权限、无提现权限）与 IP 白名单。
-- 实现（M5-C3，`jarvis/node/credentials.hpp`）：`env:PREFIX` 读取 `PREFIX_API_KEY`，以及 `PREFIX_API_SECRET` 或 `PREFIX_PRIVATE_KEY_FILE`；`file:PATH` 读取 TOML 文件中的 `api_key`，以及 `secret` 或 `private_key_file`（相对于该文件）。secret 是 HMAC secret 或 PEM 格式的 Ed25519 私钥，由 `Signer::from_secret` 识别。错误只说明缺什么，从不包含 secret。保存 secret 的文件（TOML 文件与私钥文件）只能由属主读写（权限 0600 或 0400），组或其他用户可读时拒绝启动，错误中给出当前权限与 `chmod 600` 命令（M5-D4）。
+- 实现（M5-C3，`jarvis/node/credentials.hpp`）：`env:PREFIX` 读取 `PREFIX_API_KEY`，以及 `PREFIX_API_SECRET` 或 `PREFIX_PRIVATE_KEY_FILE`；`file:PATH` 读取 TOML 文件中的 `api_key`，以及 `secret` 或 `private_key_file`（相对于该文件）。secret 是 HMAC secret 或 PEM 格式的 Ed25519 私钥，由 `Signer::from_secret` 识别。错误只说明缺什么，从不包含 secret。保存 secret 的文件（TOML 文件与私钥文件）只能由属主读写（权限 0600 或 0400），组或其他用户可读时拒绝启动，错误中给出当前权限与 `chmod 600` 命令（M5-D4）。Windows 的文件没有这些权限位，访问由 ACL 决定，节点不做此检查，由运维设置（`docs/runbook.md` 第 3.1 节）。
 
 ### 19.2 可观测性
 
@@ -1782,7 +1785,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 - 行情新鲜由内核按 `[node] market_data_stale_ms` 判断，陈旧时节点处于 `Degraded`，所以 `/ready` 与 `status` 的 `ready` 都为假（第 4.4 节）。
 - admin 命令经 Unix socket 进入，作为记录事件处理，因此可审计、可回放：`halt`、`reduce`、`resume`、`cancel_all`、`set_param`、`snapshot`、`shutdown`。
 - 实现（M5-G）：
-  - `[admin] socket`（`unix://` 路径，可含 `{node_id}`）设置后，sandbox 与 live 节点启动 admin 线程（`jarvis/live/admin_server.hpp`）。socket 文件权限为 0600，只有属主能发命令；启动时替换遗留的 socket 文件，停止时删除。每个连接一条命令、一行回复（协议见 `jarvis/node/admin_protocol.hpp`）。
+  - `[admin] socket`（`unix://` 路径，可含 `{node_id}`）设置后，sandbox 与 live 节点启动 admin 线程（`jarvis/live/admin_server.hpp`）。socket 文件权限为 0600，只有属主能发命令（Windows 上 AF_UNIX 需要 Windows 10 1803 及以后，访问由所在目录的 ACL 决定）；启动时替换遗留的 socket 文件，停止时删除。每个连接一条命令、一行回复（协议见 `jarvis/node/admin_protocol.hpp`）。
   - `halt`、`reduce`、`resume`、`cancel_all`、`shutdown` 回复 `ok`，经 SPSC 环交给 core 线程；泵在每一轮最先取它们（先于账户环与行情环），变成记录的 `AdminCommand` 输入，回放时复现。内核的处理：`halt` 与 `reduce` 把 TradingState 的基础状态设为 `Halted` 或 `Reducing`，`resume` 恢复为 `Active`（清除监控与轻量对账造成的降级；同步与降级保持不受影响）；`cancel_all` 撤销全部未完成订单（KillSwitch，不改变状态）；`shutdown` 让 driver 按 `[node] shutdown` 停止节点，与信号相同。
   - `status` 回复一行 JSON：Node 状态、TradingState、最后步进的 `seq`、`ready`（Node 处于 `Running`，即已同步且没有连接处于 down）、`alive`（core 线程 5 秒内发布过状态；它每一轮都发布，空闲时也是）。`status` 不产生输入。
   - 命令行：`jarvis admin <socket> <command> [参数]` 或 `jarvis admin --config <file> <command> [参数]`；回复以 `error` 开头时退出码为 1。
@@ -1815,7 +1818,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 
 ### 19.6 部署
 
-生产实盘只支持 Linux；macOS 支持开发、回测与 testnet。建议：core 线程绑定到 `isolcpus` 隔离的核；IO 线程与 core 位于同一 NUMA 节点；关闭透明大页的自动合并；网卡中断绑到非 core 核；chrony 同步时钟，服务器时间偏移作为指标监控；以 systemd 管理进程，`SIGTERM` 超时后才 `SIGKILL`。
+生产实盘只支持 Linux；macOS 与 Windows 支持开发、回测、sandbox 与 testnet（Windows 的构建与平台差异见 `docs/development.md` 第 6 节）。建议：core 线程绑定到 `isolcpus` 隔离的核；IO 线程与 core 位于同一 NUMA 节点；关闭透明大页的自动合并；网卡中断绑到非 core 核；chrony 同步时钟，服务器时间偏移作为指标监控；以 systemd 管理进程，`SIGTERM` 超时后才 `SIGKILL`。
 
 线程放置（M5-Q，`[threads]`，`jarvis/live/cpu_affinity.hpp`）：
 
@@ -1827,20 +1830,20 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
   - 行情线程与 venue-io 线程不能用 core 的 CPU，因为 core 线程轮询入站环、从不休眠；
   - `busy_poll` 时两个 IO 线程不能共用一个 CPU。
 - 启动时：
-  - 每个绑定的 CPU 须在进程可用的 CPU 内（`sched_getaffinity`）；
-  - 设置 `numa_node` 时，绑定的 CPU 还须在该节点上（`/sys/devices/system/node/node<N>/cpulist`）；
+  - 每个绑定的 CPU 须在进程可用的 CPU 内（`sched_getaffinity`；Windows 上是 `GetProcessAffinityMask`）；
+  - 设置 `numa_node` 时，绑定的 CPU 还须在该节点上（`/sys/devices/system/node/node<N>/cpulist`；Windows 上是 `GetNumaNodeProcessorMaskEx`）；
   - 不满足时节点不启动，报错写明是哪个键、哪个 CPU、可用的 CPU 列表。
-- 各线程启动后由启动它的线程用 `pthread_setaffinity_np` 绑定，失败时停止该线程并返回错误。core 线程是调用 `run_live`（或 `run_sandbox`）的线程，在其余线程都启动之后才绑定（此前它启动的线程会继承它的 CPU），退出时恢复原来的 CPU（Python 进程里它是解释器的线程）。在 Python 策略里新开的线程会继承 core 的 CPU。
+- 各线程启动后由启动它的线程用 `pthread_setaffinity_np`（Windows 上是 `SetThreadAffinityMask`）绑定，失败时停止该线程并返回错误。core 线程是调用 `run_live`（或 `run_sandbox`）的线程，在其余线程都启动之后才绑定（此前它启动的线程会继承它的 CPU），退出时恢复原来的 CPU（Python 进程里它是解释器的线程）。在 Python 策略里新开的线程会继承 core 的 CPU。
 - `busy_poll`：
   - 行情线程用 `IoContext::poll()` 循环；
   - venue-io 线程在两轮之间只 `yield`，不再等待网络事件，core 也不再唤醒它；
   - core 线程无论是否设置都轮询它的入站环（空转时 `yield`）。
   - 忙轮询的线程应当绑到独占的核，否则它们与其他线程争抢 CPU，延迟反而变差。
-- 非 Linux 平台上 `[threads]` 只要绑定了任何 CPU，节点就不启动。
+- Windows 上 CPU 编号是进程所在 processor group 内的 0–63，CPU 超过 64 个的机器只用这一组。macOS 上 `[threads]` 只要绑定了任何 CPU，节点就不启动。
 - 测试：
   - `test_node`：配置解析与报错；
   - `test_network`：`Waker` 结束另一个线程上的 `run_one_for`，等待之前的通知不丢；
-  - `test_cpu_affinity.cpp`：CPU 列表解析、池的计算、Linux 上线程确实运行在绑定的 CPU、core 线程恢复原 CPU；
+  - `test_cpu_affinity.cpp`：CPU 列表解析、池的计算、Linux 与 Windows 上线程确实运行在绑定的 CPU、core 线程恢复原 CPU；
   - `test_live_node`：主用例多一个 `busy_poll = true` 并绑定 core 的子用例。
 
 ---

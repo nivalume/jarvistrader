@@ -7,8 +7,9 @@ Rules:
     never a sibling of the same rank and never a shell layer.
   * Kernel layers are header-only and must not include threading, clock, stream, random,
     exception or locale headers, nor any third-party library.
-  * Shell layers: network may include core; node may include every kernel layer; adapter may
-    include network and every kernel layer; live may include everything under jarvis/.
+  * Shell layers: sys (the operating system calls) may include core; network may include core
+    and sys; node may include every kernel layer and sys; adapter may include network, sys and
+    every kernel layer; live may include everything under jarvis/.
     Only network, adapter and live may include the network stack; only python/src may include
     nanobind or Python.h.
   * examples/ may include only the public API: core, model, data, strategy and node.
@@ -41,10 +42,11 @@ KERNEL_RANK = {
     "backtest": 8,
 }
 SHELL_ALLOWED = {
-    "network": {"core"},
-    "node": set(KERNEL_RANK),
-    "adapter": set(KERNEL_RANK) | {"network"},
-    "live": set(KERNEL_RANK) | {"network", "adapter", "node", "live"},
+    "sys": {"core"},
+    "network": {"core", "sys"},
+    "node": set(KERNEL_RANK) | {"sys"},
+    "adapter": set(KERNEL_RANK) | {"network", "sys"},
+    "live": set(KERNEL_RANK) | {"network", "adapter", "node", "live", "sys"},
 }
 EXAMPLES_ALLOWED = {"core", "model", "data", "strategy", "node", "live"}
 

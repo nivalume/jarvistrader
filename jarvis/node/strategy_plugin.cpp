@@ -1,13 +1,12 @@
 #include "jarvis/node/strategy_plugin.hpp"
 
-#include <dlfcn.h>
-
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "jarvis/core/status.hpp"
 #include "jarvis/node/strategy_registry.hpp"
+#include "jarvis/sys/library.hpp"
 
 namespace jarvis::node {
 
@@ -65,24 +64,24 @@ Status check_names(const PluginInfo& info, const StrategyRegistry& registry,
 Status load_strategy_plugin(const std::string& path, StrategyRegistry& registry,
                             std::vector<std::string>& names, std::string& error) {
   names.clear();
-  // RTLD_LOCAL: the plugin's copies of the jarvis code stay its own. A handle that loads is
-  // never closed (dlopen counts references, so loading the same library again is cheap).
-  void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  // The plugin's copies of the jarvis code stay its own. A library that loads is never unloaded
+  // (the loader counts references, so loading the same library again is cheap).
+  std::string why_not;
+  void* handle = sys::load_library(path, why_not);
   if (handle == nullptr) {
-    const char* why = dlerror();
-    error = "cannot load " + path + ": " + (why != nullptr ? why : "unknown error");
+    error = "cannot load " + path + ": " + why_not;
     return Status::IoError;
   }
   const std::string entry{kPluginEntry};
-  void* symbol = dlsym(handle, entry.c_str());
+  void* symbol = sys::library_symbol(handle, entry.c_str());
   if (symbol == nullptr) {
-    dlclose(handle);
+    sys::unload_library(handle);
     error = path + " is not a jarvis strategy plugin (no " + entry +
             "; add JARVIS_STRATEGY_PLUGIN() to one of its sources)";
     return Status::InvalidArgument;
   }
   using Entry = const PluginInfo* (*)();
-  // The one cast dlsym needs: a function's address comes back as void*.
+  // The one cast the loader needs: a function's address comes back as void*.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const PluginInfo* info = reinterpret_cast<Entry>(symbol)();
   std::string why;
@@ -94,7 +93,7 @@ Status load_strategy_plugin(const std::string& path, StrategyRegistry& registry,
     s = check_names(*info, registry, names, why);
   }
   if (!core::ok(s)) {
-    dlclose(handle);
+    sys::unload_library(handle);
     names.clear();
     error = path + ": " + why;
     return s;

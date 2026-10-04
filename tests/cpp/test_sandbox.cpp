@@ -28,6 +28,8 @@
 #include "jarvis/node/snapshot_file.hpp"
 #include "jarvis/strategy/context.hpp"
 #include "jarvis/strategy/strategy_set.hpp"
+#include "jarvis/sys/file.hpp"
+#include "jarvis/sys/socket.hpp"
 #include "support/http_get.hpp"
 #include "support/ws_test.hpp"
 
@@ -38,6 +40,7 @@ namespace md = jarvis::model;
 namespace wire = jarvis::model::wire;
 namespace st = jarvis::strategy;
 namespace node = jarvis::node;
+namespace sys = jarvis::sys;
 using jarvis::core::Status;
 using jarvis::core::UnixNanos;
 using jarvis::testsupport::ScriptedWssServer;
@@ -205,6 +208,10 @@ dir = ")" +
 
 TEST_SUITE("unit") {
   TEST_CASE("the admin socket takes commands, answers status, and is its owner's only") {
+    if (!sys::unix_sockets_available()) { // Windows before 10 version 1803; Wine 9
+      MESSAGE("skipped: this system has no Unix domain sockets");
+      return;
+    }
     namespace fs = std::filesystem;
     const TempDir dir;
     const std::string path = dir.file("admin.sock");
@@ -212,8 +219,10 @@ TEST_SUITE("unit") {
     server.set_strategies({"tap-001", "mm-002"});
     std::string error;
     REQUIRE(server.start(error) == Status::Ok);
-    CHECK((fs::status(path).permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
-          fs::perms::none);
+    if constexpr (sys::kPermissionBits) {
+      CHECK((fs::status(path).permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
+            fs::perms::none);
+    }
     std::string reply;
     REQUIRE(node::admin_request(path, "halt", reply, error) == Status::Ok);
     CHECK(reply == "ok");
@@ -267,6 +276,10 @@ TEST_SUITE("unit") {
   }
 
   TEST_CASE("an operator halts and stops a sandbox node through its admin socket") {
+    if (!sys::unix_sockets_available()) { // Windows before 10 version 1803; Wine 9
+      MESSAGE("skipped: this system has no Unix domain sockets");
+      return;
+    }
     std::atomic<std::uint64_t> trades{0};
     ScriptedWssServer server{8, [&trades](std::size_t /*conn*/, const std::string& m) {
                                std::vector<WsReply> out;

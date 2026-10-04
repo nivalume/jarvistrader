@@ -8,6 +8,8 @@
 
 #include <toml++/toml.hpp>
 
+#include "jarvis/sys/file.hpp"
+
 namespace jarvis::node {
 
 namespace {
@@ -22,7 +24,9 @@ std::optional<std::string> env(const std::string& name) {
   return std::string{v};
 }
 
-// A file holding a secret is readable by its owner only (mode 0600 or 0400).
+// A file holding a secret is readable by its owner only (mode 0600 or 0400). Windows files carry
+// access control lists instead of mode bits; there the file's directory is expected to be the
+// user's own (docs/runbook.md section 3).
 Status check_private(const std::filesystem::path& path, std::string& error) {
   namespace fs = std::filesystem;
   std::error_code ec;
@@ -30,6 +34,9 @@ Status check_private(const std::filesystem::path& path, std::string& error) {
   if (ec || !fs::exists(st)) {
     error = "cannot read " + path.string();
     return Status::IoError;
+  }
+  if constexpr (!sys::kPermissionBits) {
+    return Status::Ok;
   }
   const fs::perms open = st.permissions() & (fs::perms::group_all | fs::perms::others_all);
   if (open != fs::perms::none) {

@@ -12,11 +12,23 @@
 
 #if defined(__linux__)
 #include <sched.h>
+#elif defined(_WIN32)
+#include <windows.h>
 #endif
 
 namespace live = jarvis::live;
 namespace node = jarvis::node;
 using jarvis::core::Status;
+
+namespace {
+
+#if defined(__linux__)
+int current_cpu() { return sched_getcpu(); }
+#elif defined(_WIN32)
+int current_cpu() { return static_cast<int>(::GetCurrentProcessorNumber()); }
+#endif
+
+} // namespace
 
 TEST_SUITE("unit") {
   TEST_CASE("cpu lists parse the kernel's format and fold back") {
@@ -103,7 +115,7 @@ TEST_SUITE("unit") {
     CHECK(error == "threads.market_cpu: CPU 9 is not available to this process (0-7)");
   }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
   TEST_CASE("threads run where they are pinned, and the core thread gets its CPUs back") {
     std::vector<int> allowed;
     std::string error;
@@ -118,7 +130,7 @@ TEST_SUITE("unit") {
       while (!pinned.load()) {
         std::this_thread::yield();
       }
-      seen = sched_getcpu();
+      seen = current_cpu();
     }};
     const std::vector<int> one{last};
     const Status s = live::pin_thread(worker, one, error);
@@ -130,10 +142,12 @@ TEST_SUITE("unit") {
     {
       live::ScopedPin pin;
       REQUIRE(pin.pin(one, error) == Status::Ok);
+#if defined(__linux__) // Windows reads the process's CPUs, not the thread's
       std::vector<int> now;
       REQUIRE(live::allowed_cpus(now, error) == Status::Ok);
       CHECK(now == one);
-      CHECK(sched_getcpu() == last);
+#endif
+      CHECK(current_cpu() == last);
     }
     std::vector<int> after;
     REQUIRE(live::allowed_cpus(after, error) == Status::Ok);

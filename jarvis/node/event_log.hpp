@@ -12,6 +12,7 @@
 #include "jarvis/model/outputs.hpp"
 #include "jarvis/model/wire.hpp"
 #include "jarvis/node/snapshot_file.hpp"
+#include "jarvis/sys/file.hpp"
 
 namespace jarvis::node {
 
@@ -67,9 +68,9 @@ public:
 
 private:
   [[nodiscard]] core::Status open_segment();
-  [[nodiscard]] core::Status sync_fd() const;
+  [[nodiscard]] core::Status sync_fd();
 
-  int fd_ = -1;
+  sys::File file_;
   std::string directory_;
   model::wire::LogHeader header_;
   std::vector<std::uint64_t> first_seqs_; // per segment written: the seq of its first record

@@ -89,10 +89,17 @@ endif()
 if(TARGET pegged_mm)
   add_dependencies(jarvis_tests pegged_mm)
 endif()
+# A cross build runs the programs through its emulator (cmake/toolchains/mingw-w64.cmake).
+set(_jarvis_golden_emulator)
+if(CMAKE_CROSSCOMPILING_EMULATOR)
+  list(JOIN CMAKE_CROSSCOMPILING_EMULATOR " " _jarvis_emulator_text)
+  set(_jarvis_golden_emulator --emulator "${_jarvis_emulator_text}")
+endif()
 add_test(
   NAME golden.all
   COMMAND "${Python_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/golden.py"
           --root "${PROJECT_SOURCE_DIR}/tests/golden" --bin "${CMAKE_BINARY_DIR}"
+          ${_jarvis_golden_emulator}
 )
 set_tests_properties(golden.all PROPERTIES LABELS "golden")
 
@@ -110,7 +117,8 @@ foreach(spec IN ITEMS OrderLifecycle TradingState Matching DepthSync Reconciliat
 endforeach()
 
 if(TARGET jarvis_network)
-  jarvis_add_layer_test(network SOURCES cpp/test_network.cpp SUITES unit LIBS jarvis::network jarvis_asio)
+  jarvis_add_layer_test(network SOURCES cpp/test_network.cpp SUITES unit
+                        LIBS jarvis::network jarvis::sys jarvis_asio OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
 # The fuzz targets build only with JARVIS_ENABLE_FUZZ (clang and libFuzzer). This object library,
@@ -134,7 +142,8 @@ if(TARGET jarvis_adapter)
                         cpp/test_ws_api.cpp cpp/test_user_stream_session.cpp
                         cpp/test_startup.cpp cpp/test_snapshot.cpp
                         SUITES unit golden property
-                        LIBS jarvis::adapter jarvis::shell jarvis::testkit jarvis_asio)
+                        LIBS jarvis::adapter jarvis::shell jarvis::testkit jarvis_asio OpenSSL::SSL
+                             OpenSSL::Crypto)
   target_compile_definitions(test_adapter PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()
 
@@ -142,9 +151,10 @@ if(TARGET jarvis_live)
   jarvis_add_layer_test(live SOURCES cpp/test_live.cpp cpp/test_rings.cpp cpp/test_sandbox.cpp
                         cpp/test_venue_io.cpp cpp/test_live_node.cpp cpp/test_persist.cpp
                         cpp/test_telemetry.cpp cpp/test_cpu_affinity.cpp
-                        SUITES unit LIBS jarvis::live jarvis_asio)
+                        SUITES unit LIBS jarvis::live jarvis_asio OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(test_live PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   # The live node against a faulty venue (tests/cpp/test_chaos.cpp); JARVIS_CHAOS_SEEDS runs more.
-  jarvis_add_layer_test(chaos SOURCES cpp/test_chaos.cpp SUITES unit LIBS jarvis::live jarvis_asio)
+  jarvis_add_layer_test(chaos SOURCES cpp/test_chaos.cpp SUITES unit
+                        LIBS jarvis::live jarvis_asio OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(test_chaos PRIVATE JARVIS_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()

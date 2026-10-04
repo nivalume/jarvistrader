@@ -1,5 +1,3 @@
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -40,6 +38,8 @@
 #include "jarvis/node/strategy_registry.hpp"
 #include "jarvis/node/trace_export.hpp"
 #include "jarvis/strategy/context.hpp"
+#include "jarvis/sys/file.hpp"
+#include "jarvis/sys/process.hpp"
 #include "jarvis/testkit/property.hpp"
 
 namespace {
@@ -47,6 +47,7 @@ namespace {
 namespace node = jarvis::node;
 namespace wire = jarvis::model::wire;
 namespace m = jarvis::model;
+namespace sys = jarvis::sys;
 using jarvis::core::EventKey;
 using jarvis::core::Status;
 using jarvis::testkit::Gen;
@@ -59,7 +60,7 @@ public:
   explicit TempDir(std::string_view name) {
     static int counter = 0;
     path_ = std::filesystem::temp_directory_path() /
-            ("jarvis-test-" + std::string{name} + "-" + std::to_string(::getpid()) + "-" +
+            ("jarvis-test-" + std::string{name} + "-" + std::to_string(sys::process_id()) + "-" +
              std::to_string(counter++));
     std::filesystem::remove_all(path_);
   }
@@ -69,8 +70,11 @@ public:
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);
   }
-  [[nodiscard]] std::string str() const { return path_.string(); }
-  [[nodiscard]] std::string sub(std::string_view name) const { return (path_ / name).string(); }
+  // Forward slashes on every platform: the paths go into TOML strings, and Windows takes them.
+  [[nodiscard]] std::string str() const { return path_.generic_string(); }
+  [[nodiscard]] std::string sub(std::string_view name) const {
+    return (path_ / name).generic_string();
+  }
 
 private:
   std::filesystem::path path_;
@@ -402,7 +406,7 @@ TEST_SUITE("unit") {
     CHECK(read_tolerant(records, reader) == Status::EndOfStream);
     REQUIRE(records.size() == 299);
     CHECK(reader.torn_bytes() == written.back().size() - 3);
-    CHECK(reader.torn_segment() == segment);
+    CHECK(std::filesystem::path{reader.torn_segment()} == std::filesystem::path{segment});
     CHECK(reader.segment_offset() == cut.size());
 
     // Damage in the last record's bytes: its CRC fails.
@@ -424,7 +428,7 @@ TEST_SUITE("unit") {
     CHECK(read_tolerant(records, header) == Status::EndOfStream);
     CHECK(records == written);
     CHECK(header.torn_bytes() == 5);
-    CHECK(header.torn_segment() == next);
+    CHECK(std::filesystem::path{header.torn_segment()} == std::filesystem::path{next});
     records.clear();
     CHECK(read_all(dir.str(), records) != Status::EndOfStream); // not tolerated by default
     std::filesystem::remove(next);
@@ -859,31 +863,37 @@ pool = 3
     REQUIRE(node::resolve_credentials("file:" + dir.sub("ed.toml"), c, error) == Status::Ok);
     CHECK(c.secret == "-----BEGIN PRIVATE KEY-----\n");
 
-    // A file holding a secret that group or others can read is refused, naming the fix.
-    fs::permissions(dir.sub("key.toml"), fs::perms::group_read, fs::perm_options::add);
-    CHECK(node::resolve_credentials("file:" + dir.sub("key.toml"), c, error) ==
-          Status::InvalidState);
-    CHECK(error.find("mode 640") != std::string::npos);
-    CHECK(error.find("chmod 600") != std::string::npos);
-    CHECK(error.find("S1") == std::string::npos);
-    fs::permissions(dir.sub("ed.pem"), fs::perms::others_read, fs::perm_options::add);
-    CHECK(node::resolve_credentials("file:" + dir.sub("ed.toml"), c, error) ==
-          Status::InvalidState);
+    // A file holding a secret that group or others can read is refused, naming the fix. Windows
+    // files have ACLs instead of these bits, and the check is the operator's there
+    // (docs/runbook.md section 3).
+    if constexpr (sys::kPermissionBits) {
+      fs::permissions(dir.sub("key.toml"), fs::perms::group_read, fs::perm_options::add);
+      CHECK(node::resolve_credentials("file:" + dir.sub("key.toml"), c, error) ==
+            Status::InvalidState);
+      CHECK(error.find("mode 640") != std::string::npos);
+      CHECK(error.find("chmod 600") != std::string::npos);
+      CHECK(error.find("S1") == std::string::npos);
+      fs::permissions(dir.sub("ed.pem"), fs::perms::others_read, fs::perm_options::add);
+      CHECK(node::resolve_credentials("file:" + dir.sub("ed.toml"), c, error) ==
+            Status::InvalidState);
+    }
 
     // env: with the secret itself, or with a private key file (checked the same way).
-    ::setenv("JARVIS_TEST_CRED_API_KEY", "K3", 1);
-    ::setenv("JARVIS_TEST_CRED_API_SECRET", "S3", 1);
+    REQUIRE(sys::set_env("JARVIS_TEST_CRED_API_KEY", "K3"));
+    REQUIRE(sys::set_env("JARVIS_TEST_CRED_API_SECRET", "S3"));
     REQUIRE(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::Ok);
     CHECK(c.api_key == "K3");
     CHECK(c.secret == "S3");
-    ::unsetenv("JARVIS_TEST_CRED_API_SECRET");
-    ::setenv("JARVIS_TEST_CRED_PRIVATE_KEY_FILE", dir.sub("ed.pem").c_str(), 1);
-    CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::InvalidState);
+    REQUIRE(sys::unset_env("JARVIS_TEST_CRED_API_SECRET"));
+    REQUIRE(sys::set_env("JARVIS_TEST_CRED_PRIVATE_KEY_FILE", dir.sub("ed.pem")));
+    if constexpr (sys::kPermissionBits) {
+      CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::InvalidState);
+    }
     fs::permissions(dir.sub("ed.pem"), owner);
     CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::Ok);
-    ::unsetenv("JARVIS_TEST_CRED_PRIVATE_KEY_FILE");
+    REQUIRE(sys::unset_env("JARVIS_TEST_CRED_PRIVATE_KEY_FILE"));
     CHECK(node::resolve_credentials("env:JARVIS_TEST_CRED", c, error) == Status::NotFound);
-    ::unsetenv("JARVIS_TEST_CRED_API_KEY");
+    REQUIRE(sys::unset_env("JARVIS_TEST_CRED_API_KEY"));
     CHECK(node::resolve_credentials("plain-secret", c, error) == Status::InvalidArgument);
   }
 
@@ -1117,9 +1127,13 @@ params = { scale = 7 }
     CHECK(node::load_strategy_plugin("/nonexistent/libnothing.so", registry, names, error) ==
           Status::IoError);
     CHECK(error.find("cannot load /nonexistent/libnothing.so") != std::string::npos);
-#if defined(__linux__)
     // A shared library without the entry point.
+#if defined(__linux__)
     CHECK(node::load_strategy_plugin("libm.so.6", registry, names, error) ==
+          Status::InvalidArgument);
+    CHECK(error.find("not a jarvis strategy plugin") != std::string::npos);
+#elif defined(_WIN32)
+    CHECK(node::load_strategy_plugin("kernel32.dll", registry, names, error) ==
           Status::InvalidArgument);
     CHECK(error.find("not a jarvis strategy plugin") != std::string::npos);
 #endif

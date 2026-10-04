@@ -1,11 +1,7 @@
 #include "jarvis/node/snapshot_file.hpp"
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <charconv>
 #include <cstdio>
 #include <filesystem>
@@ -15,6 +11,7 @@
 
 #include "jarvis/core/crc32c.hpp"
 #include "jarvis/node/build_info.hpp"
+#include "jarvis/sys/file.hpp"
 
 namespace jarvis::node {
 
@@ -32,30 +29,6 @@ void put(std::vector<std::byte>& out, std::uint64_t v, std::size_t n) {
   for (std::size_t i = 0; i < n; ++i) {
     out.push_back(static_cast<std::byte>((v >> (8U * i)) & 0xFFU));
   }
-}
-
-Status write_all(int fd, std::span<const std::byte> bytes) {
-  while (!bytes.empty()) {
-    const ssize_t n = ::write(fd, bytes.data(), bytes.size());
-    if (n < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return Status::IoError;
-    }
-    bytes = bytes.subspan(static_cast<std::size_t>(n));
-  }
-  return Status::Ok;
-}
-
-Status sync_directory(const std::string& directory) {
-  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) {
-    return Status::IoError;
-  }
-  const Status s = ::fsync(fd) == 0 ? Status::Ok : Status::IoError;
-  ::close(fd);
-  return s;
 }
 
 } // namespace
@@ -141,25 +114,28 @@ Status write_snapshot_file(const std::string& directory, std::uint64_t seq,
                            std::span<const std::byte> encoded, bool durable) {
   const std::string path = directory + "/" + snapshot_name(seq);
   const std::string temp = path + ".tmp";
-  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  if (fd < 0) {
+  sys::File file;
+  Status s = file.open(temp, sys::File::Mode::Truncate);
+  if (!core::ok(s)) {
     return Status::IoError;
   }
-  Status s = write_all(fd, encoded);
-  if (core::ok(s) && durable && ::fsync(fd) != 0) {
-    s = Status::IoError;
+  s = file.write_all(encoded);
+  if (core::ok(s) && durable) {
+    s = file.sync();
   }
-  ::close(fd);
+  const Status closed = file.close();
+  if (core::ok(s)) {
+    s = closed;
+  }
+  if (core::ok(s)) {
+    s = sys::replace_file(temp, path);
+  }
   if (!core::ok(s)) {
-    ::unlink(temp.c_str());
+    std::error_code ec;
+    std::filesystem::remove(temp, ec);
     return s;
   }
-  std::error_code ec;
-  std::filesystem::rename(temp, path, ec);
-  if (ec) {
-    return Status::IoError;
-  }
-  return durable ? sync_directory(directory) : Status::Ok;
+  return durable ? sys::sync_directory(directory) : Status::Ok;
 }
 
 Status read_file_bytes(const std::string& path, std::vector<std::byte>& out) {

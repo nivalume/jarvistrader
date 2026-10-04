@@ -2,16 +2,21 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <charconv>
-#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 
+#include "jarvis/sys/error.hpp"
+
 #if defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#if defined(__GLIBCXX__)
+#include <pthread.h> // MinGW's std::thread runs on winpthreads: pthread_gethandle
+#endif
 #endif
 
 namespace jarvis::live {
@@ -104,15 +109,75 @@ Status pin_native(pthread_t thread, std::span<const int> cpus, std::string& erro
   }
   const int rc = pthread_setaffinity_np(thread, sizeof(set), &set);
   if (rc != 0) {
-    error = "cannot pin a thread to CPUs " + cpu_list_text(cpus) + ": " +
-            std::strerror(rc); // NOLINT(concurrency-mt-unsafe)
+    error = "cannot pin a thread to CPUs " + cpu_list_text(cpus) + ": " + sys::error_text(rc);
     return Status::IoError;
+  }
+  return Status::Ok;
+}
+#elif defined(_WIN32)
+// Windows numbers CPUs within a processor group of at most 64; the process's group is the one
+// placed in (machines with more CPUs than one group are not covered).
+constexpr int kGroupCpus = 64;
+
+bool to_mask(std::span<const int> cpus, DWORD_PTR& mask) {
+  mask = 0;
+  for (const int c : cpus) {
+    if (c < 0 || c >= kGroupCpus) {
+      return false;
+    }
+    mask |= DWORD_PTR{1} << static_cast<unsigned>(c);
+  }
+  return mask != 0;
+}
+
+std::vector<int> from_mask(DWORD_PTR mask) {
+  std::vector<int> out;
+  for (int c = 0; c < kGroupCpus; ++c) {
+    if ((mask >> static_cast<unsigned>(c)) & 1U) {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+// The thread's handle for SetThreadAffinityMask, or nullptr when the standard library does not
+// expose one.
+HANDLE native_of(std::thread& thread) {
+#if defined(_MSVC_STL_VERSION)
+  return static_cast<HANDLE>(thread.native_handle());
+#elif defined(__GLIBCXX__) && defined(__WINPTHREADS_VERSION)
+  return pthread_gethandle(thread.native_handle());
+#else
+  static_cast<void>(thread);
+  return nullptr;
+#endif
+}
+
+Status pin_native(HANDLE thread, std::span<const int> cpus, DWORD_PTR* previous,
+                  std::string& error) {
+  DWORD_PTR mask = 0;
+  if (!to_mask(cpus, mask)) {
+    error = "cannot pin a thread to CPUs " + cpu_list_text(cpus) + " (0 to 63 on Windows)";
+    return Status::InvalidArgument;
+  }
+  if (thread == nullptr) {
+    error = "cannot pin a thread here: the standard library gives no thread handle";
+    return Status::InvalidArgument;
+  }
+  const DWORD_PTR old = ::SetThreadAffinityMask(thread, mask);
+  if (old == 0) {
+    error =
+        "cannot pin a thread to CPUs " + cpu_list_text(cpus) + ": " + sys::last_system_error_text();
+    return Status::IoError;
+  }
+  if (previous != nullptr) {
+    *previous = old;
   }
   return Status::Ok;
 }
 #else
 Status unsupported(std::string& error) {
-  error = "thread placement ([threads]) needs Linux";
+  error = "thread placement ([threads]) needs Linux or Windows";
   return Status::InvalidArgument;
 }
 #endif
@@ -244,11 +309,19 @@ Status allowed_cpus(std::vector<int>& out, std::string& error) {
   cpu_set_t set;
   CPU_ZERO(&set);
   if (sched_getaffinity(0, sizeof(set), &set) != 0) {
-    error = std::string{"cannot read the CPUs this process may use: "} +
-            std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
+    error = "cannot read the CPUs this process may use: " + sys::last_error_text();
     return Status::IoError;
   }
   out = from_set(set);
+  return Status::Ok;
+#elif defined(_WIN32)
+  DWORD_PTR process = 0;
+  DWORD_PTR system = 0;
+  if (::GetProcessAffinityMask(::GetCurrentProcess(), &process, &system) == 0) {
+    error = "cannot read the CPUs this process may use: " + sys::last_system_error_text();
+    return Status::IoError;
+  }
+  out = from_mask(process);
   return Status::Ok;
 #else
   out.clear();
@@ -257,6 +330,21 @@ Status allowed_cpus(std::vector<int>& out, std::string& error) {
 }
 
 Status numa_node_cpus(std::uint32_t node, std::vector<int>& out, std::string& error) {
+#if defined(_WIN32)
+  GROUP_AFFINITY affinity{};
+  if (node > 0xFFFFU || ::GetNumaNodeProcessorMaskEx(static_cast<USHORT>(node), &affinity) == 0 ||
+      affinity.Mask == 0) {
+    error = "threads.numa_node: no NUMA node " + std::to_string(node) + " on this machine";
+    return Status::InvalidArgument;
+  }
+  if (affinity.Group != 0) {
+    error = "threads.numa_node: NUMA node " + std::to_string(node) + " is in processor group " +
+            std::to_string(affinity.Group) + "; only group 0 is placed in";
+    return Status::InvalidArgument;
+  }
+  out = from_mask(affinity.Mask);
+  return Status::Ok;
+#else
   const std::string path = "/sys/devices/system/node/node" + std::to_string(node) + "/cpulist";
   std::ifstream in{path};
   if (!in) {
@@ -271,6 +359,7 @@ Status numa_node_cpus(std::uint32_t node, std::vector<int>& out, std::string& er
     return Status::InvalidArgument;
   }
   return Status::Ok;
+#endif
 }
 
 Status pin_thread(std::thread& thread, std::span<const int> cpus, std::string& error) {
@@ -279,6 +368,8 @@ Status pin_thread(std::thread& thread, std::span<const int> cpus, std::string& e
   }
 #if defined(__linux__)
   return pin_native(thread.native_handle(), cpus, error);
+#elif defined(_WIN32)
+  return pin_native(native_of(thread), cpus, nullptr, error);
 #else
   static_cast<void>(thread);
   return unsupported(error);
@@ -286,11 +377,14 @@ Status pin_thread(std::thread& thread, std::span<const int> cpus, std::string& e
 }
 
 ScopedPin::~ScopedPin() {
-#if defined(__linux__)
-  if (pinned_) {
-    std::string ignored;
-    static_cast<void>(pin_native(pthread_self(), saved_, ignored));
+  if (!pinned_) {
+    return;
   }
+  std::string ignored;
+#if defined(__linux__)
+  static_cast<void>(pin_native(pthread_self(), saved_, ignored));
+#elif defined(_WIN32)
+  static_cast<void>(pin_native(::GetCurrentThread(), saved_, nullptr, ignored));
 #endif
 }
 
@@ -304,13 +398,20 @@ Status ScopedPin::pin(std::span<const int> cpus, std::string& error) {
     CPU_ZERO(&set);
     const int rc = pthread_getaffinity_np(pthread_self(), sizeof(set), &set);
     if (rc != 0) {
-      error = std::string{"cannot read the core thread's CPUs: "} +
-              std::strerror(rc); // NOLINT(concurrency-mt-unsafe)
+      error = "cannot read the core thread's CPUs: " + sys::error_text(rc);
       return Status::IoError;
     }
     saved_ = from_set(set);
   }
   const Status s = pin_native(pthread_self(), cpus, error);
+  pinned_ = pinned_ || core::ok(s);
+  return s;
+#elif defined(_WIN32)
+  DWORD_PTR previous = 0;
+  const Status s = pin_native(::GetCurrentThread(), cpus, &previous, error);
+  if (core::ok(s) && !pinned_) {
+    saved_ = from_mask(previous);
+  }
   pinned_ = pinned_ || core::ok(s);
   return s;
 #else

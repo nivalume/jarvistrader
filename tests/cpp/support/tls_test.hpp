@@ -3,8 +3,6 @@
 // TLS helpers for tests that talk to loopback servers: a temporary directory, a self-signed
 // certificate made at test time, blocking HTTP head reading, and a scripted HTTPS server.
 
-#include <unistd.h>
-
 #include <atomic>
 #include <cstdint>
 #include <exception>
@@ -24,13 +22,15 @@
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 
+#include "jarvis/sys/process.hpp"
+
 namespace jarvis::testsupport {
 
 class TempDir {
 public:
   TempDir() {
     path_ = std::filesystem::temp_directory_path() /
-            ("jarvis-test-" + std::to_string(::getpid()) + "-" + std::to_string(counter_++));
+            ("jarvis-test-" + std::to_string(sys::process_id()) + "-" + std::to_string(counter_++));
     std::filesystem::create_directories(path_);
   }
   ~TempDir() {
@@ -39,7 +39,10 @@ public:
   }
   TempDir(const TempDir&) = delete;
   TempDir& operator=(const TempDir&) = delete;
-  [[nodiscard]] std::string file(std::string_view name) const { return (path_ / name).string(); }
+  // Forward slashes on every platform: the paths go into TOML strings, and Windows takes them.
+  [[nodiscard]] std::string file(std::string_view name) const {
+    return (path_ / name).generic_string();
+  }
 
 private:
   static inline int counter_ = 0;

@@ -2,37 +2,15 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <charconv>
-#include <cstring>
 
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+#include "jarvis/sys/socket.hpp"
 
 namespace jarvis::node {
 
 namespace {
 
 using core::Status;
-
-// A socket closed on every path out.
-class Fd {
-public:
-  explicit Fd(int fd) noexcept : fd_{fd} {}
-  Fd(const Fd&) = delete;
-  Fd& operator=(const Fd&) = delete;
-  ~Fd() {
-    if (fd_ >= 0) {
-      ::close(fd_);
-    }
-  }
-  [[nodiscard]] int get() const noexcept { return fd_; }
-
-private:
-  int fd_;
-};
 
 constexpr int kTimeoutMs = 5'000;
 
@@ -152,34 +130,22 @@ std::string parse_admin_request(std::string_view line, std::span<const std::stri
 Status admin_request(const std::string& path, std::string_view line, std::string& reply,
                      std::string& error) {
   reply.clear();
-  sockaddr_un addr{};
-  if (path.empty() || path.size() >= sizeof(addr.sun_path)) {
-    error = "admin socket path \"" + path + "\" is empty or too long";
-    return Status::InvalidArgument;
-  }
-  addr.sun_family = AF_UNIX;
-  std::memcpy(addr.sun_path, path.data(), path.size());
-  const Fd fd{::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
-  if (fd.get() < 0 ||
-      ::connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr), // NOLINT: the sockets API
-                sizeof(addr)) != 0) {
-    error =
-        "cannot connect to " + path + ": " + std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
-    return Status::IoError;
+  sys::SocketHandle socket;
+  if (const Status s = sys::connect_unix(path, socket, error); !core::ok(s)) {
+    return s;
   }
   const std::string out = std::string{line} + "\n";
-  if (::send(fd.get(), out.data(), out.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(out.size())) {
+  if (!sys::send_all(socket.get(), out)) {
     error = "cannot send to " + path;
     return Status::IoError;
   }
   std::array<char, 4096> buffer{};
   while (reply.find('\n') == std::string::npos) {
-    pollfd p{fd.get(), POLLIN, 0};
-    if (::poll(&p, 1, kTimeoutMs) <= 0) {
+    if (sys::wait_readable(socket.get(), kTimeoutMs) <= 0) {
       error = "no reply from " + path;
       return Status::IoError;
     }
-    const ssize_t n = ::recv(fd.get(), buffer.data(), buffer.size(), 0);
+    const long n = sys::receive(socket.get(), buffer.data(), buffer.size());
     if (n <= 0) {
       break;
     }

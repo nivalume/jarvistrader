@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <csignal>
 #include <fstream>
 #include <sstream>
 
@@ -15,14 +14,6 @@ namespace {
 
 using core::Status;
 namespace binance = adapter::binance;
-
-std::atomic<bool>* g_shutdown = nullptr;
-
-extern "C" void on_shutdown_signal(int /*signal*/) {
-  if (g_shutdown != nullptr) {
-    g_shutdown->store(true, std::memory_order_relaxed);
-  }
-}
 
 std::string lower(std::string_view s) {
   std::string out{s};
@@ -110,28 +101,6 @@ Status feed_instruments(std::span<const binance::PerpetualDefinition> instrument
     preamble.events.emplace_back(d.instrument);
   }
   return Status::Ok;
-}
-
-struct ShutdownSignals::Saved {
-  struct sigaction interrupt {};
-  struct sigaction terminate {};
-  std::atomic<bool>* previous_flag = nullptr;
-};
-
-ShutdownSignals::ShutdownSignals(std::atomic<bool>& flag) : saved_{std::make_unique<Saved>()} {
-  saved_->previous_flag = g_shutdown;
-  g_shutdown = &flag;
-  struct sigaction action {};
-  action.sa_handler = on_shutdown_signal;
-  sigemptyset(&action.sa_mask);
-  sigaction(SIGINT, &action, &saved_->interrupt);
-  sigaction(SIGTERM, &action, &saved_->terminate);
-}
-
-ShutdownSignals::~ShutdownSignals() {
-  sigaction(SIGINT, &saved_->interrupt, nullptr);
-  sigaction(SIGTERM, &saved_->terminate, nullptr);
-  g_shutdown = saved_->previous_flag;
 }
 
 Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxPlan& out,

@@ -3,20 +3,47 @@
 #include <array>
 #include <cerrno>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 
 #include <asio.hpp>
+
+#include "jarvis/sys/error.hpp"
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
-
 #if defined(__linux__)
 #include <sys/eventfd.h>
+#endif
 #endif
 
 namespace jarvis::network {
 
 using core::Status;
+
+#if defined(_WIN32)
+
+// An auto-reset event: notify() sets it, the IO thread's wait on it completes (which resets it)
+// and is armed again.
+struct Waker::Impl {
+  explicit Impl(asio::io_context& io) : handle{io} {}
+  asio::windows::object_handle handle; // owns the event
+  HANDLE event = nullptr;
+  bool watching = false;
+
+  static void watch(const std::shared_ptr<Impl>& impl) {
+    impl->handle.async_wait([impl](const asio::error_code& ec) {
+      if (ec || !impl->watching) {
+        return;
+      }
+      watch(impl);
+    });
+  }
+};
+
+#else
 
 struct Waker::Impl {
   explicit Impl(asio::io_context& io) : descriptor{io} {}
@@ -48,6 +75,8 @@ struct Waker::Impl {
   }
 };
 
+#endif
+
 Waker::Waker(IoContext& io)
     : impl_{std::make_shared<Impl>(*static_cast<asio::io_context*>(io.native()))} {}
 
@@ -58,6 +87,51 @@ Waker::~Waker() {
   }
 }
 
+#if defined(_WIN32)
+
+Status Waker::start(std::string& error) {
+  Impl& w = *impl_;
+  if (w.watching) {
+    return Status::Ok;
+  }
+  if (w.event == nullptr) {
+    HANDLE event = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (event == nullptr) {
+      error = "cannot create the wake event: " + sys::last_system_error_text();
+      return Status::IoError;
+    }
+    asio::error_code ec;
+    w.handle.assign(event, ec);
+    if (ec) {
+      ::CloseHandle(event);
+      error = "cannot watch the wake event: " + ec.message();
+      return Status::IoError;
+    }
+    w.event = event;
+  }
+  w.watching = true;
+  Impl::watch(impl_);
+  return Status::Ok;
+}
+
+void Waker::stop() {
+  Impl& w = *impl_;
+  if (!w.watching) {
+    return;
+  }
+  w.watching = false;
+  asio::error_code ec;
+  w.handle.cancel(ec);
+}
+
+void Waker::notify() noexcept {
+  if (impl_->event != nullptr) {
+    ::SetEvent(impl_->event);
+  }
+}
+
+#else
+
 Status Waker::start(std::string& error) {
   Impl& w = *impl_;
   if (w.watching) {
@@ -67,8 +141,7 @@ Status Waker::start(std::string& error) {
 #if defined(__linux__)
     const int fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0) {
-      error = std::string{"cannot create the wake eventfd: "} +
-              std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
+      error = "cannot create the wake eventfd: " + sys::last_error_text();
       return Status::IoError;
     }
     w.read_fd = fd;
@@ -76,8 +149,7 @@ Status Waker::start(std::string& error) {
 #else
     std::array<int, 2> fds{};
     if (::pipe(fds.data()) != 0) {
-      error = std::string{"cannot create the wake pipe: "} +
-              std::strerror(errno); // NOLINT(concurrency-mt-unsafe)
+      error = "cannot create the wake pipe: " + sys::last_error_text();
       return Status::IoError;
     }
     for (const int fd : fds) {
@@ -119,5 +191,7 @@ void Waker::notify() noexcept {
   // A full pipe or a saturated counter already wakes the loop: the result does not matter.
   [[maybe_unused]] const ssize_t n = ::write(fd, &one, fd == impl_->read_fd ? sizeof(one) : 1);
 }
+
+#endif
 
 } // namespace jarvis::network
