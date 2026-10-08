@@ -140,6 +140,7 @@ uv pip install --python .venv/bin/python --reinstall .
 - `tools/`: layering checker, golden runner, benchmark A/B, TLA+ runner and spec selector,
   milestone acceptance scripts
 - `docs/`: deterministic-kernel constraints and C++ subset; the system design is in
-  [`docs/architecture.md`](docs/architecture.md), the milestone plan in [`docs/plan.md`](docs/plan.md)
-  and the operations runbook in [`docs/runbook.md`](docs/runbook.md)
+  [`docs/architecture.md`](docs/architecture.md), the milestone plan in [`docs/plan.md`](docs/plan.md),
+  the operations runbook in [`docs/runbook.md`](docs/runbook.md) and the proposed Rust migration in
+  [`docs/rust-migration.md`](docs/rust-migration.md)
 - `cmake/`: vendored CPM.cmake and pinned dependency declarations

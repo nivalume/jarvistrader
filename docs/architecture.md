@@ -1906,6 +1906,7 @@ bench-compare 与 formal 都依赖 functional，两者并行运行以节省时�
 | testnet 的真实性 | testnet 只用于协议一致性；成交质量用生产环境小资金验证 | M5 |
 | 保证金模式 | 默认单资产 USDT、全仓；启动检查拒绝不一致 | M4 |
 | `priceMatch` | v1.x 作为 `PeggedQuote` 的可选模式评估 | M6 |
+| 是否把内核与 shell 迁移到 Rust | 方案见 [rust-migration.md](rust-migration.md)（Proposed）；M5 验收完成后按其第 9 节的判据与两周试点决定 | M5 验收之后 |
 
 ---
 
