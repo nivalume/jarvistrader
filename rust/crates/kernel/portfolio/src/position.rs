@@ -282,7 +282,6 @@ impl NettingPosition {
     pub const fn total_funding_raw(&self) -> i64 {
         self.total_funding_raw
     }
-    #[must_use]
     /// The order whose fill opened the position; `EXTERNAL` when reconciliation set it; `None`
     /// before it ever opened.
     #[must_use]

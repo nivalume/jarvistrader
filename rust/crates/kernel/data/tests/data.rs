@@ -623,7 +623,7 @@ fn seed7_derived_data_is_golden() {
                             &[id.0.to_le_bytes().as_slice(), &v.0.to_le_bytes()].concat(),
                             &mut hasher,
                             &mut count,
-                        )
+                        );
                     })
                     .unwrap();
             }
@@ -639,7 +639,7 @@ fn seed7_derived_data_is_golden() {
                             &[id.0.to_le_bytes().as_slice(), &v.0.to_le_bytes()].concat(),
                             &mut hasher,
                             &mut count,
-                        )
+                        );
                     })
                     .unwrap();
             }
