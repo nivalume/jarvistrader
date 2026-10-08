@@ -70,6 +70,7 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 inline_always = "allow"
 many_single_char_names = "allow"
+similar_names = "allow"
 # Determinism: no wall clock, no process-wide random state in any crate (the runtime gets its time
 # from sys, which is the one layer allowed to call the operating system).
 disallowed_types = "deny"

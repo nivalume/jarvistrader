@@ -13,3 +13,6 @@ workspace = true
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true

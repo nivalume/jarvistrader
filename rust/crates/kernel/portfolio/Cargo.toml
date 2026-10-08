@@ -15,3 +15,6 @@ kernel-core.workspace = true
 model.workspace = true
 data.workspace = true
 cost.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true

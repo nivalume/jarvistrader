@@ -7,7 +7,7 @@
 3. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展；R4 为 Rust 的事件日志写 Python 读取器。
 4. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查、`rust-fp` 确定性门），CI 的 `rust` job 跑同样的内容并进入 `gate`。
 
-状态：R0 完成，R1 的 core 与 model 层完成（事件日志、指纹、corpus 在内）；本文随每个里程碑更新。
+状态：R0、R1（除待办项）、R2 完成；本文随每个里程碑更新。
 
 ## R0 workspace 与门禁（在写领域代码之前，让约束先变成编译错误）
 
@@ -70,15 +70,26 @@
 
 ## R2 data、cost、portfolio（行情类 golden 通过）
 
-- [ ] task: data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription { slot, kind, cadence }`（§7.2）
-- [ ] task: data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd`（§7.5）
-- [ ] task: data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读 `BookView`；`write_sparse` / `read_sparse` 快照编码
-- [ ] task: data — bar 聚合（时间、笔数、成交量）
-- [ ] task: data — `FeatureGraph`：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点
-- [ ] task: cost — `FeeModel`、`SlippageModel`、`ImpactModel`、`LatencyModel`（§11.1）
-- [ ] task: portfolio — `Portfolio`、`MarginModel`、归因账本（§11.2）
-- [ ] task: harness — 对应层的 C++ 测试移植；基准 `book/apply_l2_delta`、`step/trade_with_feature` 的 Rust 版本（criterion）与 C++ 数字并列报告
-- [ ] task: 验收 — 路由、订单簿、bar 聚合、特征各有性质测试与 Rust 树自己的 golden（输入是 corpus 或由 `python -m jarvis.data` 转换的一天 Binance 数据，输出指纹入 `rust/tests/golden/`）；release 与 det-o0 指纹一致
+> 2026-10-08 完成。三个 crate 都是独立设计，验收是测试、性质与 Rust 树自己的 golden：
+> - `data`：`InternTable`/`InstrumentTable`/`BarTable` 按首次出现分配槽位；`SubscriptionMatrix` 行 × 12 种 `DataKind`，单元内按订阅顺序，`Cadence::{Every, Conflated, Sampled, OnBatch}` 的判定在 `Subscriber::on_update` / `on_batch_end`，Sampled 的周期对齐 Unix 纪元；`route_of` 把 17 种事件映射到 (row, kind) 或 None；`OrderBook` 按 tick 索引，每侧 64 的倍数个稠密档位带占用位图，窗外档位在有序溢出表，触碰离开窗口中半时重定中心，L1 由 quote 驱动、L2 由 delta 驱动且两者互斥；`BarAggregator` 支持 TICK、VOLUME（整单位，跨阈值拆分）、时间 bar（对齐纪元、在 end 收盘、`next_close` 供引擎定时器）；`FeatureGraph` 的 EMA、VWAP、Imbalance、Microprice、RealizedVol 全部定点，相同声明共享一个 id。每个有状态类型都有快照编码。
+> - `cost`：`MakerTakerFees` 内置五个档位，手续费按对账户不利方向取整到币种精度（支付向上、返佣向下），符号与 `OrderFilled::commission` 一致（支付为正）；`funding` 返回账户现金流（收到为正，多头支付正费率）；`BookDepthSlippage` 逐档吃单，平均价按对吃单方不利方向取整；`JitteredLatency` 是 `(seed, identity, hop, attempt)` 的纯函数，用独立派生的 Philox 密钥。
+> - `portfolio`：`NettingPosition` 以带符号数量加 10^18 刻度的开仓名义记账，均价精确，全平实现的盈亏正好是出入场名义之差，减仓按比例去除成本；`Portfolio` 维护 venue 仓位、按 (策略, instrument) 的账本、余额、估值价（mark 否则最后成交）、资金费待结算状态，翻转的成交拆成平仓与开仓两部分各自产生事件，`ledger_is_consistent` 断言 venue 仓位恒等于各策略之和；`MarginModel::{Standard, Leveraged}` 向上取整。只记账线性合约。
+>
+> 验收结果：data 13 个测试（含随机增量对排序参考模型的性质测试、Imbalance/Microprice 的界、seed 7 corpus 前 2 万条派生数据的 golden `data_seed7.fingerprint`），cost 5 个（手续费数值与取整、资金费方向、滑点取整、延迟的纯函数性与范围），portfolio 7 个（精确均价与实现盈亏、奇数数量的比例去除、翻转拆分与余额、资金费结算时机、保证金取整、40 笔随机成交后 venue 等于策略之和且实现盈亏与参考模型一致），三个 profile 全部通过；内核 crate 与 corpus 在 `x86_64-unknown-none` 上编译；corpus 改为按符号固定价格精度（簿与 bar 依赖网格），R1 的两份 corpus golden 相应重新生成。为此在 model 里补了值类型的快照编码（`state_io.rs`，经线格式），枚举得到占位用的 `Default`，`FixedVec` 得到 `insert_at`/`remove_at`。
+>
+> 未做：`OrderBookDepth` 类型（随 R1 待办）；bar 的 `Completed` 最多装 4 根，一笔超过 4 个 VOLUME 步长的成交会丢 bar 并计数，引擎接入时决定是否改为回调。
+
+
+- [x] task: data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription { slot, kind, cadence }`（§7.2）
+- [x] task: data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd`（§7.5）
+- [x] task: data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读 `BookView`；`write_sparse` / `read_sparse` 快照编码
+- [x] task: data — bar 聚合（时间、笔数、成交量）
+- [x] task: data — `FeatureGraph`：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点
+- [x] task: cost — `FeeModel`、`SlippageModel`、`ImpactModel`、`LatencyModel`（§11.1）
+- [x] task: portfolio — `Portfolio`、`MarginModel`、归因账本（§11.2）
+- [x] task: harness — 各层的单元与性质测试、corpus 派生数据 golden
+- [ ] task: harness — 基准 `book/apply_l2_delta`、`step/trade_with_feature`（criterion，需要引入第一个第三方 dev 依赖；与 R3 的引擎基准一起做）
+- [x] task: 验收 — 路由、订单簿、bar 聚合、特征各有性质测试与 Rust 树自己的 golden（输入是 corpus 或由 `python -m jarvis.data` 转换的一天 Binance 数据，输出指纹入 `rust/tests/golden/`）；release 与 det-o0 指纹一致
 
 ## R3 execution、risk、strategy、engine、backtest（订单类 golden 与 trace validation 通过）
 

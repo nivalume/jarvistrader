@@ -58,6 +58,7 @@ version = "0.1.0"
 dependencies = [
  "core",
  "model",
+ "testkit",
 ]
 
 [[package]]
@@ -65,7 +66,9 @@ name = "data"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "model",
+ "testkit",
 ]
 
 [[package]]
@@ -141,6 +144,7 @@ dependencies = [
  "cost",
  "data",
  "model",
+ "testkit",
 ]
 
 [[package]]

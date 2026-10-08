@@ -1,6 +1,8 @@
 # Kernel crates (docs/rust-migration.md section 3, docs/cpp-subset.md). These are the rules the
 # C++ tree keeps by review; here they fail the build.
 msrv = "1.85"
+# Words clippy would otherwise want in backticks.
+doc-valid-idents = ["..", "PnL", "OMS", "WAL", "USDT", "BNB", "OHLC", "OHLCV"]
 
 [[disallowed-types]]
 path = "std::collections::HashMap"

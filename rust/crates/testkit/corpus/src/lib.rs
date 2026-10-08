@@ -69,7 +69,18 @@ enum Draw {
     Money = 14,
 }
 
-const SYMBOLS: &[&str] =
+/// The price precision (tick decimals) of each corpus symbol; books and bars built over the corpus
+/// use the same grid.
+#[must_use]
+pub fn price_precision(symbol: &str) -> u8 {
+    match symbol {
+        "BTCUSDT-PERP" | "BTCUSDT" | "BTCUSDT_241227" => 1,
+        "ETHUSDT-PERP" => 2,
+        _ => 3,
+    }
+}
+
+pub const SYMBOLS: &[&str] =
     &["BTCUSDT-PERP", "ETHUSDT-PERP", "SOLUSDT-PERP", "BTCUSDT", "BTCUSDT_241227"];
 const REASONS: &[&str] = &[
     "NOTIONAL_EXCEEDS_MAX_PER_ORDER",
@@ -134,9 +145,10 @@ impl Corpus {
         )
     }
     fn price(&self, i: u64, index: u32) -> Result<Price> {
-        // 1.00 to 100_000.00 at precision 1 or 2, plus a few at precision 8 for small coins.
-        let precision = [1u8, 2, 2, 2, 8][self.below(5, i, Draw::Price, index * 2) as usize];
-        let units = 100 + self.below(10_000_000, i, Draw::Price, index * 2 + 1);
+        // 1.0 to 1_000_000.0 in units of the symbol's tick, so every price of a record is on its
+        // instrument's grid (books and bars rely on it).
+        let precision = price_precision(self.pick(SYMBOLS, i, 100));
+        let units = 10 + self.below(10_000_000, i, Draw::Price, index * 2 + 1);
         Price::from_units(units as i64, precision)
     }
     fn size(&self, i: u64, index: u32) -> Result<Quantity> {
@@ -436,7 +448,7 @@ impl Corpus {
         } else {
             InstrumentKind::CurrencyPair
         };
-        let price_increment = Price::from_units(1, self.pick(&[1u8, 2, 2, 4], i, 0))?;
+        let price_increment = Price::from_units(1, price_precision(symbol))?;
         let size_increment = Quantity::from_units(1, self.pick(&[3u8, 3, 1, 0], i, 1))?;
         let limits = InstrumentLimits {
             max_quantity: Some(Quantity::from_units(1000, 0)?),

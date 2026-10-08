@@ -30,6 +30,7 @@ pub mod log;
 pub mod money;
 pub mod order_events;
 pub mod position_events;
+pub mod state_io;
 pub mod uuid;
 pub mod wire;
 

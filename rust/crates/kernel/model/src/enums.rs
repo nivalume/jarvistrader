@@ -59,6 +59,13 @@ macro_rules! jarvis_enum {
                 f.write_str(self.as_str())
             }
         }
+        /// The first variant: a placeholder for containers that need a value before reading a
+        /// snapshot into it, never a meaningful default.
+        impl Default for $name {
+            fn default() -> Self {
+                Self::ALL[0]
+            }
+        }
         impl FromStr for $name {
             type Err = Status;
             fn from_str(s: &str) -> Result<Self> {

@@ -1,6 +1,8 @@
 # Workspace-wide. The kernel directory has a stricter file (crates/kernel/clippy.toml) that clippy
 # finds first when checking a kernel crate.
 msrv = "1.85"
+# Words clippy would otherwise want in backticks.
+doc-valid-idents = ["..", "PnL", "OMS", "WAL", "USDT", "BNB", "OHLC", "OHLCV"]
 
 [[disallowed-types]]
 path = "std::time::SystemTime"

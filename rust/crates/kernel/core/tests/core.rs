@@ -1,7 +1,6 @@
 //! The port of `tests/cpp/test_core.cpp`: the same cases, the same known-answer vectors, the same
 //! property tests, and the zero-allocation gate.
 
-use testkit::{for_all, AllocationScope};
 use kernel_core::clock::{FiredTimer, ReplayClock, TimerHandle, TimerKey, TimerQueue};
 use kernel_core::crc32c::{crc32c, crc32c_bytewise, crc32c_extend, crc32c_finish, crc32c_init};
 use kernel_core::int_math::{mul_div_i64, mul_div_u64, mul_div_u64_up};
@@ -14,6 +13,7 @@ use kernel_core::{
     load_state, save_state, DurationNanos, EventKey, FixedString, FixedVec, PriorityQueue, SlotMap,
     Status, UnixNanos,
 };
+use testkit::{for_all, AllocationScope};
 
 testkit::install_counting_allocator!();
 

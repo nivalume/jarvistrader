@@ -17,8 +17,11 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
 
 - `crates/kernel/`: `core` (fixed-capacity containers, `SlotMap` with generational
   handles, counter-based RNG, time, timers, checksums, snapshot encoding) and `model` (done: value types, identifiers, enums,
-  data and event types, the event log wire format, fingerprints), then
-  `data`, `cost`, `portfolio`, `execution`, `risk`, `strategy`, `engine`, `backtest` (skeletons). Every kernel crate is
+  data and event types, the event log wire format, fingerprints), `data` (interning, the
+  subscription matrix and cadences, routing, tick-indexed order books, bar aggregation, the
+  feature graph), `cost` (fee schedules and funding, book-depth slippage, jittered latency) and
+  `portfolio` (netting positions, the per-strategy ledger, balances, margin, funding), then
+  `execution`, `risk`, `strategy`, `engine`, `backtest` (skeletons). Every kernel crate is
   `#![no_std]`, `#![forbid(unsafe_code)]`, `#![deny(clippy::float_arithmetic)]`, and the
   directory's `clippy.toml` bans `HashMap`, `HashSet` and `BTreeMap`. Dependencies between them
   follow the layer table; Cargo refuses a cycle, which is what `tools/check-layering.py` checks

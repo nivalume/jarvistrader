@@ -49,6 +49,22 @@ impl<T> FixedVec<T> {
     pub fn pop(&mut self) -> Option<T> {
         self.items.pop()
     }
+    /// Inserts at `index`, shifting the elements after it; `CapacityExceeded` when full,
+    /// `OutOfRange` past the length.
+    pub fn insert_at(&mut self, index: usize, value: T) -> Result<()> {
+        if self.is_full() {
+            return Err(Status::CapacityExceeded);
+        }
+        if index > self.items.len() {
+            return Err(Status::OutOfRange);
+        }
+        self.items.insert(index, value);
+        Ok(())
+    }
+    /// Removes the element at `index`, shifting the elements after it; `None` past the length.
+    pub fn remove_at(&mut self, index: usize) -> Option<T> {
+        (index < self.items.len()).then(|| self.items.remove(index))
+    }
     pub fn clear(&mut self) {
         self.items.clear();
     }

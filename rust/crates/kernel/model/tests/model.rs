@@ -4,7 +4,6 @@
 
 use core::str::FromStr;
 
-use testkit::{for_all, Gen};
 use kernel_core::{FixedVec, Status, UnixNanos};
 use model::bar::{BarSpecification, BarType};
 use model::client_order_id;
@@ -16,6 +15,7 @@ use model::{
     AccountId, ClientOrderId, Currency, Event, InstrumentId, Money, PositionId, Price, Quantity,
     StrategyId, Symbol, TraderId, Uuid4, Venue, Wire, FIXED_SCALAR,
 };
+use testkit::{for_all, Gen};
 
 fn usdt() -> Currency {
     Currency::builtin_by_code("USDT").unwrap()
