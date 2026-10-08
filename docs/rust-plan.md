@@ -25,7 +25,9 @@
 
 ## R1 core、model 与事件日志（领域模型契约、确定性编码、指纹门）
 
-> 2026-10-08 core 层完成（见上一条记录）。
+> 2026-10-08 core 层第一遍完成。`jarvis-core` 覆盖 `jarvis/core` 的全部 13 个头文件：`Status`（`Result<T, Status>`，无 `Ok` 变体）、192 位中间值的 `mul_div`、时间与 RFC 3339、`EventKey`、`FixedVec`、`FixedString<N>`、带代际句柄的槽位表、Philox 计数随机数、`PriorityQueue`（含 `min_where`、`retain`）、`ReplayClock` 与 `TimerQueue`、CRC-32C（slicing-by-8 查表）、SHA-256、快照编码（`State` trait、`state_fields!`/`state_enum!`）。`tests/cpp/test_core.cpp` 的 unit、property、zero-alloc 三组全部移植，另加快照编码布局与往返测试，共 28 个用例，三个 profile 通过；Philox、SHA-256、CRC-32C、RFC 3339 的已知答案向量与 C++ 测试相同。
+>
+> 2026-10-08 core 层第二遍：按 Rust 的方式重写第一遍翻译自 C++ 的部分，不要求与第一遍字节兼容，测试、clippy、三个 profile 与确定性门全部通过。改动：`Arena` 改名 `SlotMap`（它是带代际句柄的槽位表，不是分配器），槽位存 `Option<T>`，去掉了 `T: Default` 才能构造的限制和"删除后值留在原地"的 C++ 语义，`remove` 返回值，提供 `iter`/`iter_mut`/`values`/`Index`，快照恢复拒绝重复或指向占用槽位的空闲表项；`FixedVec` 新增 `retain`、`from_iter_exact`、`IntoIterator`，快照读取不再需要私有钩子；`FixedString` 在构造时校验 UTF-8；RFC 3339 的解析与格式化从 `const fn` 改为普通函数，用 `?` 与游标类型取代手写的位置参数，`UnixNanos` 实现 `Display` 与 `FromStr`；`mul_div` 的 192 位中间值改为 `(hi: u64, lo: u128)`，`_up` 用余数判定而不是重算乘积，`isqrt` 改为牛顿法；`TimerQueue` 的存活判定收敛到一个 `live` 方法，`pop_due` 不再有嵌套的早退；`PriorityQueue::retain` 复用 `FixedVec::retain`；`state.rs` 去掉了为引用私有类型而留的占位函数。
 >
 > 2026-10-08 model 层完成。`jarvis-model` 是独立设计，不参照 C++ 的 `jarvis/model`：
 > - 定点数值：`Price { raw: i64, precision }`、`Quantity { raw: u64, precision }`、`Money { raw: i64, currency }`，raw 按 1e9 刻度，相等与比较只看 raw；构造函数拒绝低于 precision 的数位，因此"precision 只影响显示"是不变量而不是约定。文本解析接受 `[+-]digits[.digits][e[+-]digits]`，精度按写出的小数位推断，超过 9 位报 `PrecisionLoss`；指定精度时 round half to even；`Money` 向零截断到币种精度。`notional_raw` 经 192 位中间值精确计算并向零截断。
@@ -39,7 +41,7 @@
 >
 > 与 C++ 树的有意差异（不再是缺陷）：日志线格式与 C++ 的不兼容；`Status` 没有 `Ok` 变体；`RecordFlag`、`BookType` 的 Rust 变体名是驼峰（字符串不变）；CRC-32C 只有查表实现。
 
-- [x] task: jarvis-core — `Status`、`FixedVec`（超容返回 `CapacityExceeded`）、slab 竞技场与带代际的 32 位句柄
+- [x] task: jarvis-core — `Status`、`FixedVec`（超容返回 `CapacityExceeded`）、`SlotMap` 与带代际的 32 位句柄
 - [x] task: jarvis-core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop, index)`
 - [x] task: jarvis-core — `UnixNanos`、`DurationNanos` 与 RFC 3339 格式化、解析
 - [x] task: jarvis-core — `EventKey` 与确定性优先队列
@@ -47,6 +49,7 @@
 - [x] task: jarvis-core — CRC-32C、SHA-256
 - [x] task: jarvis-core — 快照编码：`State` trait、读写器、容器编码、`state_fields!` / `state_enum!`
 - [x] task: harness — core 层的 unit、property、zero-alloc 测试；零分配门在 Rust 树上运行
+- [x] task: jarvis-core — 第二遍：去除翻译痕迹（见上方记录）
 - [x] task: jarvis-model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、文本解析与格式化、`i128` / 192 位乘法与向零截断（architecture.md §6.1）
 - [x] task: jarvis-model — 全部标识符及其字符串约束（§6.2）；`InstrumentId` intern 为槽位的侧表留给 data 层（R2，它属于路由）
 - [x] task: jarvis-model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）；快照与线格式编码由宏给出
