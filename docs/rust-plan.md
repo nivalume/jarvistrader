@@ -13,10 +13,10 @@
 
 > 2026-10-08 完成。验收结果：向内核 crate 注入 `f64` 乘法，clippy 报 `floating-point arithmetic detected`；注入 `std::collections::HashMap` 与 `alloc::collections::BTreeMap`，报 `use of a disallowed type`；注入 `unsafe` 块，`forbid(unsafe_code)` 拒绝编译；在零分配作用域内分配一个 `Vec`，门报 1 次分配；release profile 下 `200u8 + 100u8` panic（`overflow-checks` 在所有 profile 打开）。`cargo check` 以 `x86_64-unknown-none` 目标编译全部内核 crate 通过，证明内核不依赖 std。与方案的一处偏差：溢出用 `overflow-checks` 而不是 clippy `arithmetic_side_effects`，后者会把每个循环计数器都标出来；两者在方案第 3 节里是并列选项。一处未落实：clippy 的 `disallowed-methods` 不能指向原生切片的固有方法，`sort_unstable*` 的禁令暂由评审维持。
 
-- [x] task: build — `rust/Cargo.toml` workspace：内核十个 crate、shell 五个 crate、testkit、cli；`[workspace.lints]` 统一 clippy 级别；`overflow-checks` 在 dev、release 全开；`det-o0` profile 继承 release 并关优化（对应 C++ 的 `det-o0` preset）
+- [x] task: build — `rust/Cargo.toml` workspace：内核十个 crate、runtime 五个 crate（architecture.md 里的 shell 层）、testkit、cli；`[workspace.lints]` 统一 clippy 级别；`overflow-checks` 在 dev、release 全开；`det-o0` profile 继承 release 并关优化（对应 C++ 的 `det-o0` preset）
 - [x] task: build — 内核 crate 的契约写在每个 `lib.rs` 顶部：`#![no_std]`、`#![forbid(unsafe_code)]`、`#![deny(clippy::float_arithmetic)]`；分层靠 Cargo 依赖图（`data` 与 `cost` 同级不互相依赖，与 architecture.md 第 3 节的表一致）
 - [x] task: build — `rust/crates/kernel/clippy.toml`：内核禁 `HashMap`、`HashSet`、`BTreeMap`；`rust/clippy.toml`：全 workspace 禁 `std::time::{SystemTime, Instant}`（时间只能来自 `sys`）
-- [x] task: build — `rust-toolchain.toml`（stable）、`rustfmt.toml`、`deny.toml`（内核零第三方依赖；shell 依赖按许可证白名单）
+- [x] task: build — `rust-toolchain.toml`（stable）、`rustfmt.toml`、`deny.toml`（内核零第三方依赖；runtime 依赖按许可证白名单）
 - [x] task: testkit — `testkit`：`Gen`（与 C++ `testkit::Gen` 同一 splitmix64 流）、`for_all` 与 `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` / `JARVIS_PROP_CASE`、`CountingAlloc` 全局分配器与 `AllocationScope`（零分配门）
 - [x] task: cli — `jarvis-rs` 二进制骨架：`build-info`、`sha256`、`crc32c`；其余子命令随各层落地
 - [x] task: ci — `rust` job：fmt、clippy `-D warnings`、三个 profile 的测试、`no_std` 目标检查；进入 `gate`
@@ -65,7 +65,7 @@
 - [ ] task: model — `OrderBookDepth`（可变档数的簿快照类型）；v1.0 的 Binance 路径用 `OrderBookDeltas`，暂缓
 - [ ] task: model — 字段描述符（schema）：文本输出目前用 `Debug`，稳定的字段级文本与 Python 读取器一起在 R4 做
 - [ ] task: harness — 模糊测试目标 `decimal`、`wire`、`log`（cargo-fuzz，corpus 作为种子）；需要在 CI 中引入 nightly 或 `cargo-fuzz` 的 stable 路径
-- [ ] task: core — CRC-32C 硬件路径：放在 shell 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现
+- [ ] task: core — CRC-32C 硬件路径：放在 runtime 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现
 - [ ] task: 验收 — 以上三项完成；Python（R4 的读取器）能读 Rust 写出的日志且指纹一致
 
 ## R2 data、cost、portfolio（行情类 golden 通过）

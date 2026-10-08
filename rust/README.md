@@ -23,7 +23,7 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   directory's `clippy.toml` bans `HashMap`, `HashSet` and `BTreeMap`. Dependencies between them
   follow the layer table; Cargo refuses a cycle, which is what `tools/check-layering.py` checks
   in the C++ tree.
-- `crates/shell/`: `sys`, `node`, `network`, `binance`, `live` (skeletons). std and third-party
+- `crates/runtime/`: `sys`, `node`, `network`, `binance`, `live` (skeletons). std and third-party
   crates allowed; `unsafe` only in a module that says why.
 - `crates/testkit/corpus`: the deterministic corpus of kernel inputs (every event kind, every
   order event variant, a pure function of the seed). Test support, not kernel code: it drives the

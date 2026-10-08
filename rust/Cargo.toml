@@ -13,11 +13,11 @@ members = [
   "crates/kernel/strategy",
   "crates/kernel/engine",
   "crates/kernel/backtest",
-  "crates/shell/sys",
-  "crates/shell/node",
-  "crates/shell/network",
-  "crates/shell/binance",
-  "crates/shell/live",
+  "crates/runtime/sys",
+  "crates/runtime/node",
+  "crates/runtime/network",
+  "crates/runtime/binance",
+  "crates/runtime/live",
   "crates/testkit/testkit",
   "crates/testkit/corpus",
   "crates/tools/cli",
@@ -41,11 +41,11 @@ risk = { path = "crates/kernel/risk" }
 strategy = { path = "crates/kernel/strategy" }
 engine = { path = "crates/kernel/engine" }
 backtest = { path = "crates/kernel/backtest" }
-sys = { path = "crates/shell/sys" }
-node = { path = "crates/shell/node" }
-network = { path = "crates/shell/network" }
-binance = { path = "crates/shell/binance" }
-live = { path = "crates/shell/live" }
+sys = { path = "crates/runtime/sys" }
+node = { path = "crates/runtime/node" }
+network = { path = "crates/runtime/network" }
+binance = { path = "crates/runtime/binance" }
+live = { path = "crates/runtime/live" }
 testkit = { path = "crates/testkit/testkit" }
 corpus = { path = "crates/testkit/corpus" }
 
@@ -70,7 +70,7 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 inline_always = "allow"
 many_single_char_names = "allow"
-# Determinism: no wall clock, no process-wide random state in any crate (the shell gets its time
+# Determinism: no wall clock, no process-wide random state in any crate (the runtime gets its time
 # from sys, which is the one layer allowed to call the operating system).
 disallowed_types = "deny"
 disallowed_methods = "deny"
