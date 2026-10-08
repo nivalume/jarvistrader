@@ -98,6 +98,8 @@ const SLOT: InstrumentSlot = InstrumentSlot(0);
 const S0: StrategyIndex = StrategyIndex(0);
 const S1: StrategyIndex = StrategyIndex(1);
 const ONE: u64 = 1_000_000_000;
+/// The 10^18 scale of entry notionals (price raw x quantity raw).
+const SCALE_18: i128 = 1_000_000_000_000_000_000;
 
 // ---- position -----------------------------------------------------------------------------------
 
@@ -333,7 +335,6 @@ fn the_venue_position_is_always_the_sum_of_the_strategies() {
         // Reference: per strategy, netting in whole units with the entry notional on the 10^18
         // scale the kernel uses, so proportional removal floors at the same resolution; each
         // part's PnL truncates toward zero onto the 10^9 scale, as the kernel's does.
-        const SCALE_18: i128 = 1_000_000_000_000_000_000;
         let mut reference_realized: i128 = 0;
         let mut model: Vec<(i64, i128)> = vec![(0, 0); strategies as usize]; // (signed units, open notional at 10^18)
         for n in 1..=40u64 {
