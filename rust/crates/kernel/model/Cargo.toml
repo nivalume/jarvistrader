@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-network"
-description = "Transport, WebSocket client, HTTP client, request signing"
+name = "model"
+description = "Domain model aligned with nautilus_trader: identifiers, fixed-point values, data, instruments, events"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,6 @@ workspace = true
 
 [dependencies]
 kernel-core.workspace = true
-jarvis-sys.workspace = true
+
+[dev-dependencies]
+jarvis-testkit.workspace = true

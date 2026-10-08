@@ -3,16 +3,16 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/kernel/jarvis-core",
-  "crates/kernel/jarvis-model",
-  "crates/kernel/jarvis-data",
-  "crates/kernel/jarvis-cost",
-  "crates/kernel/jarvis-portfolio",
-  "crates/kernel/jarvis-execution",
-  "crates/kernel/jarvis-risk",
-  "crates/kernel/jarvis-strategy",
-  "crates/kernel/jarvis-engine",
-  "crates/kernel/jarvis-backtest",
+  "crates/kernel/core",
+  "crates/kernel/model",
+  "crates/kernel/data",
+  "crates/kernel/cost",
+  "crates/kernel/portfolio",
+  "crates/kernel/execution",
+  "crates/kernel/risk",
+  "crates/kernel/strategy",
+  "crates/kernel/engine",
+  "crates/kernel/backtest",
   "crates/shell/jarvis-sys",
   "crates/shell/jarvis-node",
   "crates/shell/jarvis-network",
@@ -30,16 +30,16 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-jarvis-core = { path = "crates/kernel/jarvis-core" }
-jarvis-model = { path = "crates/kernel/jarvis-model" }
-jarvis-data = { path = "crates/kernel/jarvis-data" }
-jarvis-cost = { path = "crates/kernel/jarvis-cost" }
-jarvis-portfolio = { path = "crates/kernel/jarvis-portfolio" }
-jarvis-execution = { path = "crates/kernel/jarvis-execution" }
-jarvis-risk = { path = "crates/kernel/jarvis-risk" }
-jarvis-strategy = { path = "crates/kernel/jarvis-strategy" }
-jarvis-engine = { path = "crates/kernel/jarvis-engine" }
-jarvis-backtest = { path = "crates/kernel/jarvis-backtest" }
+kernel-core = { package = "core", path = "crates/kernel/core" }
+model = { path = "crates/kernel/model" }
+data = { path = "crates/kernel/data" }
+cost = { path = "crates/kernel/cost" }
+portfolio = { path = "crates/kernel/portfolio" }
+execution = { path = "crates/kernel/execution" }
+risk = { path = "crates/kernel/risk" }
+strategy = { path = "crates/kernel/strategy" }
+engine = { path = "crates/kernel/engine" }
+backtest = { path = "crates/kernel/backtest" }
 jarvis-sys = { path = "crates/shell/jarvis-sys" }
 jarvis-node = { path = "crates/shell/jarvis-node" }
 jarvis-network = { path = "crates/shell/jarvis-network" }

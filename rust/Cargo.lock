@@ -3,112 +3,104 @@
 version = 4
 
 [[package]]
-name = "jarvis-backtest"
+name = "backtest"
 version = "0.1.0"
 dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-engine",
- "jarvis-execution",
- "jarvis-model",
- "jarvis-portfolio",
- "jarvis-risk",
- "jarvis-strategy",
+ "core",
+ "cost",
+ "data",
+ "engine",
+ "execution",
+ "model",
+ "portfolio",
+ "risk",
+ "strategy",
+]
+
+[[package]]
+name = "core"
+version = "0.1.0"
+dependencies = [
+ "jarvis-testkit",
+]
+
+[[package]]
+name = "cost"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "model",
+]
+
+[[package]]
+name = "data"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "model",
+]
+
+[[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "cost",
+ "data",
+ "execution",
+ "model",
+ "portfolio",
+ "risk",
+ "strategy",
+]
+
+[[package]]
+name = "execution"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "cost",
+ "data",
+ "model",
+ "portfolio",
 ]
 
 [[package]]
 name = "jarvis-binance"
 version = "0.1.0"
 dependencies = [
- "jarvis-core",
- "jarvis-model",
+ "core",
  "jarvis-network",
  "jarvis-sys",
+ "model",
 ]
 
 [[package]]
 name = "jarvis-cli"
 version = "0.1.0"
 dependencies = [
- "jarvis-core",
- "jarvis-model",
-]
-
-[[package]]
-name = "jarvis-core"
-version = "0.1.0"
-dependencies = [
- "jarvis-testkit",
-]
-
-[[package]]
-name = "jarvis-cost"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-model",
-]
-
-[[package]]
-name = "jarvis-data"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-model",
-]
-
-[[package]]
-name = "jarvis-engine"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-execution",
- "jarvis-model",
- "jarvis-portfolio",
- "jarvis-risk",
- "jarvis-strategy",
-]
-
-[[package]]
-name = "jarvis-execution"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-model",
- "jarvis-portfolio",
+ "core",
+ "model",
 ]
 
 [[package]]
 name = "jarvis-live"
 version = "0.1.0"
 dependencies = [
+ "core",
+ "engine",
  "jarvis-binance",
- "jarvis-core",
- "jarvis-engine",
- "jarvis-model",
  "jarvis-network",
  "jarvis-node",
  "jarvis-sys",
-]
-
-[[package]]
-name = "jarvis-model"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-testkit",
+ "model",
 ]
 
 [[package]]
 name = "jarvis-network"
 version = "0.1.0"
 dependencies = [
- "jarvis-core",
+ "core",
  "jarvis-sys",
 ]
 
@@ -116,55 +108,63 @@ dependencies = [
 name = "jarvis-node"
 version = "0.1.0"
 dependencies = [
- "jarvis-backtest",
- "jarvis-core",
- "jarvis-engine",
- "jarvis-model",
+ "backtest",
+ "core",
+ "engine",
  "jarvis-sys",
-]
-
-[[package]]
-name = "jarvis-portfolio"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-model",
-]
-
-[[package]]
-name = "jarvis-risk"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-execution",
- "jarvis-model",
- "jarvis-portfolio",
-]
-
-[[package]]
-name = "jarvis-strategy"
-version = "0.1.0"
-dependencies = [
- "jarvis-core",
- "jarvis-cost",
- "jarvis-data",
- "jarvis-execution",
- "jarvis-model",
- "jarvis-portfolio",
- "jarvis-risk",
+ "model",
 ]
 
 [[package]]
 name = "jarvis-sys"
 version = "0.1.0"
 dependencies = [
- "jarvis-core",
+ "core",
 ]
 
 [[package]]
 name = "jarvis-testkit"
 version = "0.1.0"
+
+[[package]]
+name = "model"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "jarvis-testkit",
+]
+
+[[package]]
+name = "portfolio"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "cost",
+ "data",
+ "model",
+]
+
+[[package]]
+name = "risk"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "cost",
+ "data",
+ "execution",
+ "model",
+ "portfolio",
+]
+
+[[package]]
+name = "strategy"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "cost",
+ "data",
+ "execution",
+ "model",
+ "portfolio",
+ "risk",
+]

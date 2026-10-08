@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-node"
-description = "Build info, node configuration, node composition, command-line entry points"
+name = "backtest"
+description = "Replay source, replay clock, simulated exchange and fill models"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
+data.workspace = true
+cost.workspace = true
+portfolio.workspace = true
+execution.workspace = true
+risk.workspace = true
+strategy.workspace = true
 engine.workspace = true
-backtest.workspace = true
-jarvis-sys.workspace = true

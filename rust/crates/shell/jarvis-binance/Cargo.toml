@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-jarvis-core.workspace = true
-jarvis-model.workspace = true
+kernel-core.workspace = true
+model.workspace = true
 jarvis-network.workspace = true
 jarvis-sys.workspace = true

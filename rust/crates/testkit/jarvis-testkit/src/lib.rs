@@ -6,7 +6,7 @@
 //! - [`CountingAlloc`] and [`AllocationScope`]: the zero-allocation gate. A test binary installs
 //!   the allocator with [`install_counting_allocator!`] and asserts that a scope saw none.
 //!
-//! Test-only. Kernel code uses the counter-based generators in `jarvis_core::rng` and never a
+//! Test-only. Kernel code uses the counter-based generators in `kernel_core::rng` and never a
 //! stateful one (ADR 0001, decision 4).
 //!
 //! `unsafe` is denied crate-wide and allowed in exactly one place: the `GlobalAlloc` impl, whose

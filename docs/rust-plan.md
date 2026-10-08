@@ -25,11 +25,11 @@
 
 ## R1 core、model 与事件日志（领域模型契约、确定性编码、指纹门）
 
-> 2026-10-08 core 层第一遍完成。`jarvis-core` 覆盖 `jarvis/core` 的全部 13 个头文件：`Status`（`Result<T, Status>`，无 `Ok` 变体）、192 位中间值的 `mul_div`、时间与 RFC 3339、`EventKey`、`FixedVec`、`FixedString<N>`、带代际句柄的槽位表、Philox 计数随机数、`PriorityQueue`（含 `min_where`、`retain`）、`ReplayClock` 与 `TimerQueue`、CRC-32C（slicing-by-8 查表）、SHA-256、快照编码（`State` trait、`state_fields!`/`state_enum!`）。`tests/cpp/test_core.cpp` 的 unit、property、zero-alloc 三组全部移植，另加快照编码布局与往返测试，共 28 个用例，三个 profile 通过；Philox、SHA-256、CRC-32C、RFC 3339 的已知答案向量与 C++ 测试相同。
+> 2026-10-08 core 层第一遍完成。`core` 覆盖 `jarvis/core` 的全部 13 个头文件：`Status`（`Result<T, Status>`，无 `Ok` 变体）、192 位中间值的 `mul_div`、时间与 RFC 3339、`EventKey`、`FixedVec`、`FixedString<N>`、带代际句柄的槽位表、Philox 计数随机数、`PriorityQueue`（含 `min_where`、`retain`）、`ReplayClock` 与 `TimerQueue`、CRC-32C（slicing-by-8 查表）、SHA-256、快照编码（`State` trait、`state_fields!`/`state_enum!`）。`tests/cpp/test_core.cpp` 的 unit、property、zero-alloc 三组全部移植，另加快照编码布局与往返测试，共 28 个用例，三个 profile 通过；Philox、SHA-256、CRC-32C、RFC 3339 的已知答案向量与 C++ 测试相同。
 >
 > 2026-10-08 core 层第二遍：按 Rust 的方式重写第一遍翻译自 C++ 的部分，不要求与第一遍字节兼容，测试、clippy、三个 profile 与确定性门全部通过。改动：`Arena` 改名 `SlotMap`（它是带代际句柄的槽位表，不是分配器），槽位存 `Option<T>`，去掉了 `T: Default` 才能构造的限制和"删除后值留在原地"的 C++ 语义，`remove` 返回值，提供 `iter`/`iter_mut`/`values`/`Index`，快照恢复拒绝重复或指向占用槽位的空闲表项；`FixedVec` 新增 `retain`、`from_iter_exact`、`IntoIterator`，快照读取不再需要私有钩子；`FixedString` 在构造时校验 UTF-8；RFC 3339 的解析与格式化从 `const fn` 改为普通函数，用 `?` 与游标类型取代手写的位置参数，`UnixNanos` 实现 `Display` 与 `FromStr`；`mul_div` 的 192 位中间值改为 `(hi: u64, lo: u128)`，`_up` 用余数判定而不是重算乘积，`isqrt` 改为牛顿法；`TimerQueue` 的存活判定收敛到一个 `live` 方法，`pop_due` 不再有嵌套的早退；`PriorityQueue::retain` 复用 `FixedVec::retain`；`state.rs` 去掉了为引用私有类型而留的占位函数。
 >
-> 2026-10-08 model 层完成。`jarvis-model` 是独立设计，不参照 C++ 的 `jarvis/model`：
+> 2026-10-08 model 层完成。`model` 是独立设计，不参照 C++ 的 `jarvis/model`：
 > - 定点数值：`Price { raw: i64, precision }`、`Quantity { raw: u64, precision }`、`Money { raw: i64, currency }`，raw 按 1e9 刻度，相等与比较只看 raw；构造函数拒绝低于 precision 的数位，因此"precision 只影响显示"是不变量而不是约定。文本解析接受 `[+-]digits[.digits][e[+-]digits]`，精度按写出的小数位推断，超过 9 位报 `PrecisionLoss`；指定精度时 round half to even；`Money` 向零截断到币种精度。`notional_raw` 经 192 位中间值精确计算并向零截断。
 > - 币种表由 `rust/tools/gen_conformance.py` 从 `tests/conformance/nautilus_cd417b80.json` 生成（91 种），枚举 28 个保留 nautilus 的整数值、字符串与别名，解析不区分大小写，拒绝 `NO_*` 旧 token。
 > - 标识符各有规则（`InstrumentId` 按最后一个 `.` 拆分，`TraderId` 按最后一个 `-`，`AccountId` 按第一个 `-`），全部定长内联。`ClientOrderId` 格式 `{tag}-{epoch:6}-{seq:8}`，Base32 定宽，按下单顺序排序，可解码，最长 36 字符。
@@ -41,54 +41,54 @@
 >
 > 与 C++ 树的有意差异（不再是缺陷）：日志线格式与 C++ 的不兼容；`Status` 没有 `Ok` 变体；`RecordFlag`、`BookType` 的 Rust 变体名是驼峰（字符串不变）；CRC-32C 只有查表实现。
 
-- [x] task: jarvis-core — `Status`、`FixedVec`（超容返回 `CapacityExceeded`）、`SlotMap` 与带代际的 32 位句柄
-- [x] task: jarvis-core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop, index)`
-- [x] task: jarvis-core — `UnixNanos`、`DurationNanos` 与 RFC 3339 格式化、解析
-- [x] task: jarvis-core — `EventKey` 与确定性优先队列
-- [x] task: jarvis-core — `Clock` trait、`ReplayClock` 与定时器队列
-- [x] task: jarvis-core — CRC-32C、SHA-256
-- [x] task: jarvis-core — 快照编码：`State` trait、读写器、容器编码、`state_fields!` / `state_enum!`
+- [x] task: core — `Status`、`FixedVec`（超容返回 `CapacityExceeded`）、`SlotMap` 与带代际的 32 位句柄
+- [x] task: core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop, index)`
+- [x] task: core — `UnixNanos`、`DurationNanos` 与 RFC 3339 格式化、解析
+- [x] task: core — `EventKey` 与确定性优先队列
+- [x] task: core — `Clock` trait、`ReplayClock` 与定时器队列
+- [x] task: core — CRC-32C、SHA-256
+- [x] task: core — 快照编码：`State` trait、读写器、容器编码、`state_fields!` / `state_enum!`
 - [x] task: harness — core 层的 unit、property、zero-alloc 测试；零分配门在 Rust 树上运行
-- [x] task: jarvis-core — 第二遍：去除翻译痕迹（见上方记录）
-- [x] task: jarvis-model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、文本解析与格式化、`i128` / 192 位乘法与向零截断（architecture.md §6.1）
-- [x] task: jarvis-model — 全部标识符及其字符串约束（§6.2）；`InstrumentId` intern 为槽位的侧表留给 data 层（R2，它属于路由）
-- [x] task: jarvis-model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）；快照与线格式编码由宏给出
-- [x] task: jarvis-model — 行情数据类型（§6.4）、Instrument（§6.5）、订单事件、仓位事件、账户事件（§6.7）
-- [x] task: jarvis-model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码（§8.4）
-- [x] task: jarvis-model — 封闭的 `Event` 枚举与事件分类（§5.1）
-- [x] task: jarvis-model — 事件日志：日志头、记录布局、CRC-32C（§5.6、§16.1）；按段滚动与 `fdatasync` 属于 node 层（R4）
-- [x] task: jarvis-model — 指纹（`Fingerprinter`）与确定性 corpus
+- [x] task: core — 第二遍：去除翻译痕迹（见上方记录）
+- [x] task: model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、文本解析与格式化、`i128` / 192 位乘法与向零截断（architecture.md §6.1）
+- [x] task: model — 全部标识符及其字符串约束（§6.2）；`InstrumentId` intern 为槽位的侧表留给 data 层（R2，它属于路由）
+- [x] task: model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）；快照与线格式编码由宏给出
+- [x] task: model — 行情数据类型（§6.4）、Instrument（§6.5）、订单事件、仓位事件、账户事件（§6.7）
+- [x] task: model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码（§8.4）
+- [x] task: model — 封闭的 `Event` 枚举与事件分类（§5.1）
+- [x] task: model — 事件日志：日志头、记录布局、CRC-32C（§5.6、§16.1）；按段滚动与 `fdatasync` 属于 node 层（R4）
+- [x] task: model — 指纹（`Fingerprinter`）与确定性 corpus
 - [x] task: cli — `jarvis-rs corpus`、`fingerprint`、`dump`、`roundtrip`
 - [x] task: tools — `gen_conformance.py`：从 nautilus 一致性 JSON 生成币种表与测试向量；CI 检查生成物是最新的
 - [x] task: harness — nautilus 一致性测试（枚举值、字符串、别名、常量、币种、字段表）；定点算术与编码的性质测试；日志损坏测试
 - [x] task: harness — 指纹门：release 与 det-o0 对 seed 7 的 20 万条 corpus 逐字节一致，指纹入 golden（`just rust-fp`，CI）
-- [ ] task: jarvis-model — `OrderBookDepth`（可变档数的簿快照类型）；v1.0 的 Binance 路径用 `OrderBookDeltas`，暂缓
-- [ ] task: jarvis-model — 字段描述符（schema）：文本输出目前用 `Debug`，稳定的字段级文本与 Python 读取器一起在 R4 做
+- [ ] task: model — `OrderBookDepth`（可变档数的簿快照类型）；v1.0 的 Binance 路径用 `OrderBookDeltas`，暂缓
+- [ ] task: model — 字段描述符（schema）：文本输出目前用 `Debug`，稳定的字段级文本与 Python 读取器一起在 R4 做
 - [ ] task: harness — 模糊测试目标 `decimal`、`wire`、`log`（cargo-fuzz，corpus 作为种子）；需要在 CI 中引入 nightly 或 `cargo-fuzz` 的 stable 路径
-- [ ] task: jarvis-core — CRC-32C 硬件路径：放在 shell 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现
+- [ ] task: core — CRC-32C 硬件路径：放在 shell 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现
 - [ ] task: 验收 — 以上三项完成；Python（R4 的读取器）能读 Rust 写出的日志且指纹一致
 
 ## R2 data、cost、portfolio（行情类 golden 通过）
 
-- [ ] task: jarvis-data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription { slot, kind, cadence }`（§7.2）
-- [ ] task: jarvis-data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd`（§7.5）
-- [ ] task: jarvis-data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读 `BookView`；`write_sparse` / `read_sparse` 快照编码
-- [ ] task: jarvis-data — bar 聚合（时间、笔数、成交量）
-- [ ] task: jarvis-data — `FeatureGraph`：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点
-- [ ] task: jarvis-cost — `FeeModel`、`SlippageModel`、`ImpactModel`、`LatencyModel`（§11.1）
-- [ ] task: jarvis-portfolio — `Portfolio`、`MarginModel`、归因账本（§11.2）
+- [ ] task: data — `Router` 与 `SubscriptionMatrix`，类型化 `Subscription { slot, kind, cadence }`（§7.2）
+- [ ] task: data — `Cadence`：`Every`、`Conflated`、`SampledNs`、`OnBatch`，以及 `BatchEnd`（§7.5）
+- [ ] task: data — 订单簿 L1 与 L2：按 tick 索引的稠密价位表示，只读 `BookView`；`write_sparse` / `read_sparse` 快照编码
+- [ ] task: data — bar 聚合（时间、笔数、成交量）
+- [ ] task: data — `FeatureGraph`：EMA、VWAP、盘口失衡、microprice、实现波动率，全部定点
+- [ ] task: cost — `FeeModel`、`SlippageModel`、`ImpactModel`、`LatencyModel`（§11.1）
+- [ ] task: portfolio — `Portfolio`、`MarginModel`、归因账本（§11.2）
 - [ ] task: harness — 对应层的 C++ 测试移植；基准 `book/apply_l2_delta`、`step/trade_with_feature` 的 Rust 版本（criterion）与 C++ 数字并列报告
 - [ ] task: 验收 — 路由、订单簿、bar 聚合、特征各有性质测试与 Rust 树自己的 golden（输入是 corpus 或由 `python -m jarvis.data` 转换的一天 Binance 数据，输出指纹入 `rust/tests/golden/`）；release 与 det-o0 指纹一致
 
 ## R3 execution、risk、strategy、engine、backtest（订单类 golden 与 trace validation 通过）
 
-- [ ] task: jarvis-execution — `OrderCore`、订单状态机转移表（`match` 穷尽）、OMS、`ExecutionEngine`（§8）
-- [ ] task: jarvis-execution — 执行算法 `PeggedQuote`、`PassiveThenAggressive`、`AlgoState` 竞技场、令牌预算（§11.4）
-- [ ] task: jarvis-execution — 对账：`VenueSnapshot`、`ReconciliationDiff`、`ReconcileOutcome`（§15）
-- [ ] task: jarvis-risk — 规则目录、Gate A 与 Gate B、预留敞口、`TradingState`、`TokenBucket`、事后监控（§9、§10）
-- [ ] task: jarvis-strategy — `Strategy` trait、`Context`、`StaticStrategySet`（泛型）与 `DynamicStrategySet`（`dyn Strategy`，对应 C++ 的函数指针表）
-- [ ] task: jarvis-engine — `Engine<S>`、`EngineState`、`EventSource` 与 `CommandSink` trait、`step(S, e) → (S′, out[])`
-- [ ] task: jarvis-backtest — `ReplaySource`（多源合并）、`VenueLoop`、`SimulatedExchange`、双时间线、成交模型枚举（§12）
+- [ ] task: execution — `OrderCore`、订单状态机转移表（`match` 穷尽）、OMS、`ExecutionEngine`（§8）
+- [ ] task: execution — 执行算法 `PeggedQuote`、`PassiveThenAggressive`、`AlgoState` 竞技场、令牌预算（§11.4）
+- [ ] task: execution — 对账：`VenueSnapshot`、`ReconciliationDiff`、`ReconcileOutcome`（§15）
+- [ ] task: risk — 规则目录、Gate A 与 Gate B、预留敞口、`TradingState`、`TokenBucket`、事后监控（§9、§10）
+- [ ] task: strategy — `Strategy` trait、`Context`、`StaticStrategySet`（泛型）与 `DynamicStrategySet`（`dyn Strategy`，对应 C++ 的函数指针表）
+- [ ] task: engine — `Engine<S>`、`EngineState`、`EventSource` 与 `CommandSink` trait、`step(S, e) → (S′, out[])`
+- [ ] task: backtest — `ReplaySource`（多源合并）、`VenueLoop`、`SimulatedExchange`、双时间线、成交模型枚举（§12）
 - [ ] task: specs — `specs/map/*.hpp` 改为 Rust 模块；`tests/trace/` 的行为文件由 Rust 驱动运行
 - [ ] task: harness — 零分配门覆盖每个 `step`；对应层测试移植；`step/trade_to_strategy` 基准
 - [ ] task: 验收 — 订单生命周期、撮合、风控的 Rust golden 通过；快照保存与恢复逐字节往返；七个规约的正向 trace validation 通过，`tests/trace/` 的行为文件由 Rust 驱动复用
@@ -101,7 +101,7 @@
 - [ ] task: jarvis-node — 快照文件与恢复（§16.3）
 - [ ] task: python — `jarvis-py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
 - [ ] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
-- [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `jarvis-model::log`），指纹与 `jarvis-rs fingerprint` 一致
+- [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `model::log`），指纹与 `jarvis-rs fingerprint` 一致
 - [ ] task: 验收 — `examples/py/` 零改动运行；回放 Rust 节点自己的日志逐字节复现输出
 
 ## R5 network、adapter、live（脚本化服务端与混沌测试通过）

@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-network"
-description = "Transport, WebSocket client, HTTP client, request signing"
+name = "portfolio"
+description = "Portfolio, margin model, attribution ledger"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,6 @@ workspace = true
 
 [dependencies]
 kernel-core.workspace = true
-jarvis-sys.workspace = true
+model.workspace = true
+data.workspace = true
+cost.workspace = true

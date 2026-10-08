@@ -2,8 +2,8 @@
 """Generates the model crate's nautilus conformance data from tests/conformance/nautilus_<commit>.json.
 
 Writes two files (both checked in, regenerated when the JSON changes):
-  crates/kernel/jarvis-model/src/generated/currencies.rs   the built-in currency table
-  crates/kernel/jarvis-model/tests/generated/vectors.rs    enum values, strings, aliases, constants
+  crates/kernel/model/src/generated/currencies.rs   the built-in currency table
+  crates/kernel/model/tests/generated/vectors.rs    enum values, strings, aliases, constants
 The kernel takes no dependencies, so the JSON is turned into Rust here rather than parsed in a test.
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = ROOT / "tests/conformance/nautilus_cd417b80.json"
-CURRENCIES = ROOT / "rust/crates/kernel/jarvis-model/src/generated/currencies.rs"
-VECTORS = ROOT / "rust/crates/kernel/jarvis-model/tests/generated/vectors.rs"
+CURRENCIES = ROOT / "rust/crates/kernel/model/src/generated/currencies.rs"
+VECTORS = ROOT / "rust/crates/kernel/model/tests/generated/vectors.rs"
 
 # The enums the model crate defines (docs/architecture.md section 6.6). The conformance file has a
 # few more that jarvis does not use; they are listed so the test can state the omission.

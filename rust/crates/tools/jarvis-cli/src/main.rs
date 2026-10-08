@@ -5,11 +5,11 @@
 use std::io::{self, BufRead, Read, Write};
 use std::process::ExitCode;
 
-use jarvis_core::sha256::{hex, Sha256};
-use jarvis_model::bar::BarType;
-use jarvis_model::corpus::Corpus;
-use jarvis_model::log::{fingerprint, LogHeader, LogReader, LogWriter};
-use jarvis_model::{InstrumentId, Money, Price, Quantity};
+use kernel_core::sha256::{hex, Sha256};
+use model::bar::BarType;
+use model::corpus::Corpus;
+use model::log::{fingerprint, LogHeader, LogReader, LogWriter};
+use model::{InstrumentId, Money, Price, Quantity};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -141,7 +141,7 @@ fn roundtrip() -> ExitCode {
             println!("{line} ERROR ParseError");
             continue;
         };
-        let shown: Result<String, jarvis_core::Status> = match kind {
+        let shown: Result<String, kernel_core::Status> = match kind {
             "Price" => Price::parse(text).map(|v| v.to_string()),
             "Quantity" => Quantity::parse(text).map(|v| v.to_string()),
             "Money" => Money::parse(text).map(|v| v.to_string()),
@@ -166,7 +166,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("build-info") => {
             println!("jarvis-rs {}", env!("CARGO_PKG_VERSION"));
-            println!("schema {}", jarvis_model::event::SCHEMA_VERSION);
+            println!("schema {}", model::event::SCHEMA_VERSION);
             println!("kernel: no_std, forbid(unsafe_code), no floating point, overflow-checks on");
             println!("profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });
             ExitCode::SUCCESS
@@ -185,7 +185,7 @@ fn main() -> ExitCode {
         },
         Some("crc32c") => match read_input(rest.first().map(String::as_str)) {
             Ok(data) => {
-                println!("{:08x}", jarvis_core::crc32c::crc32c(&data));
+                println!("{:08x}", kernel_core::crc32c::crc32c(&data));
                 ExitCode::SUCCESS
             }
             Err(e) => fail(&e.to_string()),

@@ -354,7 +354,7 @@ jobs:
           cmp target/fp-release.jlog target/fp-det-o0.jlog
           ./target/release/jarvis-rs fingerprint target/fp-release.jlog | diff - tests/golden/corpus_seed7_200000.fingerprint
       - name: Conformance vectors are up to date
-        run: python3 tools/gen_conformance.py && git diff --exit-code -- crates/kernel/jarvis-model
+        run: python3 tools/gen_conformance.py && git diff --exit-code -- crates/kernel/model
 
   gate:
     if: always()

@@ -9,14 +9,14 @@ cargo test                              # dev profile
 cargo test --release                    # overflow-checks stay on
 cargo test --profile det-o0             # release semantics at opt-level 0: the determinism pair
 cargo clippy --all-targets -- -D warnings
-cargo check -p jarvis-core --target x86_64-unknown-none   # the kernel needs no std
+cargo check -p core --target x86_64-unknown-none   # the kernel needs no std
 cargo run -p jarvis-cli -- build-info
 ```
 
 Layout (one crate per architecture layer, docs/architecture.md section 3):
 
-- `crates/kernel/`: `jarvis-core` (fixed-capacity containers, `SlotMap` with generational
-  handles, counter-based RNG, time, timers, checksums, snapshot encoding) and `jarvis-model` (done: value types, identifiers, enums,
+- `crates/kernel/`: `core` (fixed-capacity containers, `SlotMap` with generational
+  handles, counter-based RNG, time, timers, checksums, snapshot encoding) and `model` (done: value types, identifiers, enums,
   data and event types, the event log wire format, fingerprints, the deterministic corpus), then
   `data`, `cost`, `portfolio`, `execution`, `risk`, `strategy`, `engine`, `backtest` (skeletons). Every kernel crate is
   `#![no_std]`, `#![forbid(unsafe_code)]`, `#![deny(clippy::float_arithmetic)]`, and the
