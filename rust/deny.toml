@@ -1,0 +1,18 @@
+# cargo-deny configuration: the kernel takes no third-party dependencies at all, and the shell's
+# are pinned in Cargo.lock. `cargo deny check` runs in the rust CI job once dependencies exist.
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

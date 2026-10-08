@@ -1,0 +1,16 @@
+[package]
+name = "jarvis-core"
+description = "Kernel layer core: Status, fixed-capacity containers, arena handles, counter-based RNG, time, event keys, timers, checksums, state encoding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+jarvis-testkit.workspace = true

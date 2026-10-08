@@ -1,0 +1,19 @@
+# Kernel crates (docs/rust-migration.md section 3, docs/cpp-subset.md). These are the rules the
+# C++ tree keeps by review; here they fail the build.
+msrv = "1.85"
+
+[[disallowed-types]]
+path = "std::collections::HashMap"
+reason = "iteration order depends on a random seed; use BTreeMap or an indexed table"
+
+[[disallowed-types]]
+path = "std::collections::HashSet"
+reason = "iteration order depends on a random seed; use BTreeSet or an indexed table"
+
+[[disallowed-types]]
+path = "alloc::collections::BTreeMap"
+reason = "the kernel addresses state by slot or handle; a map is a sign the layout is undecided"
+
+# Unstable sorts (sort_unstable*, select_nth_unstable) order equal keys by layout and are banned too,
+# but clippy's disallowed-methods cannot name inherent methods of primitive slices; that ban is
+# kept by review until a lint can carry it (docs/rust-plan.md, R0 open items).

@@ -1,0 +1,18 @@
+[package]
+name = "jarvis-node"
+description = "Build info, node configuration, node composition, command-line entry points"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jarvis-core.workspace = true
+jarvis-model.workspace = true
+jarvis-engine.workspace = true
+jarvis-backtest.workspace = true
+jarvis-sys.workspace = true

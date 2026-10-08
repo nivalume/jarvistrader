@@ -1,0 +1,19 @@
+[package]
+name = "jarvis-risk"
+description = "Risk rule catalog, gates A and B, trading state, token buckets, monitors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jarvis-core.workspace = true
+jarvis-model.workspace = true
+jarvis-data.workspace = true
+jarvis-cost.workspace = true
+jarvis-portfolio.workspace = true
+jarvis-execution.workspace = true

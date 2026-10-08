@@ -318,9 +318,37 @@ jobs:
             python3 tools/tla/check_trace.py --jarvis build/trace/bin/jarvis --spec "$spec" --golden
           done
 
+  # The Rust tree (docs/rust-plan.md): format, clippy as errors, tests in the dev, release and
+  # det-o0 profiles, and the kernel crates checked on a target without std.
+  rust:
+    needs: lint
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-none
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo test --release
+      - run: cargo test --profile det-o0
+      - name: Kernel crates build without std
+        run: |
+          kernel=$(ls crates/kernel | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ')
+          # shellcheck disable=SC2086
+          cargo check $kernel --target x86_64-unknown-none
+
   gate:
     if: always()
-    needs: [lint, functional, windows, mingw-cross, determinism, fuzz, bench-compare, formal]
+    needs: [lint, functional, windows, mingw-cross, determinism, fuzz, bench-compare, formal, rust]
     runs-on: ubuntu-24.04
     steps:
       - name: Check tier results
@@ -333,10 +361,11 @@ jobs:
           BENCH: ${{ needs.bench-compare.result }}
           FORMAL: ${{ needs.formal.result }}
           FUZZ: ${{ needs.fuzz.result }}
+          RUST: ${{ needs.rust.result }}
         run: |
           ok=1
           for pair in "lint:$LINT" "functional:$FUNCTIONAL" "windows:$WINDOWS" "mingw-cross:$MINGW" \
-                      "determinism:$DETERMINISM" "fuzz:$FUZZ" "formal:$FORMAL"; do
+                      "determinism:$DETERMINISM" "fuzz:$FUZZ" "formal:$FORMAL" "rust:$RUST"; do
             if [[ "${pair#*:}" != success ]]; then echo "${pair%%:*}: ${pair#*:}"; ok=0; fi
           done
           case "$BENCH" in

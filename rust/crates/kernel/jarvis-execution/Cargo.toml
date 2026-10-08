@@ -1,0 +1,18 @@
+[package]
+name = "jarvis-execution"
+description = "Order core, order state machine, OMS, execution engine and algorithms, reconciliation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jarvis-core.workspace = true
+jarvis-model.workspace = true
+jarvis-data.workspace = true
+jarvis-cost.workspace = true
+jarvis-portfolio.workspace = true

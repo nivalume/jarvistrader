@@ -1,0 +1,18 @@
+[package]
+name = "jarvis-cli"
+description = "The jarvis command-line tool of the Rust tree: corpus, fingerprint, dump, roundtrip, config, replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "jarvis-rs"
+path = "src/main.rs"
+
+[dependencies]
+jarvis-core.workspace = true

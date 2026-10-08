@@ -139,3 +139,16 @@ format:
 
 lint: (configure dev)
     {{python}} -m pre_commit run --all-files
+
+# The Rust tree (docs/rust-plan.md): what the `rust` CI job runs. `just rust-check` is the whole
+# tier; the pieces are rust-lint, rust-test and rust-nostd.
+rust-check: rust-lint rust-test rust-nostd
+
+rust-lint:
+    cd rust && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
+
+rust-test:
+    cd rust && cargo test && cargo test --release && cargo test --profile det-o0
+
+rust-nostd:
+    cd rust && cargo check $(ls crates/kernel 2>/dev/null | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ') --target x86_64-unknown-none

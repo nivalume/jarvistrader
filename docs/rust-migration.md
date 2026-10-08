@@ -5,6 +5,7 @@
 - 范围：把 `jarvis` 的 C++20 内核与 shell 迁移到 Rust 的收益、成本、技术栈、线程模型与迁移步骤
 - 不改变：[architecture.md](architecture.md) 中 D01 到 D24 的决策（D12、D18 除外，见第 5 节）、事件日志线格式、Python 包 API、TLA+ 规约
 - 前置：M5 的 testnet 验收（72 小时、混沌、反向 trace validation）先完成，再决定是否启动
+- 实施计划：[rust-plan.md](rust-plan.md)（R0 到 R6）；代码在 `rust/`
 
 本文回答三个问题：迁移到 Rust 能得到什么，技术栈怎么选，怎么迁。它是一份方案，不是决定。第 9 节给出决定的判据和一个两周试点。
 

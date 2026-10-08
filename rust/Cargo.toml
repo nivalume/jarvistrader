@@ -1,0 +1,94 @@
+# The Rust tree (docs/rust-migration.md, docs/rust-plan.md). It is built next to the C++ tree
+# and verified against it byte for byte; nothing here is wired into the Python package yet.
+[workspace]
+resolver = "2"
+members = [
+  "crates/kernel/jarvis-core",
+  "crates/kernel/jarvis-model",
+  "crates/kernel/jarvis-data",
+  "crates/kernel/jarvis-cost",
+  "crates/kernel/jarvis-portfolio",
+  "crates/kernel/jarvis-execution",
+  "crates/kernel/jarvis-risk",
+  "crates/kernel/jarvis-strategy",
+  "crates/kernel/jarvis-engine",
+  "crates/kernel/jarvis-backtest",
+  "crates/shell/jarvis-sys",
+  "crates/shell/jarvis-node",
+  "crates/shell/jarvis-network",
+  "crates/shell/jarvis-binance",
+  "crates/shell/jarvis-live",
+  "crates/testkit/jarvis-testkit",
+  "crates/tools/jarvis-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+jarvis-core = { path = "crates/kernel/jarvis-core" }
+jarvis-model = { path = "crates/kernel/jarvis-model" }
+jarvis-data = { path = "crates/kernel/jarvis-data" }
+jarvis-cost = { path = "crates/kernel/jarvis-cost" }
+jarvis-portfolio = { path = "crates/kernel/jarvis-portfolio" }
+jarvis-execution = { path = "crates/kernel/jarvis-execution" }
+jarvis-risk = { path = "crates/kernel/jarvis-risk" }
+jarvis-strategy = { path = "crates/kernel/jarvis-strategy" }
+jarvis-engine = { path = "crates/kernel/jarvis-engine" }
+jarvis-backtest = { path = "crates/kernel/jarvis-backtest" }
+jarvis-sys = { path = "crates/shell/jarvis-sys" }
+jarvis-node = { path = "crates/shell/jarvis-node" }
+jarvis-network = { path = "crates/shell/jarvis-network" }
+jarvis-binance = { path = "crates/shell/jarvis-binance" }
+jarvis-live = { path = "crates/shell/jarvis-live" }
+jarvis-testkit = { path = "crates/testkit/jarvis-testkit" }
+
+# Lints shared by every crate. Kernel crates add `#![no_std]`, `#![forbid(unsafe_code)]` and the
+# float ban in their lib.rs; the kernel directory's clippy.toml bans HashMap and unstable sorts.
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that work against the kernel's style (fixed-width integer code, explicit casts).
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+inline_always = "allow"
+many_single_char_names = "allow"
+# Determinism: no wall clock, no process-wide random state in any crate (the shell gets its time
+# from jarvis-sys, which is the one layer allowed to call the operating system).
+disallowed_types = "deny"
+disallowed_methods = "deny"
+
+# Overflow is a bug everywhere (ADR 0001): checked in every profile, so Release and debug fail
+# identically instead of wrapping silently in one of them. Code that wants wraparound says so
+# with wrapping_*.
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true
+debug = 1
+lto = "thin"
+codegen-units = 1
+
+# The determinism gate compares the output of this profile with `release` byte for byte
+# (docs/architecture.md section 17.2; `det-o0` in the C++ tree).
+[profile.det-o0]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 16

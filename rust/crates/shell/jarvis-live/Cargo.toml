@@ -1,0 +1,20 @@
+[package]
+name = "jarvis-live"
+description = "Live node wiring, rings, threads, persistence, telemetry, admin, health"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jarvis-core.workspace = true
+jarvis-model.workspace = true
+jarvis-engine.workspace = true
+jarvis-node.workspace = true
+jarvis-network.workspace = true
+jarvis-binance.workspace = true
+jarvis-sys.workspace = true

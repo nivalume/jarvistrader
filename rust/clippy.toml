@@ -1,0 +1,11 @@
+# Workspace-wide. The kernel directory has a stricter file (crates/kernel/clippy.toml) that clippy
+# finds first when checking a kernel crate.
+msrv = "1.85"
+
+[[disallowed-types]]
+path = "std::time::SystemTime"
+reason = "the wall clock belongs to jarvis-sys; everything else receives time as a value"
+
+[[disallowed-types]]
+path = "std::time::Instant"
+reason = "the monotonic clock belongs to jarvis-sys; everything else receives time as a value"

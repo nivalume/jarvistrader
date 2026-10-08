@@ -1,0 +1,13 @@
+[package]
+name = "jarvis-testkit"
+description = "Test support: deterministic property-test generator, counting allocator for the zero-allocation gate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
