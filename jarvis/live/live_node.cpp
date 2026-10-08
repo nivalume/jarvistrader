@@ -143,6 +143,9 @@ Status plan_live(const LiveRequest& request, core::UnixNanos now, LivePlan& out,
   out.venue.cpus = out.threads.venue;
   out.venue.rest_cpus = out.threads.others;
   out.venue.busy_poll = out.threads.busy_poll;
+  out.feed.idle_timeout = std::chrono::milliseconds{config.network.market_idle_timeout_ms};
+  out.feed.api_idle_timeout = std::chrono::milliseconds{config.network.venue_idle_timeout_ms};
+  out.venue.idle_timeout = std::chrono::milliseconds{config.network.venue_idle_timeout_ms};
   node::ApiCredentials creds;
   network::Signer signer;
   s = credentials_of(request, venue, creds, signer, error);

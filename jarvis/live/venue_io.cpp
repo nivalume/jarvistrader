@@ -572,6 +572,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     ac.tls = config.endpoints.tls;
     ac.reconnect_initial = config.reconnect_initial;
     ac.reconnect_max = config.reconnect_max;
+    ac.idle_timeout = config.idle_timeout;
     ac.now_ms = config.now_ms;
     binance::WsApiHandlers ah;
     ah.on_ready = [this] {
@@ -596,6 +597,7 @@ struct VenueIo::Impl final : adapter::EventEmitter {
     uc.tls = config.endpoints.tls;
     uc.reconnect_initial = config.reconnect_initial;
     uc.reconnect_max = config.reconnect_max;
+    uc.idle_timeout = config.idle_timeout;
     binance::UserStreamHandlers uh;
     uh.on_live = [this] { on_live(); };
     uh.on_down = [this](const std::string& reason) { on_down(reason); };

@@ -659,6 +659,17 @@ void read_threads(TableReader& r, const toml::table& t, ThreadsSection& out) {
   }
 }
 
+// 0 (no deadline) or at least a second: below that a healthy connection would be failed by
+// scheduling jitter.
+void idle_timeout_ms(TableReader& r, const toml::table& t, std::string_view key,
+                     std::uint32_t& out) {
+  r.unsigned_int(key, out);
+  if (out != 0 && out < 1000) {
+    r.errors().add(r.path_of(key), &t, "must be 0 (off) or at least 1000");
+    out = 0;
+  }
+}
+
 void read_operations(TableReader& root, NodeConfig& c) {
   if (const toml::table* t = root.table("persistence")) {
     TableReader r{*t, "persistence", root.errors()};
@@ -689,6 +700,12 @@ void read_operations(TableReader& root, NodeConfig& c) {
   if (const toml::table* t = root.table("threads")) {
     TableReader r{*t, "threads", root.errors()};
     read_threads(r, *t, c.threads);
+    r.finish();
+  }
+  if (const toml::table* t = root.table("network")) {
+    TableReader r{*t, "network", root.errors()};
+    idle_timeout_ms(r, *t, "market_idle_timeout_ms", c.network.market_idle_timeout_ms);
+    idle_timeout_ms(r, *t, "venue_idle_timeout_ms", c.network.venue_idle_timeout_ms);
     r.finish();
   }
 }
@@ -1121,6 +1138,8 @@ std::string canonical_operational_text(const NodeConfig& config) {
   c.cpu("threads.market_cpu", config.threads.market_cpu);
   c.cpu("threads.venue_cpu", config.threads.venue_cpu);
   c.cpu("threads.numa_node", config.threads.numa_node);
+  c.num("network.market_idle_timeout_ms", config.network.market_idle_timeout_ms);
+  c.num("network.venue_idle_timeout_ms", config.network.venue_idle_timeout_ms);
   return c.take();
 }
 

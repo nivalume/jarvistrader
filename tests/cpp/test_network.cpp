@@ -527,6 +527,153 @@ TEST_SUITE("unit") {
     CHECK(closes[1] == "closed");
   }
 
+  TEST_CASE("the WebSocket client fails a connection that goes silent with an idle timeout") {
+    // The server accepts, says hello and then neither reads nor writes nor closes: no FIN, no
+    // RST, no pong, as after a VM snapshot or fork. Only the client's idle deadline can end it.
+    using jarvis::testsupport::ScriptedWssServer;
+    using jarvis::testsupport::WsReply;
+    for (const bool client_ping : {true, false}) {
+      CAPTURE(client_ping);
+      ScriptedWssServer server{1, [](std::size_t, const std::string& m) {
+                                 std::vector<WsReply> out;
+                                 if (m.empty()) {
+                                   out.push_back(WsReply::send("hello"));
+                                   out.push_back(WsReply::silent());
+                                 }
+                                 return out;
+                               }};
+      net::IoContext io;
+      net::WsConfig config;
+      config.url = server.url("/stream");
+      config.tls.ca_file = server.ca_file();
+      config.idle_timeout = std::chrono::milliseconds{600};
+      config.client_ping = client_ping;
+      std::vector<std::string> messages;
+      std::vector<std::string> closes;
+      bool opened = false;
+      net::WsHandlers handlers;
+      handlers.on_open = [&] { opened = true; };
+      handlers.on_message = [&](net::WsOpcode, std::span<const std::byte> payload, std::int64_t) {
+        messages.push_back(text_of(payload));
+      };
+      handlers.on_close = [&](const std::string& reason) {
+        closes.push_back(reason);
+        io.stop();
+      };
+      net::WsClient client{io, config, handlers};
+      client.connect();
+      const auto started = std::chrono::steady_clock::now();
+      io.run_for(std::chrono::seconds{10});
+      const auto elapsed = std::chrono::steady_clock::now() - started;
+      CHECK(opened);
+      CHECK(messages == std::vector<std::string>{"hello"});
+      REQUIRE(closes.size() == 1);
+      CHECK(closes[0].starts_with(net::kWsIdleTimeout));
+      CHECK_FALSE(client.is_open());
+      CHECK(client.stats().idle_timeouts == 1);
+      CHECK(client.stats().client_pings == (client_ping ? 1U : 0U));
+      CHECK(client.stats().pongs == 0);
+      // The deadline counts from the last byte received (the hello), not from the ping.
+      CHECK(elapsed >= std::chrono::milliseconds{500});
+      CHECK(elapsed < std::chrono::seconds{5});
+      CHECK((closes[0].find("not answered") != std::string::npos) == client_ping);
+      CHECK(server.error().empty());
+    }
+  }
+
+  TEST_CASE("the WebSocket client keeps a quiet or slow connection that is alive") {
+    using jarvis::testsupport::ScriptedWssServer;
+    using jarvis::testsupport::WsReply;
+    const auto serve = [](std::size_t, const std::string&) { return std::vector<WsReply>{}; };
+    constexpr std::chrono::milliseconds kIdle{500};
+
+    // Quiet for 2.5 times the deadline: the client's pings, answered by pongs, keep it open.
+    {
+      ScriptedWssServer server{1, serve};
+      net::IoContext io;
+      net::WsConfig config;
+      config.url = server.url("/stream");
+      config.tls.ca_file = server.ca_file();
+      config.idle_timeout = kIdle;
+      std::vector<std::string> closes;
+      net::WsHandlers handlers;
+      handlers.on_close = [&](const std::string& reason) { closes.push_back(reason); };
+      net::WsClient client{io, config, handlers};
+      client.connect();
+      io.run_for(kIdle * 5 / 2);
+      CHECK(closes.empty());
+      CHECK(client.is_open());
+      CHECK(client.stats().client_pings >= 4);
+      CHECK(client.stats().pongs >= 4);
+      CHECK(client.stats().idle_timeouts == 0);
+      client.close();
+      io.run_for(std::chrono::seconds{2});
+      REQUIRE(closes.size() == 1);
+      CHECK(closes[0] == "closed");
+      CHECK(server.error().empty());
+    }
+
+    // Without client pings, data that keeps coming more often than the deadline is enough.
+    {
+      ScriptedWssServer server{1, serve};
+      net::IoContext io;
+      net::WsConfig config;
+      config.url = server.url("/stream");
+      config.tls.ca_file = server.ca_file();
+      config.idle_timeout = kIdle;
+      config.client_ping = false;
+      std::vector<std::string> closes;
+      std::size_t messages = 0;
+      net::WsHandlers handlers;
+      handlers.on_message = [&](net::WsOpcode, std::span<const std::byte>, std::int64_t) {
+        ++messages;
+      };
+      handlers.on_close = [&](const std::string& reason) { closes.push_back(reason); };
+      net::WsClient client{io, config, handlers};
+      client.connect();
+      const auto end = std::chrono::steady_clock::now() + kIdle * 3;
+      auto next = std::chrono::steady_clock::now() + std::chrono::milliseconds{100};
+      while (std::chrono::steady_clock::now() < end) {
+        io.run_for(std::chrono::milliseconds{10});
+        if (std::chrono::steady_clock::now() >= next) {
+          server.push(0, WsReply::send("tick")); // every 350 ms: slower than a busy stream
+          next += std::chrono::milliseconds{350};
+        }
+      }
+      CHECK(closes.empty());
+      CHECK(messages >= 3);
+      CHECK(client.stats().client_pings == 0);
+      CHECK(client.stats().idle_timeouts == 0);
+      client.close();
+      io.run_for(std::chrono::seconds{2});
+      CHECK(closes.size() == 1);
+    }
+
+    // The idle deadline is off by default: a silent server does not end the connection.
+    {
+      ScriptedWssServer server{1, [](std::size_t, const std::string& m) {
+                                 std::vector<WsReply> out;
+                                 if (m.empty()) {
+                                   out.push_back(WsReply::silent());
+                                 }
+                                 return out;
+                               }};
+      net::IoContext io;
+      net::WsConfig config;
+      config.url = server.url("/stream");
+      config.tls.ca_file = server.ca_file();
+      std::vector<std::string> closes;
+      net::WsHandlers handlers;
+      handlers.on_close = [&](const std::string& reason) { closes.push_back(reason); };
+      net::WsClient client{io, config, handlers};
+      client.connect();
+      io.run_for(std::chrono::milliseconds{1500});
+      CHECK(closes.empty());
+      CHECK(client.is_open());
+      CHECK(client.stats().client_pings == 0);
+    }
+  }
+
   TEST_CASE("the WebSocket client refuses an untrusted certificate") {
     const TempDir dir;
     make_certificate(dir.file("cert.pem"), dir.file("key.pem"));

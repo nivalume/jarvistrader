@@ -992,6 +992,7 @@ nb::dict feed_dict(const live::MarketFeedStats& f) {
   feed["snapshots"] = f.snapshots;
   feed["snapshot_failures"] = f.snapshot_failures;
   feed["book_syncs"] = f.book_syncs;
+  feed["idle_timeouts"] = f.idle_timeouts;
   return feed;
 }
 

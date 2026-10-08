@@ -123,6 +123,8 @@ Status plan_sandbox(const SandboxRequest& request, core::UnixNanos now, SandboxP
   }
   out.feed.cpus = out.threads.market;
   out.feed.busy_poll = out.threads.busy_poll;
+  out.feed.idle_timeout = std::chrono::milliseconds{config.network.market_idle_timeout_ms};
+  out.feed.api_idle_timeout = std::chrono::milliseconds{config.network.venue_idle_timeout_ms};
   std::vector<std::string> symbols;
   s = feed_streams(config, symbols, out.feed.streams, error);
   if (!core::ok(s)) {

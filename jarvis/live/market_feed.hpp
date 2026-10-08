@@ -21,7 +21,9 @@
 // WebSocket API answers included, so that the decoded stream can be rebuilt from it.
 //
 // A dropped connection reconnects with backoff; the depth books leave Synced when the depth
-// connection drops (the kernel gets a lone CLEAR) and sync again from a fresh snapshot. The feed
+// connection drops (the kernel gets a lone CLEAR) and sync again from a fresh snapshot. A
+// connection that goes silent without closing (no FIN or RST, as after a VM snapshot or fork)
+// is closed by the idle deadline and takes the same path. The feed
 // records ConnectionStatus(MarketData) up once every stream connection is open and down when one
 // closes; the sync gate moves a Running node to Degraded while it is down. A full
 // ring stops the thread until the core has read (back-pressure: dropping a book diff would
@@ -48,6 +50,11 @@ struct MarketFeedConfig {
   std::size_t max_levels = 2000; // per book side
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
+  // A connection that receives nothing, the pongs to its own pings included, for this long is
+  // closed and reconnects (network/ws_client.hpp). The stream connections, then the WebSocket
+  // API session that serves the snapshots; zero: off. [network] in the node config.
+  std::chrono::milliseconds idle_timeout{30'000};
+  std::chrono::milliseconds api_idle_timeout{60'000};
   bool busy_poll = false; // the thread never sleeps: it polls its connections in a loop
   std::vector<int> cpus;  // the CPUs the thread runs on (cpu_affinity.hpp); empty: any
 };
@@ -62,6 +69,7 @@ struct MarketFeedStats {
   std::uint64_t snapshots = 0;
   std::uint64_t snapshot_failures = 0;
   std::uint64_t book_syncs = 0;
+  std::uint64_t idle_timeouts = 0; // stream connections closed by the idle deadline
 };
 
 class MarketFeed {

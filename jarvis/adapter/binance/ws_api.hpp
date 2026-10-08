@@ -31,6 +31,9 @@
 //   connection, logs it on, sends new requests there and closes the old one once its requests
 //   are answered, so order entry never pauses for a planned rotation.
 // - A dropped connection reconnects with backoff; a refused logon does not (the key is wrong).
+// - A connection that went silent without closing (no FIN or RST) is dropped by the idle
+//   deadline `idle_timeout`; the requests in flight end Unknown, and it reconnects like any
+//   other dropped connection.
 
 namespace jarvis::adapter::binance {
 
@@ -44,6 +47,9 @@ struct WsApiConfig {
   std::chrono::milliseconds reconnect_initial{500};
   std::chrono::milliseconds reconnect_max{30'000};
   std::chrono::milliseconds rotate_after{std::chrono::hours{23}};
+  // A connection that receives nothing for this long, the pongs to its own pings (sent every
+  // half of it) included, is closed as dead and reconnects (network/ws_client.hpp). Zero: off.
+  std::chrono::milliseconds idle_timeout{60'000};
   std::function<std::int64_t()> now_ms; // local UTC milliseconds; system_clock when empty
 };
 

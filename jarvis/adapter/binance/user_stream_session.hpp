@@ -41,6 +41,10 @@ struct UserStreamConfig {
   std::chrono::milliseconds reconnect_max{30'000};
   std::chrono::milliseconds rotate_after{std::chrono::hours{23}};
   std::chrono::milliseconds rotation_overlap{2'000};
+  // A connection that receives nothing for this long, the pongs to its own pings (sent every
+  // half of it) included, is closed as dead: on_down, reconnect, reconcile. A quiet account
+  // keeps the stream alive with those pings. Zero: off.
+  std::chrono::milliseconds idle_timeout{60'000};
 };
 
 struct UserStreamHandlers {

@@ -979,6 +979,7 @@ void add_io(MetricsSample& s, const TelemetrySources& src) {
     s.counters["jarvis_feed_connects_total"] = f.connects;
     s.counters["jarvis_feed_ring_waits_total"] = f.ring_waits;
     s.counters["jarvis_feed_book_syncs_total"] = f.book_syncs;
+    s.counters["jarvis_feed_idle_timeouts_total"] = f.idle_timeouts;
   }
   if (src.venue != nullptr) {
     SpscByteRing& ring = src.venue->ring();

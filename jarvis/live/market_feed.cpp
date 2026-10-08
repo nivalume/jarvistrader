@@ -37,6 +37,7 @@ struct Counters {
   std::atomic<std::uint64_t> snapshots{0};
   std::atomic<std::uint64_t> snapshot_failures{0};
   std::atomic<std::uint64_t> book_syncs{0};
+  std::atomic<std::uint64_t> idle_timeouts{0};
 
   static void add(std::atomic<std::uint64_t>& c) { c.fetch_add(1, std::memory_order_relaxed); }
 };
@@ -147,6 +148,9 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
   void on_close(Conn& c, const std::string& reason) {
     const core::UnixNanos now{clock->now()};
     record(RawKind::Close, c.id, 0, reason, now.value());
+    if (reason.starts_with(network::kWsIdleTimeout)) {
+      Counters::add(counters.idle_timeouts);
+    }
     if (c.open) {
       c.open = false;
       --open_streams;
@@ -193,6 +197,7 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
       network::WsConfig wc;
       wc.url = spec.url;
       wc.tls = config.endpoints.tls;
+      wc.idle_timeout = config.idle_timeout;
       c->ws = std::make_unique<network::WsClient>(io, std::move(wc), std::move(h));
       c->reconnect = std::make_unique<network::Timer>(io);
       conns.push_back(std::move(c));
@@ -203,6 +208,7 @@ struct MarketFeed::Impl final : adapter::EventEmitter {
     ac.tls = config.endpoints.tls;
     ac.reconnect_initial = config.reconnect_initial;
     ac.reconnect_max = config.reconnect_max;
+    ac.idle_timeout = config.api_idle_timeout;
     binance::WsApiHandlers ah;
     ah.on_ready = [this] {
       record(RawKind::Open, api_conn, 0, config.endpoints.ws_api, clock->now());
@@ -352,9 +358,9 @@ MarketFeedStats MarketFeed::stats() const noexcept {
   const auto v = [](const std::atomic<std::uint64_t>& a) {
     return a.load(std::memory_order_relaxed);
   };
-  return MarketFeedStats{v(c.messages),   v(c.events),   v(c.decode_errors), v(c.unsupported),
-                         v(c.ring_waits), v(c.connects), v(c.snapshots),     v(c.snapshot_failures),
-                         v(c.book_syncs)};
+  return MarketFeedStats{
+      v(c.messages), v(c.events),    v(c.decode_errors),     v(c.unsupported), v(c.ring_waits),
+      v(c.connects), v(c.snapshots), v(c.snapshot_failures), v(c.book_syncs),  v(c.idle_timeouts)};
 }
 
 } // namespace jarvis::live

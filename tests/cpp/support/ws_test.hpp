@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -83,13 +84,17 @@ template <typename Stream> std::pair<unsigned, std::string> read_ws_client_frame
 }
 
 struct WsReply {
-  enum class Kind : std::uint8_t { Text, Close, Drop };
+  enum class Kind : std::uint8_t { Text, Close, Drop, Silent };
   Kind kind = Kind::Text;
   std::string text;
 
   static WsReply send(std::string t) { return {Kind::Text, std::move(t)}; }
   static WsReply close() { return {Kind::Close, {}}; }
   static WsReply drop() { return {Kind::Drop, {}}; } // no close frame
+  // The connection stays open and the server stops reading and writing, for good: no pong, no
+  // data, no close, no FIN or RST, as a peer behind a dead path looks to the client (the
+  // connection is only closed when the server is destroyed).
+  static WsReply silent() { return {Kind::Silent, {}}; }
 };
 
 // Called with the connection number (from 0) and each text message; the empty message stands
@@ -99,7 +104,8 @@ using WsScript = std::function<std::vector<WsReply>(std::size_t conn, const std:
 // Serves up to `connections` WebSocket connections over TLS, each on its own thread (a planned
 // rotation keeps two open at once). Records each connection's request target and every text
 // message received; the script is called under a lock, one message at a time. A test can also
-// push replies to a connection unprompted.
+// push replies to a connection unprompted, WsReply::silent() among them. Client pings are
+// answered with pongs, so a quiet connection stays alive until it goes silent.
 class ScriptedWssServer {
 public:
   ScriptedWssServer(std::size_t connections, WsScript script)
@@ -225,7 +231,7 @@ private:
   }
 
   // False when the connection ends.
-  static bool apply(Stream& s, const std::vector<WsReply>& replies) {
+  bool apply(Stream& s, const std::vector<WsReply>& replies) const {
     for (const WsReply& r : replies) {
       switch (r.kind) {
       case WsReply::Kind::Text:
@@ -241,6 +247,11 @@ private:
         }
       }
       case WsReply::Kind::Drop:
+        return false;
+      case WsReply::Kind::Silent:
+        while (!stopping_) {
+          std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
         return false;
       }
     }

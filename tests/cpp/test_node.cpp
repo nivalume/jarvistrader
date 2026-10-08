@@ -779,6 +779,34 @@ params = { spread = 0.5 }
     CHECK(hash_with({"venues.0.sim.latency.out_ns=1"}) != h);
   }
 
+  TEST_CASE("[network] sets the idle deadlines and stays out of the hash") {
+    node::NodeConfig c;
+    REQUIRE(parse("[node]\nid = \"mm01\"\n", c).empty());
+    CHECK(c.network.market_idle_timeout_ms == 30'000);
+    CHECK(c.network.venue_idle_timeout_ms == 60'000);
+    const auto h = node::config_hash(c);
+    node::NodeConfig d;
+    REQUIRE(parse("[node]\nid = \"mm01\"\n[network]\nmarket_idle_timeout_ms = 5000\n"
+                  "venue_idle_timeout_ms = 0\n",
+                  d)
+                .empty());
+    CHECK(d.network.market_idle_timeout_ms == 5000);
+    CHECK(d.network.venue_idle_timeout_ms == 0);
+    CHECK(node::config_hash(d) == h);
+    CHECK(node::canonical_hashed_text(d) == node::canonical_hashed_text(c));
+    const std::string text = node::canonical_operational_text(d);
+    CHECK(text.find("network.market_idle_timeout_ms = 5000\nnetwork.venue_idle_timeout_ms = 0\n") !=
+          std::string::npos);
+
+    node::NodeConfig bad;
+    const auto errors = parse("[node]\nid = \"mm01\"\n[network]\nmarket_idle_timeout_ms = 500\n"
+                              "venue_idle_timeout_ms = -1\nping = 1\n",
+                              bad);
+    CHECK(has_error(errors, "network.market_idle_timeout_ms", "0 (off) or at least 1000"));
+    CHECK(has_error(errors, "network.venue_idle_timeout_ms", "must be between"));
+    CHECK(has_error(errors, "network.ping", "unknown key"));
+  }
+
   TEST_CASE("[threads] names CPUs, and the core thread's CPU is its own") {
     node::NodeConfig c;
     REQUIRE(parse("[node]\nid = \"mm01\"\n", c).empty());

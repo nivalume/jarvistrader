@@ -6,6 +6,10 @@
 #include <deque>
 #include <random>
 
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+
 #include "jarvis/network/detail/asio_tls.hpp"
 #include "jarvis/network/url.hpp"
 
@@ -44,6 +48,39 @@ private:
   std::uint64_t state_;
 };
 
+// Keepalive probes and the kernel's give-up time on a socket that was just connected. Best
+// effort: an option the platform lacks or refuses leaves the idle deadline as the safeguard.
+void set_int_option(int fd, int level, int name, long long value) {
+  const int v = static_cast<int>(value);
+  static_cast<void>(::setsockopt(fd, level, name, &v, sizeof v));
+}
+
+void apply_socket_options(asio::ip::tcp::socket& socket, const WsConfig& c,
+                          std::chrono::milliseconds user_timeout) {
+  asio::error_code ignored;
+  socket.set_option(asio::ip::tcp::no_delay{true}, ignored);
+  if (c.keepalive) {
+    socket.set_option(asio::socket_base::keep_alive{true}, ignored);
+    const int fd = socket.native_handle();
+#if defined(__linux__)
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPIDLE, c.keepalive_idle.count());
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPINTVL, c.keepalive_interval.count());
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPCNT, c.keepalive_count);
+#elif defined(__APPLE__)
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPALIVE, c.keepalive_idle.count());
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPINTVL, c.keepalive_interval.count());
+    set_int_option(fd, IPPROTO_TCP, TCP_KEEPCNT, c.keepalive_count);
+#endif
+  }
+#if defined(__linux__)
+  if (user_timeout.count() > 0) {
+    set_int_option(socket.native_handle(), IPPROTO_TCP, TCP_USER_TIMEOUT, user_timeout.count());
+  }
+#else
+  static_cast<void>(user_timeout);
+#endif
+}
+
 } // namespace
 
 struct WsClient::Impl : std::enable_shared_from_this<Impl> {
@@ -51,7 +88,7 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
 
   Impl(asio::io_context& context, WsConfig c, WsHandlers h)
       : io{context}, config{std::move(c)}, handlers{std::move(h)}, resolver{context},
-        timer{context}, decoder{config.max_message} {
+        timer{context}, idle_timer{context}, decoder{config.max_message} {
     buffer.resize(config.receive_buffer < 1024 ? 1024 : config.receive_buffer);
   }
 
@@ -67,6 +104,9 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
   std::shared_ptr<detail::TlsStream> stream;
   std::uint64_t generation = 0;
   asio::steady_timer timer;
+  asio::steady_timer idle_timer; // the read-idle watchdog of an open connection
+  std::int64_t last_rx_ns = 0;   // steady_ns() of the last byte received
+  bool ping_outstanding = false; // a client ping went out since the last byte received
   std::vector<std::byte> buffer;
   std::size_t filled = 0;
   WsDecoder decoder;
@@ -86,6 +126,9 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
   std::atomic<std::uint64_t> n_bytes{0};
   std::atomic<std::uint64_t> n_pings{0};
   std::atomic<std::uint64_t> n_sent{0};
+  std::atomic<std::uint64_t> n_pongs{0};
+  std::atomic<std::uint64_t> n_client_pings{0};
+  std::atomic<std::uint64_t> n_idle_timeouts{0};
 
   template <typename Buffer, typename Handler>
   void read_some(detail::TlsStream& s, const Buffer& b, Handler&& h) {
@@ -114,6 +157,7 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
     phase = Phase::Closed;
     open = false;
     timer.cancel();
+    idle_timer.cancel();
     resolver.cancel();
     if (const std::shared_ptr<detail::TlsStream> s = stream) {
       asio::error_code ignored;
@@ -144,6 +188,7 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
     stream = std::make_shared<detail::TlsStream>(io, *ssl);
     ++generation;
     filled = 0;
+    ping_outstanding = false;
     decoder.reset();
     outbox.clear();
     writing = false;
@@ -188,8 +233,7 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
       fail("connect " + endpoint.host + ": " + ec.message());
       return;
     }
-    asio::error_code ignored;
-    s.lowest_layer().set_option(asio::ip::tcp::no_delay{true}, ignored);
+    apply_socket_options(s.next_layer(), config, user_timeout());
     if (!endpoint.tls()) {
       send_upgrade();
       return;
@@ -206,6 +250,56 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
       }
       self->send_upgrade();
     });
+  }
+
+  [[nodiscard]] std::chrono::milliseconds user_timeout() const noexcept {
+    return config.tcp_user_timeout.count() > 0 ? config.tcp_user_timeout : config.idle_timeout;
+  }
+
+  // The quiet time after which a client ping goes out: ping_interval, below the idle deadline.
+  [[nodiscard]] std::chrono::nanoseconds ping_after() const noexcept {
+    const std::chrono::nanoseconds idle = config.idle_timeout;
+    const std::chrono::nanoseconds every = config.ping_interval;
+    return every.count() > 0 && every < idle ? every : idle / 2;
+  }
+
+  // One timer wake per ping interval, not one re-arm per frame: the wake looks at when the last
+  // byte came and sleeps until the next thing is due (the ping, then the deadline).
+  void arm_watchdog() {
+    if (config.idle_timeout.count() <= 0 || phase != Phase::Open) {
+      return;
+    }
+    const std::chrono::nanoseconds idle = config.idle_timeout;
+    const bool pinging = config.client_ping && !ping_outstanding;
+    const std::int64_t due = last_rx_ns + (pinging ? ping_after().count() : idle.count());
+    const std::int64_t wait = due - steady_ns();
+    idle_timer.expires_after(std::chrono::nanoseconds{wait > 1'000'000 ? wait : 1'000'000});
+    idle_timer.async_wait(
+        [self = shared_from_this(), gen = generation](const asio::error_code& ec) {
+          if (!ec && self->current(gen)) {
+            self->on_watchdog();
+          }
+        });
+  }
+
+  void on_watchdog() {
+    if (phase != Phase::Open) {
+      return; // closing: the close timer decides
+    }
+    const std::chrono::nanoseconds quiet{steady_ns() - last_rx_ns};
+    if (quiet >= std::chrono::nanoseconds{config.idle_timeout}) {
+      n_idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+      fail(std::string{kWsIdleTimeout} + ": nothing received for " +
+           std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(quiet).count()) +
+           " ms" + (ping_outstanding ? " (the client ping was not answered)" : ""));
+      return;
+    }
+    if (config.client_ping && !ping_outstanding && quiet >= ping_after()) {
+      ping_outstanding = true;
+      n_client_pings.fetch_add(1, std::memory_order_relaxed);
+      queue(WsOpcode::Ping, {});
+    }
+    arm_watchdog();
   }
 
   void send_upgrade() {
@@ -250,6 +344,8 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
       return;
     }
     const std::int64_t now = steady_ns();
+    last_rx_ns = now; // any byte is life: data, a ping, the pong to ours, half a frame
+    ping_outstanding = false;
     filled += n;
     if (phase == Phase::Handshake) {
       std::size_t head = 0;
@@ -279,6 +375,7 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
       if (phase != Phase::Open) {
         return; // on_open closed it
       }
+      arm_watchdog();
       flush();
     }
     std::size_t consumed = 0;
@@ -337,6 +434,8 @@ struct WsClient::Impl : std::enable_shared_from_this<Impl> {
       break;
     }
     case WsOpcode::Pong:
+      n_pongs.fetch_add(1, std::memory_order_relaxed);
+      break;
     case WsOpcode::Continuation:
       break;
     }
@@ -423,8 +522,9 @@ void WsClient::close(std::uint16_t code, std::string reason) {
 bool WsClient::is_open() const noexcept { return impl_->open.load(); }
 
 WsStats WsClient::stats() const noexcept {
-  return WsStats{impl_->n_messages.load(), impl_->n_bytes.load(), impl_->n_pings.load(),
-                 impl_->n_sent.load()};
+  return WsStats{impl_->n_messages.load(),     impl_->n_bytes.load(), impl_->n_pings.load(),
+                 impl_->n_sent.load(),         impl_->n_pongs.load(), impl_->n_client_pings.load(),
+                 impl_->n_idle_timeouts.load()};
 }
 
 } // namespace jarvis::network
