@@ -87,6 +87,14 @@ impl<T: Clone> Clone for FixedVec<T> {
     }
 }
 
+/// Equality is by contents; two vectors with different capacities but the same elements are equal.
+impl<T: PartialEq> PartialEq for FixedVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+    }
+}
+impl<T: Eq> Eq for FixedVec<T> {}
+
 impl<T> Deref for FixedVec<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {

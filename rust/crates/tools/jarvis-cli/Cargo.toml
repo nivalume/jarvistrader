@@ -16,3 +16,4 @@ path = "src/main.rs"
 
 [dependencies]
 jarvis-core.workspace = true
+jarvis-model.workspace = true

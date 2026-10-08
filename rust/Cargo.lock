@@ -32,6 +32,7 @@ name = "jarvis-cli"
 version = "0.1.0"
 dependencies = [
  "jarvis-core",
+ "jarvis-model",
 ]
 
 [[package]]
@@ -100,6 +101,7 @@ name = "jarvis-model"
 version = "0.1.0"
 dependencies = [
  "jarvis-core",
+ "jarvis-testkit",
 ]
 
 [[package]]

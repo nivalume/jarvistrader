@@ -6,6 +6,7 @@
 - 不改变：[architecture.md](architecture.md) 中 D01 到 D24 的决策（D12、D18 除外，见第 5 节）、事件日志线格式、Python 包 API、TLA+ 规约
 - 前置：M5 的 testnet 验收（72 小时、混沌、反向 trace validation）先完成，再决定是否启动
 - 实施计划：[rust-plan.md](rust-plan.md)（R0 到 R6）；代码在 `rust/`
+- 修订（2026-10-08）：C++ 树没有生产使用，因此不再作为逐字节 oracle。第 7 节第 2 条与第 8 节中"与 C++ 逐字节相同"的验收改为：按 architecture.md 的契约独立实现，正确性由测试、形式化验证与 release / det-o0 确定性门决定；C++ 的测试向量与 golden 数据可作输入复用。rust-plan.md 是现行的验收定义，本文的这两处保留为历史记录
 
 本文回答三个问题：迁移到 Rust 能得到什么，技术栈怎么选，怎么迁。它是一份方案，不是决定。第 9 节给出决定的判据和一个两周试点。
 

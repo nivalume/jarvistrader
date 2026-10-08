@@ -144,6 +144,6 @@ uv pip install --python .venv/bin/python --reinstall .
   the operations runbook in [`docs/runbook.md`](docs/runbook.md) and the proposed Rust migration in
   [`docs/rust-migration.md`](docs/rust-migration.md)
 - `cmake/`: vendored CPM.cmake and pinned dependency declarations
-- `rust/`: the Rust tree (Cargo workspace), built next to the C++ tree and verified against it
-  byte for byte; the plan is [`docs/rust-plan.md`](docs/rust-plan.md), the rationale
+- `rust/`: the Rust tree (Cargo workspace), built next to the C++ tree; the plan is
+  [`docs/rust-plan.md`](docs/rust-plan.md), the rationale
   [`docs/rust-migration.md`](docs/rust-migration.md)

@@ -142,7 +142,7 @@ lint: (configure dev)
 
 # The Rust tree (docs/rust-plan.md): what the `rust` CI job runs. `just rust-check` is the whole
 # tier; the pieces are rust-lint, rust-test and rust-nostd.
-rust-check: rust-lint rust-test rust-nostd
+rust-check: rust-lint rust-test rust-nostd rust-fp
 
 rust-lint:
     cd rust && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
@@ -152,3 +152,13 @@ rust-test:
 
 rust-nostd:
     cd rust && cargo check $(ls crates/kernel 2>/dev/null | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ') --target x86_64-unknown-none
+
+# Determinism gate of the Rust tree: the release and det-o0 builds write the seed 7 corpus
+# (200 000 records) byte for byte the same, and its fingerprint matches the golden file.
+rust-fp:
+    cd rust && cargo build -q --release -p jarvis-cli && cargo build -q --profile det-o0 -p jarvis-cli
+    cd rust && ./target/release/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-release.jlog > /dev/null
+    cd rust && ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog > /dev/null
+    cd rust && cmp target/fp-release.jlog target/fp-det-o0.jlog
+    cd rust && ./target/release/jarvis-rs fingerprint target/fp-release.jlog | diff - tests/golden/corpus_seed7_200000.fingerprint
+    @echo "rust-fp: release and det-o0 corpora are identical and match the golden fingerprint"

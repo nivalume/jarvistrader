@@ -345,6 +345,16 @@ jobs:
           kernel=$(ls crates/kernel | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ')
           # shellcheck disable=SC2086
           cargo check $kernel --target x86_64-unknown-none
+      - name: Determinism gate (release vs det-o0 corpus, golden fingerprint)
+        run: |
+          cargo build --release -p jarvis-cli
+          cargo build --profile det-o0 -p jarvis-cli
+          ./target/release/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-release.jlog
+          ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog
+          cmp target/fp-release.jlog target/fp-det-o0.jlog
+          ./target/release/jarvis-rs fingerprint target/fp-release.jlog | diff - tests/golden/corpus_seed7_200000.fingerprint
+      - name: Conformance vectors are up to date
+        run: python3 tools/gen_conformance.py && git diff --exit-code -- crates/kernel/jarvis-model
 
   gate:
     if: always()

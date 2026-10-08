@@ -40,6 +40,21 @@ impl<const N: usize> FixedString<N> {
         Ok(value)
     }
 
+    /// A constant string; longer than the capacity fails compilation.
+    #[must_use]
+    pub const fn from_static(text: &str) -> Self {
+        let () = Self::CAPACITY_FITS_A_BYTE;
+        let bytes = text.as_bytes();
+        assert!(bytes.len() <= N, "FixedString::from_static: text longer than the capacity");
+        let mut data = [0u8; N];
+        let mut i = 0;
+        while i < bytes.len() {
+            data[i] = bytes[i];
+            i += 1;
+        }
+        Self { data, len: bytes.len() as u8 }
+    }
+
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.data[..self.len as usize]

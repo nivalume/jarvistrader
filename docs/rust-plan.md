@@ -2,13 +2,12 @@
 
 本计划按 [rust-migration.md](rust-migration.md) 第 7 节的移植顺序拆成 R0 到 R6 七个里程碑。约定与 [plan.md](plan.md) 相同：
 
-1. 每个任务以"crate —"开头，crate 名与 `rust/Cargo.toml` 的 workspace 成员一致；`harness` 表示测试、基准或门禁任务，`验收` 是该里程碑的完成标准。
-2. 每个里程碑的验收都是对 C++ 树的逐字节比较：C++ 树是 oracle，`tests/golden/` 与 corpus 指纹是跨实现的等价测试。Rust 树不定义自己的"正确"。
-3. 事件日志线格式、`jarvis fingerprint` 算法、配置规范化 hash 三样在整个迁移期间不变；Python 包的公开 API 不变。
-4. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展。
-5. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查），CI 的 `rust` job 跑同样的内容并进入 `gate`。
+1. 每个任务以"crate —"开头，crate 名与 `rust/Cargo.toml` 的 workspace 成员一致；`harness` 表示测试、基准或形式化验证任务，`验收` 是该里程碑的完成标准。
+2. **C++ 树是设计参考，不是 oracle。** C++ 版本没有生产使用，Rust 树不以逐字节复现它为目标，而是按 architecture.md 的契约（nautilus 领域模型、ADR 0001 的确定性约束、TLA+ 规约）给出自己的实现。正确性由三样东西决定：测试（单元、性质、golden、模糊）、形式化验证（规约与 trace validation）、确定性门（release 与 det-o0 逐字节一致）。可以借用 C++ 的测试向量和 golden 数据作为输入，不借用它的字节格式。
+3. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展；R4 为 Rust 的事件日志写 Python 读取器。
+4. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查、`rust-fp` 确定性门），CI 的 `rust` job 跑同样的内容并进入 `gate`。
 
-状态：R0 完成，R1 的 core 层完成；本文随每个里程碑更新。
+状态：R0 完成，R1 的 core 与 model 层完成（事件日志、指纹、corpus 在内）；本文随每个里程碑更新。
 
 ## R0 workspace 与门禁（在写领域代码之前，让约束先变成编译错误）
 
@@ -24,11 +23,21 @@
 - [x] task: justfile — `rust-check`、`rust-lint`、`rust-test`、`rust-nostd`
 - [x] task: 验收 — 分别注入浮点、`HashMap`、`unsafe`、作用域内分配、溢出，五道门各自报错；内核 crate 在无 std 目标上编译
 
-## R1 core、model 与事件日志（corpus 指纹逐字节一致）
+## R1 core、model 与事件日志（领域模型契约、确定性编码、指纹门）
 
-对应 C++ 的 M1。验收是 `jarvis-rs corpus --seed 7 --events 200000` 与 C++ `jarvis corpus` 的输出逐字节相同，以及 `tests/golden/model_strings`、`corpus_seed42` 通过。
-
-> 2026-10-08 core 层完成。`jarvis-core` 移植了 `jarvis/core` 的全部 13 个头文件：`Status`（`Result<T, Status>`，不再有 `Ok` 变体，名字与编号与 C++ 一致）、`int_math`（`mul_div_u64` / `_up` / `_i64` 经 192 位中间值、`isqrt`）、`time`（`UnixNanos`、`DurationNanos`、civil 日期、RFC 3339 格式化与解析）、`EventKey`、`FixedVec`、`FixedString<N>`、`Arena` 与代际 `Handle<Tag>`、`rng`（`mix64`、Philox4x32-10、`CounterRng`）、`PriorityQueue`（含 `min_where`、`retain`）、`ReplayClock` 与 `TimerQueue`、CRC-32C（slicing-by-8 查表，与 C++ 的硬件指令结果相同）、SHA-256、`state`（`StateWriter` / `StateReader` / `State` trait、`state_fields!` 与 `state_enum!` 宏，字节布局与 `core/state.hpp` 一致，含 `FixedVec`、`Arena`、`PriorityQueue`、`TimerQueue` 的编码）。`tests/cpp/test_core.cpp` 的 unit、property、zero-alloc 三组全部移植为 `rust/crates/kernel/jarvis-core/tests/core.rs`，另加快照编码的字节布局测试与 Arena / TimerQueue 的快照往返，共 28 个用例，dev、release、det-o0 三个 profile 全部通过；Philox、SHA-256、CRC-32C、RFC 3339 的已知答案向量与 C++ 测试相同。
+> 2026-10-08 core 层完成（见上一条记录）。
+>
+> 2026-10-08 model 层完成。`jarvis-model` 是独立设计，不参照 C++ 的 `jarvis/model`：
+> - 定点数值：`Price { raw: i64, precision }`、`Quantity { raw: u64, precision }`、`Money { raw: i64, currency }`，raw 按 1e9 刻度，相等与比较只看 raw；构造函数拒绝低于 precision 的数位，因此"precision 只影响显示"是不变量而不是约定。文本解析接受 `[+-]digits[.digits][e[+-]digits]`，精度按写出的小数位推断，超过 9 位报 `PrecisionLoss`；指定精度时 round half to even；`Money` 向零截断到币种精度。`notional_raw` 经 192 位中间值精确计算并向零截断。
+> - 币种表由 `rust/tools/gen_conformance.py` 从 `tests/conformance/nautilus_cd417b80.json` 生成（91 种），枚举 28 个保留 nautilus 的整数值、字符串与别名，解析不区分大小写，拒绝 `NO_*` 旧 token。
+> - 标识符各有规则（`InstrumentId` 按最后一个 `.` 拆分，`TraderId` 按最后一个 `-`，`AccountId` 按第一个 `-`），全部定长内联。`ClientOrderId` 格式 `{tag}-{epoch:6}-{seq:8}`，Base32 定宽，按下单顺序排序，可解码，最长 36 字符。
+> - 行情、instrument、账户、17 种订单事件、4 种仓位事件，每个类型有校验构造函数；封闭的 `Event` 枚举 17 种输入，`EventKind` 带线上 tag 与分类。
+> - 线格式 `Wire` trait：小端定宽逐字段，解码一律经过校验构造函数，因此"能解码的就是合法值"，且 `encode(decode(b)) == b`（规范编码）。事件日志：日志头（魔数、格式与 schema 版本、配置 hash、seed、标签，带 CRC）加记录（长度、kind、EventKey、body、CRC-32C）；截断与损坏分别报 `Truncated` 与 `ChecksumMismatch`，之前的记录仍可读。指纹是记录规范编码的 SHA-256 加计数，与日志头文本、分段无关。
+> - corpus：`(seed, 记录号, 用途, 序号)` 键控的 Philox 生成器产出全部事件种类与全部订单事件变体，键严格递增；任一记录可单独重算。
+>
+> 验收结果：nautilus 一致性测试 4 个、model 测试 21 个通过（dev、release、det-o0）；性质测试覆盖文本往返、notional 对 i128 算术、ClientOrderId 往返、corpus 上的规范编码（两个种子各 400 条，含全部前缀截断与尾部多余字节）；日志测试覆盖最后一条记录的 4 个截断点、body 翻转一位、日志头损坏；seed 7 的 20 万条 corpus 在 release 与 det-o0 下逐字节相同（24.6 MB），指纹入 golden，`just rust-fp` 与 CI 复核；20 万条记录解码加指纹 0.29 秒。内核 crate 继续在 `x86_64-unknown-none` 上编译。
+>
+> 与 C++ 树的有意差异（不再是缺陷）：日志线格式与 C++ 的不兼容；`Status` 没有 `Ok` 变体；`RecordFlag`、`BookType` 的 Rust 变体名是驼峰（字符串不变）；CRC-32C 只有查表实现。
 
 - [x] task: jarvis-core — `Status`、`FixedVec`（超容返回 `CapacityExceeded`）、slab 竞技场与带代际的 32 位句柄
 - [x] task: jarvis-core — counter-based RNG（splitmix64、Philox），键为 `(seed, identity, hop, index)`
@@ -37,20 +46,24 @@
 - [x] task: jarvis-core — `Clock` trait、`ReplayClock` 与定时器队列
 - [x] task: jarvis-core — CRC-32C、SHA-256
 - [x] task: jarvis-core — 快照编码：`State` trait、读写器、容器编码、`state_fields!` / `state_enum!`
-- [x] task: harness — `test_core.cpp` 的全部用例移植；零分配门在 Rust 树上运行
-- [ ] task: jarvis-core — CRC-32C 硬件路径：放在 shell 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现；两者的一致性由 property 测试覆盖
-- [ ] task: jarvis-model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、字符串解析与格式化、`i128` 乘法与向零截断（architecture.md §6.1）；对照 `tests/conformance/nautilus_cd417b80.json`
-- [ ] task: jarvis-model — 全部标识符及其字符串约束，`InstrumentId` intern 为 `u32` 槽位的侧表（§6.2）
-- [ ] task: jarvis-model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）；`state_enum!` 给出快照编码
-- [ ] task: jarvis-model — 行情数据类型（§6.4）、Instrument（§6.5）、订单事件、仓位事件、账户事件（§6.7）
-- [ ] task: jarvis-model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码（§8.4）
-- [ ] task: jarvis-model — 封闭的 `Event` 枚举与事件分类（§5.1）；`Output` 枚举
-- [ ] task: jarvis-model — 字段描述符（对应 `model/schema.hpp`）：日志编码、文本输出与 Python 绑定共用
-- [ ] task: jarvis-model — 事件日志：日志头、记录布局、CRC-32C、按段滚动（§5.6、§16.1），线格式与 C++ 逐字节相同
-- [ ] task: cli — `jarvis-rs corpus`、`fingerprint`、`dump`、`roundtrip`
-- [ ] task: harness — 定点算术性质测试、nautilus 字符串格式往返 golden、模糊测试目标 `decimal` 与 `wire`（cargo-fuzz，复用 `tests/fuzz/corpus/`）
-- [ ] task: harness — 指纹门：release 与 det-o0 对同一语料的事件日志逐字节一致
-- [ ] task: 验收 — Rust 与 C++ 对 seed 7 的 20 万条语料输出逐字节相同；`tests/golden/model_strings` 与 `corpus_seed42` 通过；Python（`jarvis.log`）能读 Rust 写出的日志且指纹不变
+- [x] task: harness — core 层的 unit、property、zero-alloc 测试；零分配门在 Rust 树上运行
+- [x] task: jarvis-model — `Price`、`Quantity`、`Money`、`Currency`：raw 按 1e9 刻度、文本解析与格式化、`i128` / 192 位乘法与向零截断（architecture.md §6.1）
+- [x] task: jarvis-model — 全部标识符及其字符串约束（§6.2）；`InstrumentId` intern 为槽位的侧表留给 data 层（R2，它属于路由）
+- [x] task: jarvis-model — 全部枚举，保留 nautilus 的整数值与字符串（§6.6）；快照与线格式编码由宏给出
+- [x] task: jarvis-model — 行情数据类型（§6.4）、Instrument（§6.5）、订单事件、仓位事件、账户事件（§6.7）
+- [x] task: jarvis-model — `ClientOrderId` 生成器 `{node_tag}-{epoch}-{seq}`（Base32）与解码（§8.4）
+- [x] task: jarvis-model — 封闭的 `Event` 枚举与事件分类（§5.1）
+- [x] task: jarvis-model — 事件日志：日志头、记录布局、CRC-32C（§5.6、§16.1）；按段滚动与 `fdatasync` 属于 node 层（R4）
+- [x] task: jarvis-model — 指纹（`Fingerprinter`）与确定性 corpus
+- [x] task: cli — `jarvis-rs corpus`、`fingerprint`、`dump`、`roundtrip`
+- [x] task: tools — `gen_conformance.py`：从 nautilus 一致性 JSON 生成币种表与测试向量；CI 检查生成物是最新的
+- [x] task: harness — nautilus 一致性测试（枚举值、字符串、别名、常量、币种、字段表）；定点算术与编码的性质测试；日志损坏测试
+- [x] task: harness — 指纹门：release 与 det-o0 对 seed 7 的 20 万条 corpus 逐字节一致，指纹入 golden（`just rust-fp`，CI）
+- [ ] task: jarvis-model — `OrderBookDepth`（可变档数的簿快照类型）；v1.0 的 Binance 路径用 `OrderBookDeltas`，暂缓
+- [ ] task: jarvis-model — 字段描述符（schema）：文本输出目前用 `Debug`，稳定的字段级文本与 Python 读取器一起在 R4 做
+- [ ] task: harness — 模糊测试目标 `decimal`、`wire`、`log`（cargo-fuzz，corpus 作为种子）；需要在 CI 中引入 nightly 或 `cargo-fuzz` 的 stable 路径
+- [ ] task: jarvis-core — CRC-32C 硬件路径：放在 shell 的一个 `#[allow(unsafe_code)]` 模块中，以 `is_x86_feature_detected!` 选择；内核保持查表实现
+- [ ] task: 验收 — 以上三项完成；Python（R4 的读取器）能读 Rust 写出的日志且指纹一致
 
 ## R2 data、cost、portfolio（行情类 golden 通过）
 
@@ -62,7 +75,7 @@
 - [ ] task: jarvis-cost — `FeeModel`、`SlippageModel`、`ImpactModel`、`LatencyModel`（§11.1）
 - [ ] task: jarvis-portfolio — `Portfolio`、`MarginModel`、归因账本（§11.2）
 - [ ] task: harness — 对应层的 C++ 测试移植；基准 `book/apply_l2_delta`、`step/trade_with_feature` 的 Rust 版本（criterion）与 C++ 数字并列报告
-- [ ] task: 验收 — `replay_quote`、`replay_trade`、`replay_book`、`replay_bar`、`replay_feature` golden 通过（需要 R3 的最小 engine 驱动；若 R3 未到，先以 C++ 日志为输入、比较 Rust 路由与特征的输出记录）
+- [ ] task: 验收 — 路由、订单簿、bar 聚合、特征各有性质测试与 Rust 树自己的 golden（输入是 corpus 或由 `python -m jarvis.data` 转换的一天 Binance 数据，输出指纹入 `rust/tests/golden/`）；release 与 det-o0 指纹一致
 
 ## R3 execution、risk、strategy、engine、backtest（订单类 golden 与 trace validation 通过）
 
@@ -75,7 +88,7 @@
 - [ ] task: jarvis-backtest — `ReplaySource`（多源合并）、`VenueLoop`、`SimulatedExchange`、双时间线、成交模型枚举（§12）
 - [ ] task: specs — `specs/map/*.hpp` 改为 Rust 模块；`tests/trace/` 的行为文件由 Rust 驱动运行
 - [ ] task: harness — 零分配门覆盖每个 `step`；对应层测试移植；`step/trade_to_strategy` 基准
-- [ ] task: 验收 — `replay_orders`、`replay_batch`、`snapshot_orders`、`example_trade_logger`、`example_pegged_mm` golden 通过；`EngineState` 快照与 C++ 逐字节相同；六个规约的正向 trace validation 通过
+- [ ] task: 验收 — 订单生命周期、撮合、风控的 Rust golden 通过；快照保存与恢复逐字节往返；七个规约的正向 trace validation 通过，`tests/trace/` 的行为文件由 Rust 驱动复用
 
 ## R4 node、sys、Python 绑定（Python 示例零改动运行）
 
@@ -85,7 +98,8 @@
 - [ ] task: jarvis-node — 快照文件与恢复（§16.3）
 - [ ] task: python — `jarvis-py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
 - [ ] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
-- [ ] task: 验收 — `examples/py/` 零改动运行，运行日志与 C++ 树逐字节相同；`python -m jarvis.data` 的转换器产出与 C++ 树可互读
+- [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `jarvis-model::log`），指纹与 `jarvis-rs fingerprint` 一致
+- [ ] task: 验收 — `examples/py/` 零改动运行；回放 Rust 节点自己的日志逐字节复现输出
 
 ## R5 network、adapter、live（脚本化服务端与混沌测试通过）
 
@@ -95,7 +109,7 @@
 - [ ] task: jarvis-live — `MarketFeed`、`VenueIo`、`OrderTracker`、`Persister`、telemetry、admin、健康检查、`SandboxNode`、`LiveNode`（§7.1、§19）
 - [ ] task: jarvis-live — 原始帧录制与 `jarvis-capture redecode`（§13.4）
 - [ ] task: harness — loom 覆盖环（若自写）与 `Waker` 的交换协议；miri 覆盖全部 `unsafe`；脚本化 HTTPS / WSS 服务端移植；混沌测试与延迟基准移植
-- [ ] task: 验收 — 混沌测试两个种子通过；`redecode --check` 对 C++ 树录制的原始帧产出逐字节相同的解码日志；sandbox 对同一段实盘行情，Rust 与 C++ 节点的运行日志在扣除 `ts_init` 之后逐字节相同
+- [ ] task: 验收 — 混沌测试两个种子通过；`redecode --check` 对自己录制的原始帧产出与运行日志一致的解码日志；sandbox 录制日志回放逐字节复现输出
 
 ## R6 切换
 

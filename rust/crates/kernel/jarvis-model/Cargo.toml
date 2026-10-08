@@ -12,3 +12,6 @@ workspace = true
 
 [dependencies]
 jarvis-core.workspace = true
+
+[dev-dependencies]
+jarvis-testkit.workspace = true
