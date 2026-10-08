@@ -16,10 +16,10 @@ pub struct Entry<T> {
 /// by heap layout.
 #[derive(Clone, Debug)]
 pub struct PriorityQueue<T> {
-    pub(crate) heap: FixedVec<Entry<T>>,
+    heap: FixedVec<Entry<T>>,
 }
 
-impl<T: Copy> PriorityQueue<T> {
+impl<T> PriorityQueue<T> {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self { heap: FixedVec::with_capacity(capacity) }
@@ -27,8 +27,7 @@ impl<T: Copy> PriorityQueue<T> {
 
     pub fn push(&mut self, key: EventKey, payload: T) -> Result<()> {
         self.heap.push(Entry { key, payload })?;
-        let last = self.heap.len() - 1;
-        self.sift_up(last);
+        self.sift_up(self.heap.len() - 1);
         Ok(())
     }
 
@@ -48,57 +47,46 @@ impl<T: Copy> PriorityQueue<T> {
         Some(top)
     }
 
-    /// The entry with the smallest key among those for which `matches(entry)` is true, without
-    /// changing the heap: it looks below an entry only when that entry does not match (a match's
+    /// The entry with the smallest key among those for which `matches` is true, without changing
+    /// the heap. It descends below an entry only when that entry does not match (a match's
     /// descendants have larger keys), so it reads about as many entries as there are non-matching
     /// ones above the answer.
     #[must_use]
     pub fn min_where(&self, mut matches: impl FnMut(&Entry<T>) -> bool) -> Option<&Entry<T>> {
-        let mut best: Option<&Entry<T>> = None;
-        // Depth first; a pending right child per level at most, and a heap is at most 64 levels.
+        // Depth-first with an explicit stack: one pending right child per level, and a heap of at
+        // most 2^64 entries has 64 levels, so 128 slots never overflow and nothing allocates.
         let mut pending = [0usize; 128];
         let mut depth = 0;
+        let mut best: Option<&Entry<T>> = None;
         if !self.heap.is_empty() {
-            pending[depth] = 0;
-            depth += 1;
+            pending[0] = 0;
+            depth = 1;
         }
         while depth > 0 {
             depth -= 1;
             let i = pending[depth];
-            let e = &self.heap[i];
-            if let Some(b) = best {
-                if e.key >= b.key {
-                    continue; // nothing below it is smaller either
-                }
+            let entry = &self.heap[i];
+            if best.is_some_and(|b| entry.key >= b.key) {
+                continue; // nothing below it is smaller either
             }
-            if matches(e) {
-                best = Some(e);
+            if matches(entry) {
+                best = Some(entry);
                 continue;
             }
-            let left = 2 * i + 1;
-            if left + 1 < self.heap.len() {
-                pending[depth] = left + 1;
-                depth += 1;
-            }
-            if left < self.heap.len() {
-                pending[depth] = left;
-                depth += 1;
+            for child in [2 * i + 2, 2 * i + 1] {
+                if child < self.heap.len() {
+                    pending[depth] = child;
+                    depth += 1;
+                }
             }
         }
         best
     }
 
-    /// Keeps only entries for which `keep(entry)` is true, then restores the heap. Used to purge
-    /// cancelled entries without allocating.
-    pub fn retain(&mut self, mut keep: impl FnMut(&Entry<T>) -> bool) {
-        let mut write = 0;
-        for read in 0..self.heap.len() {
-            if keep(&self.heap[read]) {
-                self.heap[write] = self.heap[read];
-                write += 1;
-            }
-        }
-        self.heap.truncate(write);
+    /// Keeps only the entries for which `keep` is true and restores the heap, without
+    /// allocating. Used to purge cancelled timers.
+    pub fn retain(&mut self, keep: impl FnMut(&Entry<T>) -> bool) {
+        self.heap.retain(keep);
         for i in (0..self.heap.len() / 2).rev() {
             self.sift_down(i);
         }
@@ -123,6 +111,14 @@ impl<T: Copy> PriorityQueue<T> {
     pub fn clear(&mut self) {
         self.heap.clear();
     }
+    /// The entries in heap order (a valid heap, not sorted); the snapshot encoding stores them.
+    #[must_use]
+    pub fn as_heap(&self) -> &FixedVec<Entry<T>> {
+        &self.heap
+    }
+    pub(crate) fn heap_mut(&mut self) -> &mut FixedVec<Entry<T>> {
+        &mut self.heap
+    }
 
     fn sift_up(&mut self, mut i: usize) {
         while i > 0 {
@@ -138,8 +134,7 @@ impl<T: Copy> PriorityQueue<T> {
     fn sift_down(&mut self, mut i: usize) {
         let n = self.heap.len();
         loop {
-            let left = 2 * i + 1;
-            let right = left + 1;
+            let (left, right) = (2 * i + 1, 2 * i + 2);
             let mut smallest = i;
             if left < n && self.heap[left].key < self.heap[smallest].key {
                 smallest = left;

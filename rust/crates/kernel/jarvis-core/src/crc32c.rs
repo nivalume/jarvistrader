@@ -46,17 +46,12 @@ pub const fn crc32c_init() -> u32 {
 pub fn crc32c_extend(mut state: u32, data: &[u8]) -> u32 {
     let mut chunks = data.chunks_exact(8);
     for chunk in &mut chunks {
-        let word = u64::from_le_bytes([
-            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-        ]) ^ u64::from(state);
-        state = TABLES[7][(word & 0xFF) as usize]
-            ^ TABLES[6][((word >> 8) & 0xFF) as usize]
-            ^ TABLES[5][((word >> 16) & 0xFF) as usize]
-            ^ TABLES[4][((word >> 24) & 0xFF) as usize]
-            ^ TABLES[3][((word >> 32) & 0xFF) as usize]
-            ^ TABLES[2][((word >> 40) & 0xFF) as usize]
-            ^ TABLES[1][((word >> 48) & 0xFF) as usize]
-            ^ TABLES[0][((word >> 56) & 0xFF) as usize];
+        let word = u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8])) ^ u64::from(state);
+        state = word
+            .to_le_bytes()
+            .iter()
+            .zip(TABLES.iter().rev())
+            .fold(0, |acc, (&byte, table)| acc ^ table[byte as usize]);
     }
     crc32c_bytewise(state, chunks.remainder())
 }

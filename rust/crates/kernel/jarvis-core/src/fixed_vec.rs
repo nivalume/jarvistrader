@@ -23,8 +23,14 @@ impl<T> FixedVec<T> {
         Self { items: Vec::with_capacity(capacity), capacity }
     }
 
+    /// Builds a vector whose capacity is the number of items.
+    pub fn from_iter_exact(items: impl IntoIterator<Item = T>) -> Self {
+        let items: Vec<T> = items.into_iter().collect();
+        Self { capacity: items.len(), items }
+    }
+
     pub fn push(&mut self, value: T) -> Result<()> {
-        if self.items.len() >= self.capacity {
+        if self.is_full() {
             return Err(Status::CapacityExceeded);
         }
         self.items.push(value);
@@ -43,14 +49,16 @@ impl<T> FixedVec<T> {
     pub fn pop(&mut self) -> Option<T> {
         self.items.pop()
     }
-
     pub fn clear(&mut self) {
         self.items.clear();
     }
-
     /// Drops the elements past `len`; a no-op when `len` is not smaller than the length.
     pub fn truncate(&mut self, len: usize) {
         self.items.truncate(len);
+    }
+    /// Keeps the elements for which `keep` is true, in order, without allocating.
+    pub fn retain(&mut self, keep: impl FnMut(&T) -> bool) {
+        self.items.retain(keep);
     }
 
     #[must_use]
@@ -68,13 +76,6 @@ impl<T> FixedVec<T> {
     #[must_use]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.items
-    }
-
-    /// Replaces the capacity and contents at once; the snapshot reader uses it for a vector that
-    /// was built empty (capacity 0) and takes its size from the saved state.
-    pub(crate) fn reset_with_capacity(&mut self, capacity: usize) {
-        self.items = Vec::with_capacity(capacity);
-        self.capacity = capacity;
     }
 }
 
@@ -107,14 +108,17 @@ impl<T> DerefMut for FixedVec<T> {
     }
 }
 
-impl<T: Default + Clone> FixedVec<T> {
-    /// Sets the length to `n` default elements; `CapacityExceeded` past the capacity.
-    pub fn resize_default(&mut self, n: usize) -> Result<()> {
-        if n > self.capacity {
-            return Err(Status::CapacityExceeded);
-        }
-        self.items.clear();
-        self.items.resize(n, T::default());
-        Ok(())
+impl<'a, T> IntoIterator for &'a FixedVec<T> {
+    type Item = &'a T;
+    type IntoIter = core::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+impl<'a, T> IntoIterator for &'a mut FixedVec<T> {
+    type Item = &'a mut T;
+    type IntoIter = core::slice::IterMut<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter_mut()
     }
 }

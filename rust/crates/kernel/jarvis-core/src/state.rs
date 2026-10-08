@@ -20,12 +20,12 @@
 
 use alloc::vec::Vec;
 
-use crate::arena::{Arena, Handle, Slot};
-use crate::clock::{HeapEntry, TimerKey, TimerQueue, TimerSlot};
+use crate::clock::{Timer, TimerKey, TimerQueue};
 use crate::event_key::EventKey;
 use crate::fixed_string::FixedString;
 use crate::fixed_vec::FixedVec;
 use crate::priority_queue::{Entry, PriorityQueue};
+use crate::slot_map::{Handle, SlotMap};
 use crate::status::{Result, Status};
 use crate::time::{DurationNanos, UnixNanos};
 
@@ -401,11 +401,11 @@ pub fn read_length(r: &mut StateReader<'_>, capacity: usize) -> usize {
 
 /// Snapshot encoding of a fixed vector: the capacity, the length, the elements. A vector built
 /// empty (capacity 0) takes the saved capacity: those are sized on first use, from data.
-impl<T: State + Default + Clone> State for FixedVec<T> {
+impl<T: State + Default> State for FixedVec<T> {
     fn write(&self, w: &mut StateWriter<'_>) {
         w.u32(self.capacity() as u32);
         w.u32(self.len() as u32);
-        for item in self.iter() {
+        for item in self {
             item.write(w);
         }
     }
@@ -416,16 +416,17 @@ impl<T: State + Default + Clone> State for FixedVec<T> {
                 r.fail(Status::CapacityExceeded);
                 return;
             }
-            self.reset_with_capacity(capacity);
+            *self = FixedVec::with_capacity(capacity);
         }
-        let n = r.u32() as usize;
-        if n > self.capacity() || !r.is_ok() {
-            r.fail(Status::CapacityExceeded);
-            return;
-        }
-        let _ = self.resize_default(n);
-        for item in self.iter_mut() {
+        let n = read_length(r, self.capacity());
+        self.clear();
+        for _ in 0..n {
+            let mut item = T::default();
             item.read(r);
+            if self.push(item).is_err() {
+                r.fail(Status::CapacityExceeded);
+                return;
+            }
         }
     }
 }
@@ -481,61 +482,17 @@ pub fn read_sparse(r: &mut StateReader<'_>, v: &mut FixedVec<u64>) {
     }
 }
 
-/// Snapshot encoding of an arena: every slot's generation and occupancy, the live values, and the
-/// free list in its order (it decides the next handles).
-impl<T: State + Default, Tag> State for Arena<T, Tag> {
+/// Snapshot encoding of a slot map: see `SlotMap::write_state`.
+impl<T: State + Default, Tag> State for SlotMap<T, Tag> {
     fn write(&self, w: &mut StateWriter<'_>) {
-        w.u32(self.slots.len() as u32);
-        for slot in &self.slots {
-            w.u32(slot.generation);
-            slot.occupied.write(w);
-            if slot.occupied {
-                slot.value.write(w);
-            }
-        }
-        w.u32(self.free.len() as u32);
-        for &index in &self.free {
-            w.u32(index);
-        }
-        w.u64(self.len as u64);
+        self.write_state(w);
     }
     fn read(&mut self, r: &mut StateReader<'_>) {
-        let capacity = r.u32() as usize;
-        if capacity != self.slots.len() {
-            r.fail(Status::CapacityExceeded);
-            return;
-        }
-        for slot in &mut self.slots {
-            slot.generation = r.u32();
-            slot.occupied.read(r);
-            slot.value = T::default();
-            if slot.occupied {
-                slot.value.read(r);
-            }
-        }
-        let free = r.u32() as usize;
-        if free > self.slots.len() {
-            r.fail(Status::CapacityExceeded);
-            return;
-        }
-        self.free.clear();
-        self.free.resize(free, 0);
-        for index in &mut self.free {
-            *index = r.u32();
-            if *index as usize >= capacity {
-                r.fail(Status::OutOfRange);
-                return;
-            }
-        }
-        let len = r.u64();
-        self.len = len as usize;
-        if self.len + self.free.len() != self.slots.len() {
-            r.fail(Status::InvalidState);
-        }
+        self.read_state(r);
     }
 }
 
-impl<T: State + Default + Clone> State for Entry<T> {
+impl<T: State + Default> State for Entry<T> {
     fn write(&self, w: &mut StateWriter<'_>) {
         self.key.write(w);
         self.payload.write(w);
@@ -547,22 +504,15 @@ impl<T: State + Default + Clone> State for Entry<T> {
 }
 
 /// Snapshot encoding of a priority queue: the heap array as it is (a valid heap stays one).
-impl<T: State + Default + Copy> State for PriorityQueue<T> {
+impl<T: State + Default> State for PriorityQueue<T> {
     fn write(&self, w: &mut StateWriter<'_>) {
-        self.heap.write(w);
+        self.as_heap().write(w);
     }
     fn read(&mut self, r: &mut StateReader<'_>) {
-        self.heap.read(r);
+        self.heap_mut().read(r);
     }
 }
 
-state_fields!(TimerSlot { key, period, armed_seq });
-state_fields!(HeapEntry { handle });
-// Snapshot encoding of the timer queue: the timers, the heap with its stale entries, and the
-// arming counter.
-state_fields!(TimerQueue { slots, heap, seq });
-
-// `Slot` is private to the arena module; its fields are written inline above so the layout is
-// visible in one place. This keeps the type referenced from here.
-#[allow(dead_code)]
-fn slot_layout_is_inline<T>(_: &Slot<T>) {}
+state_fields!(Timer { key, period, armed_seq });
+// The timer queue: the timers, the heap with its stale entries, and the arming counter.
+state_fields!(TimerQueue { timers, heap, seq });

@@ -12,6 +12,14 @@ impl DurationNanos {
         Self(ns)
     }
     #[must_use]
+    pub const fn from_millis(ms: u64) -> Self {
+        Self(ms * 1_000_000)
+    }
+    #[must_use]
+    pub const fn from_secs(s: u64) -> Self {
+        Self(s * NANOS_PER_SECOND)
+    }
+    #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }
@@ -36,19 +44,44 @@ impl UnixNanos {
     }
 
     /// This instant plus `d`; `Overflow` past the range of `u64`.
-    pub const fn plus(self, d: DurationNanos) -> Result<UnixNanos> {
-        match self.0.checked_add(d.0) {
-            Some(sum) => Ok(UnixNanos(sum)),
-            None => Err(Status::Overflow),
-        }
+    pub fn plus(self, d: DurationNanos) -> Result<UnixNanos> {
+        self.0.checked_add(d.0).map(UnixNanos).ok_or(Status::Overflow)
     }
 
     /// Duration from `earlier` to this instant; `OutOfRange` if `earlier` is later.
-    pub const fn since(self, earlier: UnixNanos) -> Result<DurationNanos> {
-        if earlier.0 > self.0 {
-            return Err(Status::OutOfRange);
-        }
-        Ok(DurationNanos(self.0 - earlier.0))
+    pub fn since(self, earlier: UnixNanos) -> Result<DurationNanos> {
+        self.0.checked_sub(earlier.0).map(DurationNanos).ok_or(Status::OutOfRange)
+    }
+
+    /// Formats as RFC 3339 into a stack buffer; see [`format_rfc3339`].
+    #[must_use]
+    pub fn to_rfc3339(self) -> Rfc3339 {
+        let mut text = Rfc3339 { buf: [0; RFC3339_MAX_LENGTH], len: 0 };
+        text.len = format_rfc3339(self, &mut text.buf).unwrap_or(0);
+        text
+    }
+}
+
+/// RFC 3339 text on the stack.
+#[derive(Clone, Copy, Debug)]
+pub struct Rfc3339 {
+    buf: [u8; RFC3339_MAX_LENGTH],
+    len: usize,
+}
+impl Rfc3339 {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+}
+impl core::fmt::Display for Rfc3339 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl core::fmt::Display for UnixNanos {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.to_rfc3339().as_str())
     }
 }
 
@@ -57,25 +90,24 @@ pub const SECONDS_PER_DAY: u64 = 86_400;
 /// `"YYYY-MM-DDTHH:MM:SS.fffffffff+00:00"`
 pub const RFC3339_MAX_LENGTH: usize = 35;
 
-/// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant, "chrono-compatible
-/// low-level date algorithms").
-#[must_use]
-pub const fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = (if year >= 0 { year } else { year - 399 }) / 400;
-    let yoe = (year - era * 400) as u64;
-    let mp = if month > 2 { month - 3 } else { month + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + day as u64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i64 - 719_468
-}
-
 /// A proleptic Gregorian calendar date.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CivilDate {
     pub year: i64,
     pub month: u32,
     pub day: u32,
+}
+
+/// Days since 1970-01-01 (H. Hinnant, "chrono-compatible low-level date algorithms").
+#[must_use]
+pub const fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = (if year >= 0 { year } else { year - 399 }) / 400;
+    let yoe = (year - era * 400) as u64;
+    let mp = (if month > 2 { month - 3 } else { month + 9 }) as u64;
+    let doy = (153 * mp + 2) / 5 + day as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
 }
 
 /// The inverse of [`days_from_civil`].
@@ -93,207 +125,182 @@ pub const fn civil_from_days(days: i64) -> CivilDate {
     CivilDate { year, month, day }
 }
 
-const fn put_digits(out: &mut [u8], pos: &mut usize, mut value: u64, width: usize) {
-    let mut i = width;
-    while i > 0 {
-        out[*pos + i - 1] = b'0' + (value % 10) as u8;
-        value /= 10;
-        i -= 1;
-    }
-    *pos += width;
+/// Appends `value` as exactly `width` decimal digits.
+struct Out<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
 }
-
-const fn read_digits(text: &[u8], pos: &mut usize, width: usize) -> Option<u64> {
-    if *pos + width > text.len() {
-        return None;
-    }
-    let mut value: u64 = 0;
-    let mut i = 0;
-    while i < width {
-        let c = text[*pos + i];
-        if !c.is_ascii_digit() {
-            return None;
+impl Out<'_> {
+    fn digits(&mut self, mut value: u64, width: usize) {
+        for slot in self.buf[self.pos..self.pos + width].iter_mut().rev() {
+            *slot = b'0' + (value % 10) as u8;
+            value /= 10;
         }
-        value = value * 10 + (c - b'0') as u64;
-        i += 1;
+        self.pos += width;
     }
-    *pos += width;
-    Some(value)
-}
-
-const fn expect(text: &[u8], pos: &mut usize, c: u8) -> bool {
-    if *pos >= text.len() || text[*pos] != c {
-        return false;
+    fn byte(&mut self, b: u8) {
+        self.buf[self.pos] = b;
+        self.pos += 1;
     }
-    *pos += 1;
-    true
+    fn bytes(&mut self, b: &[u8]) {
+        self.buf[self.pos..self.pos + b.len()].copy_from_slice(b);
+        self.pos += b.len();
+    }
 }
 
 /// Formats like nautilus `UnixNanos::to_rfc3339`: `+00:00` offset and 0, 3, 6 or 9 fractional
 /// digits, whichever shows every non-zero digit. Returns the number of bytes written; `out` needs
 /// [`RFC3339_MAX_LENGTH`] bytes.
-pub const fn format_rfc3339(t: UnixNanos, out: &mut [u8]) -> Result<usize> {
+pub fn format_rfc3339(t: UnixNanos, out: &mut [u8]) -> Result<usize> {
     if out.len() < RFC3339_MAX_LENGTH {
         return Err(Status::OutOfRange);
     }
     let seconds = t.0 / NANOS_PER_SECOND;
     let nanos = t.0 % NANOS_PER_SECOND;
-    let days = seconds / SECONDS_PER_DAY;
+    let date = civil_from_days((seconds / SECONDS_PER_DAY) as i64);
     let secs_of_day = seconds % SECONDS_PER_DAY;
-    let date = civil_from_days(days as i64);
 
-    let mut pos = 0;
-    put_digits(out, &mut pos, date.year as u64, 4);
-    out[pos] = b'-';
-    pos += 1;
-    put_digits(out, &mut pos, date.month as u64, 2);
-    out[pos] = b'-';
-    pos += 1;
-    put_digits(out, &mut pos, date.day as u64, 2);
-    out[pos] = b'T';
-    pos += 1;
-    put_digits(out, &mut pos, secs_of_day / 3600, 2);
-    out[pos] = b':';
-    pos += 1;
-    put_digits(out, &mut pos, secs_of_day / 60 % 60, 2);
-    out[pos] = b':';
-    pos += 1;
-    put_digits(out, &mut pos, secs_of_day % 60, 2);
+    let mut o = Out { buf: out, pos: 0 };
+    o.digits(date.year as u64, 4);
+    o.byte(b'-');
+    o.digits(u64::from(date.month), 2);
+    o.byte(b'-');
+    o.digits(u64::from(date.day), 2);
+    o.byte(b'T');
+    o.digits(secs_of_day / 3600, 2);
+    o.byte(b':');
+    o.digits(secs_of_day / 60 % 60, 2);
+    o.byte(b':');
+    o.digits(secs_of_day % 60, 2);
     if nanos != 0 {
-        out[pos] = b'.';
-        pos += 1;
-        if nanos % 1_000_000 == 0 {
-            put_digits(out, &mut pos, nanos / 1_000_000, 3);
-        } else if nanos % 1_000 == 0 {
-            put_digits(out, &mut pos, nanos / 1_000, 6);
-        } else {
-            put_digits(out, &mut pos, nanos, 9);
+        o.byte(b'.');
+        match nanos {
+            n if n % 1_000_000 == 0 => o.digits(n / 1_000_000, 3),
+            n if n % 1_000 == 0 => o.digits(n / 1_000, 6),
+            n => o.digits(n, 9),
         }
     }
-    let suffix = b"+00:00";
-    let mut i = 0;
-    while i < suffix.len() {
-        out[pos] = suffix[i];
-        pos += 1;
-        i += 1;
-    }
-    Ok(pos)
+    o.bytes(b"+00:00");
+    Ok(o.pos)
 }
 
-/// `"YYYY-MM-DD(T|t| )HH:MM:SS"` at `pos`: days since the epoch and seconds of the day.
-const fn parse_date_time(text: &[u8], pos: &mut usize) -> Result<(i64, u64)> {
-    let Some(year) = read_digits(text, pos, 4) else { return Err(Status::ParseError) };
-    if !expect(text, pos, b'-') {
-        return Err(Status::ParseError);
-    }
-    let Some(month) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if !expect(text, pos, b'-') {
-        return Err(Status::ParseError);
-    }
-    let Some(day) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if *pos >= text.len() || (text[*pos] != b'T' && text[*pos] != b't' && text[*pos] != b' ') {
-        return Err(Status::ParseError);
-    }
-    *pos += 1;
-    let Some(hour) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if !expect(text, pos, b':') {
-        return Err(Status::ParseError);
-    }
-    let Some(minute) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if !expect(text, pos, b':') {
-        return Err(Status::ParseError);
-    }
-    let Some(second) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 {
-        return Err(Status::OutOfRange);
-    }
-    let days = days_from_civil(year as i64, month as u32, day as u32);
-    let roundtrip = civil_from_days(days);
-    if roundtrip.month as u64 != month || roundtrip.day as u64 != day {
-        return Err(Status::OutOfRange); // e.g. February 30
-    }
-    Ok((days, hour * 3600 + minute * 60 + second))
+/// Cursor over the text being parsed.
+struct In<'a> {
+    bytes: &'a [u8],
+    pos: usize,
 }
-
-/// Optional `".f{1,9}"` at `pos`, as nanoseconds.
-const fn parse_fraction(text: &[u8], pos: &mut usize) -> Result<u64> {
-    if *pos >= text.len() || text[*pos] != b'.' {
-        return Ok(0);
+impl In<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
     }
-    *pos += 1;
-    let mut nanos: u64 = 0;
-    let mut digits = 0;
-    while *pos < text.len() && text[*pos].is_ascii_digit() {
-        if digits == 9 {
-            return Err(Status::PrecisionLoss);
+    /// Exactly `width` ASCII digits.
+    fn digits(&mut self, width: usize) -> Result<u64> {
+        let chunk = self.bytes.get(self.pos..self.pos + width).ok_or(Status::ParseError)?;
+        let mut value = 0u64;
+        for &c in chunk {
+            if !c.is_ascii_digit() {
+                return Err(Status::ParseError);
+            }
+            value = value * 10 + u64::from(c - b'0');
         }
-        nanos = nanos * 10 + (text[*pos] - b'0') as u64;
-        digits += 1;
-        *pos += 1;
+        self.pos += width;
+        Ok(value)
     }
-    if digits == 0 {
-        return Err(Status::ParseError);
+    fn expect(&mut self, c: u8) -> Result<()> {
+        if self.peek() != Some(c) {
+            return Err(Status::ParseError);
+        }
+        self.pos += 1;
+        Ok(())
     }
-    while digits < 9 {
-        nanos *= 10;
-        digits += 1;
+    fn take_if(&mut self, accept: impl Fn(u8) -> bool) -> Option<u8> {
+        let c = self.peek().filter(|&c| accept(c))?;
+        self.pos += 1;
+        Some(c)
     }
-    Ok(nanos)
-}
-
-/// `"Z"`, `"z"`, `"+HH:MM"` or `"-HH:MM"` at `pos`, as seconds east of UTC.
-const fn parse_offset(text: &[u8], pos: &mut usize) -> Result<i64> {
-    if *pos < text.len() && (text[*pos] == b'Z' || text[*pos] == b'z') {
-        *pos += 1;
-        return Ok(0);
-    }
-    if *pos >= text.len() || (text[*pos] != b'+' && text[*pos] != b'-') {
-        return Err(Status::ParseError);
-    }
-    let negative = text[*pos] == b'-';
-    *pos += 1;
-    let Some(oh) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if !expect(text, pos, b':') {
-        return Err(Status::ParseError);
-    }
-    let Some(om) = read_digits(text, pos, 2) else { return Err(Status::ParseError) };
-    if oh > 23 || om > 59 {
-        return Err(Status::ParseError);
-    }
-    let seconds = (oh * 3600 + om * 60) as i64;
-    Ok(if negative { -seconds } else { seconds })
 }
 
 /// Parses `"YYYY-MM-DDTHH:MM:SS[.f{1,9}](Z|+HH:MM|-HH:MM)"`; the separator may also be `t` or a
 /// space, as RFC 3339 section 5.6 allows. Instants before the epoch or past the range of
-/// [`UnixNanos`] are `OutOfRange`.
-pub const fn parse_rfc3339(text: &str) -> Result<UnixNanos> {
-    let text = text.as_bytes();
-    let mut pos = 0;
-    let (days, secs_of_day) = match parse_date_time(text, &mut pos) {
-        Ok(v) => v,
-        Err(s) => return Err(s),
+/// [`UnixNanos`] are `OutOfRange`; more than nine fractional digits is `PrecisionLoss`.
+pub fn parse_rfc3339(text: &str) -> Result<UnixNanos> {
+    let mut i = In { bytes: text.as_bytes(), pos: 0 };
+    let year = i.digits(4)?;
+    i.expect(b'-')?;
+    let month = i.digits(2)?;
+    i.expect(b'-')?;
+    let day = i.digits(2)?;
+    i.take_if(|c| matches!(c, b'T' | b't' | b' ')).ok_or(Status::ParseError)?;
+    let hour = i.digits(2)?;
+    i.expect(b':')?;
+    let minute = i.digits(2)?;
+    i.expect(b':')?;
+    let second = i.digits(2)?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return Err(Status::OutOfRange);
+    }
+    let days = days_from_civil(year as i64, month as u32, day as u32);
+    let back = civil_from_days(days);
+    if (u64::from(back.month), u64::from(back.day)) != (month, day) {
+        return Err(Status::OutOfRange); // e.g. February 30
+    }
+
+    let mut nanos = 0u64;
+    if i.take_if(|c| c == b'.').is_some() {
+        let mut digits = 0;
+        while let Some(c) = i.take_if(|c| c.is_ascii_digit()) {
+            if digits == 9 {
+                return Err(Status::PrecisionLoss);
+            }
+            nanos = nanos * 10 + u64::from(c - b'0');
+            digits += 1;
+        }
+        if digits == 0 {
+            return Err(Status::ParseError);
+        }
+        nanos *= 10u64.pow(9 - digits);
+    }
+
+    let offset_seconds: i64 = match i.take_if(|c| matches!(c, b'Z' | b'z' | b'+' | b'-')) {
+        Some(b'Z' | b'z') => 0,
+        Some(sign) => {
+            let oh = i.digits(2)?;
+            i.expect(b':')?;
+            let om = i.digits(2)?;
+            if oh > 23 || om > 59 {
+                return Err(Status::ParseError);
+            }
+            let seconds = (oh * 3600 + om * 60) as i64;
+            if sign == b'-' {
+                -seconds
+            } else {
+                seconds
+            }
+        }
+        None => return Err(Status::ParseError),
     };
-    let nanos = match parse_fraction(text, &mut pos) {
-        Ok(v) => v,
-        Err(s) => return Err(s),
-    };
-    let offset_seconds = match parse_offset(text, &mut pos) {
-        Ok(v) => v,
-        Err(s) => return Err(s),
-    };
-    if pos != text.len() {
+    if i.pos != i.bytes.len() {
         return Err(Status::ParseError);
     }
-    let total_seconds = days * SECONDS_PER_DAY as i64 + secs_of_day as i64 - offset_seconds;
-    if total_seconds < 0 {
-        return Err(Status::OutOfRange);
-    }
-    let Some(ns) = (total_seconds as u64).checked_mul(NANOS_PER_SECOND) else {
-        return Err(Status::OutOfRange);
-    };
-    match ns.checked_add(nanos) {
-        Some(ns) => Ok(UnixNanos(ns)),
-        None => Err(Status::OutOfRange),
+
+    let total_seconds = days * SECONDS_PER_DAY as i64 + (hour * 3600 + minute * 60 + second) as i64
+        - offset_seconds;
+    let seconds = u64::try_from(total_seconds).map_err(|_| Status::OutOfRange)?;
+    seconds
+        .checked_mul(NANOS_PER_SECOND)
+        .and_then(|ns| ns.checked_add(nanos))
+        .map(UnixNanos)
+        .ok_or(Status::OutOfRange)
+}
+
+impl core::str::FromStr for UnixNanos {
+    type Err = Status;
+    fn from_str(s: &str) -> Result<Self> {
+        parse_rfc3339(s)
     }
 }

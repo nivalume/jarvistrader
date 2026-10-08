@@ -276,7 +276,7 @@ impl<const N: usize> Wire for FixedString<N> {
 impl<T: Wire> Wire for FixedVec<T> {
     fn encode(&self, w: &mut WireWriter) {
         w.u32(self.len() as u32);
-        for item in self.iter() {
+        for item in self {
             item.encode(w);
         }
     }

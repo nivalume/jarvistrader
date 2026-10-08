@@ -10,7 +10,7 @@ use jarvis_core::time::{
     civil_from_days, days_from_civil, format_rfc3339, parse_rfc3339, RFC3339_MAX_LENGTH,
 };
 use jarvis_core::{
-    load_state, save_state, Arena, DurationNanos, EventKey, FixedString, FixedVec, PriorityQueue,
+    load_state, save_state, DurationNanos, EventKey, FixedString, FixedVec, PriorityQueue, SlotMap,
     Status, UnixNanos,
 };
 use jarvis_testkit::{for_all, AllocationScope};
@@ -18,9 +18,7 @@ use jarvis_testkit::{for_all, AllocationScope};
 jarvis_testkit::install_counting_allocator!();
 
 fn rfc3339(ns: u64) -> String {
-    let mut buffer = [0u8; RFC3339_MAX_LENGTH];
-    let written = format_rfc3339(UnixNanos::new(ns), &mut buffer).expect("format");
-    String::from_utf8(buffer[..written].to_vec()).expect("ascii")
+    UnixNanos::new(ns).to_rfc3339().as_str().to_string()
 }
 
 fn hex_str(digest: &[u8; 32]) -> String {
@@ -64,24 +62,26 @@ fn fixed_vec_refuses_to_grow_past_its_capacity() {
 }
 
 #[test]
-fn arena_handles_detect_reuse_of_a_slot() {
-    let mut arena: Arena<i32> = Arena::with_capacity(2);
-    let h1 = arena.insert(10).expect("room");
-    let h2 = arena.insert(20).expect("room");
-    assert_eq!(arena.insert(30), Err(Status::CapacityExceeded));
-    assert_eq!(arena.get(h1), Some(&10));
-    assert_eq!(arena.erase(h1), Ok(()));
-    assert_eq!(arena.get(h1), None);
-    assert_eq!(arena.erase(h1), Err(Status::NotFound));
-    let h3 = arena.insert(30).expect("room");
+fn slot_map_handles_detect_reuse_of_a_slot() {
+    let mut map: SlotMap<i32> = SlotMap::with_capacity(2);
+    let h1 = map.insert(10).expect("room");
+    let h2 = map.insert(20).expect("room");
+    assert_eq!(map.insert(30), Err(Status::CapacityExceeded));
+    assert!(map.is_full());
+    assert_eq!(map.get(h1), Some(&10));
+    assert_eq!(map.remove(h1), Ok(10));
+    assert_eq!(map.get(h1), None);
+    assert_eq!(map.remove(h1), Err(Status::NotFound));
+    let h3 = map.insert(30).expect("room");
     assert_eq!(h3.index, h1.index);
     assert_eq!(h3.generation, h1.generation + 1);
-    assert_eq!(arena.get(h1), None);
-    assert_eq!(arena.get(h3), Some(&30));
-    assert_eq!(arena.get(h2), Some(&20));
-    let mut seen = Vec::new();
-    arena.for_each(|_, v| seen.push(*v));
-    assert_eq!(seen, vec![30, 20]);
+    assert_eq!(map.get(h1), None);
+    assert_eq!(map[h3], 30);
+    assert_eq!(map.get(h2), Some(&20));
+    let seen: Vec<i32> = map.values().copied().collect();
+    assert_eq!(seen, vec![30, 20]); // slot order
+    *map.get_mut(h2).unwrap() += 1;
+    assert_eq!(map.iter().map(|(h, v)| (h.index, *v)).collect::<Vec<_>>(), vec![(0, 30), (1, 21)]);
 }
 
 #[test]
@@ -298,20 +298,34 @@ fn state_encoding_is_the_cpp_layout() {
 }
 
 #[test]
-fn arena_and_timer_queue_state_round_trips() {
-    let mut arena: Arena<u64> = Arena::with_capacity(4);
-    let h0 = arena.insert(5).unwrap();
-    let _h1 = arena.insert(6).unwrap();
-    arena.erase(h0).unwrap();
-    let h2 = arena.insert(7).unwrap();
-    let bytes = save_state(&arena).unwrap();
-    let mut restored: Arena<u64> = Arena::with_capacity(4);
+fn slot_map_and_timer_queue_state_round_trips() {
+    let mut map: SlotMap<u64> = SlotMap::with_capacity(4);
+    let h0 = map.insert(5).unwrap();
+    let _h1 = map.insert(6).unwrap();
+    map.remove(h0).unwrap();
+    let h2 = map.insert(7).unwrap();
+    let bytes = save_state(&map).unwrap();
+    let mut restored: SlotMap<u64> = SlotMap::with_capacity(4);
     load_state(&mut restored, &bytes).unwrap();
     assert_eq!(restored.get(h2), Some(&7));
     assert_eq!(restored.get(h0), None);
-    assert_eq!(restored.insert(8).unwrap(), arena.insert(8).unwrap());
-    let mut other: Arena<u64> = Arena::with_capacity(5);
+    assert_eq!(
+        restored.insert(8).unwrap(),
+        map.insert(8).unwrap(),
+        "the free list order is restored"
+    );
+    let mut other: SlotMap<u64> = SlotMap::with_capacity(5);
     assert_eq!(load_state(&mut other, &bytes), Err(Status::CapacityExceeded));
+    // A free list that repeats a slot, or names an occupied one, is refused.
+    let mut forged = bytes.clone();
+    forged.truncate(bytes.len() - 4); // drop the last free index ...
+    forged.extend_from_slice(&3u32.to_le_bytes()); // ... and repeat the first
+    let mut target: SlotMap<u64> = SlotMap::with_capacity(4);
+    assert_eq!(load_state(&mut target, &forged), Err(Status::InvalidState));
+    forged.truncate(bytes.len() - 4);
+    forged.extend_from_slice(&(h2.index).to_le_bytes()); // h2's slot is occupied
+    let mut target: SlotMap<u64> = SlotMap::with_capacity(4);
+    assert_eq!(load_state(&mut target, &forged), Err(Status::InvalidState));
 
     let mut timers = TimerQueue::with_capacity(4);
     let _ =
@@ -508,7 +522,7 @@ fn sliced_and_bytewise_crc32c_agree() {
 fn queue_timer_arena_and_formatting_operations_do_not_allocate() {
     let mut queue: PriorityQueue<u64> = PriorityQueue::with_capacity(256);
     let mut timers = TimerQueue::with_capacity(64);
-    let mut arena: Arena<u64> = Arena::with_capacity(64);
+    let mut map: SlotMap<u64> = SlotMap::with_capacity(64);
     let mut buffer = [0u8; RFC3339_MAX_LENGTH];
     let mut sink = 0u64;
 
@@ -525,8 +539,8 @@ fn queue_timer_arena_and_formatting_operations_do_not_allocate() {
             DurationNanos::new(3),
             TimerKey::new(0, i),
         );
-        if let Ok(ah) = arena.insert(u64::from(i)) {
-            let _ = arena.erase(ah);
+        if let Ok(h) = map.insert(u64::from(i)) {
+            let _ = map.remove(h);
         }
     }
     let mut n = 0;
