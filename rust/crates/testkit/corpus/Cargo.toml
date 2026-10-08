@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-cli"
-description = "The jarvis command-line tool of the Rust tree: corpus, fingerprint, dump, roundtrip, config, replay"
+name = "corpus"
+description = "Test support: the deterministic corpus of kernel inputs behind the encoding tests, the fuzz seeds and the determinism gate"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,11 +10,9 @@ publish.workspace = true
 [lints]
 workspace = true
 
-[[bin]]
-name = "jarvis-rs"
-path = "src/main.rs"
-
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
-corpus.workspace = true
+
+[dev-dependencies]
+jarvis-testkit.workspace = true

@@ -17,7 +17,7 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
 
 - `crates/kernel/`: `core` (fixed-capacity containers, `SlotMap` with generational
   handles, counter-based RNG, time, timers, checksums, snapshot encoding) and `model` (done: value types, identifiers, enums,
-  data and event types, the event log wire format, fingerprints, the deterministic corpus), then
+  data and event types, the event log wire format, fingerprints), then
   `data`, `cost`, `portfolio`, `execution`, `risk`, `strategy`, `engine`, `backtest` (skeletons). Every kernel crate is
   `#![no_std]`, `#![forbid(unsafe_code)]`, `#![deny(clippy::float_arithmetic)]`, and the
   directory's `clippy.toml` bans `HashMap`, `HashSet` and `BTreeMap`. Dependencies between them
@@ -25,6 +25,11 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   in the C++ tree.
 - `crates/shell/`: `sys`, `node`, `network`, `binance`, `live` (skeletons). std and third-party
   crates allowed; `unsafe` only in a module that says why.
+- `crates/testkit/corpus`: the deterministic corpus of kernel inputs (every event kind, every
+  order event variant, a pure function of the seed). Test support, not kernel code: it drives the
+  encoding and log tests in its own `tests/`, seeds the fuzzers, and is what the determinism gate
+  fingerprints. It sits above `model`, so `model`'s own tests cannot use it (a dev-dependency
+  cycle would build `model` twice); tests that need it live here.
 - `crates/testkit/jarvis-testkit`: the property-test generator (same splitmix64 stream as the
   C++ `testkit::Gen`), `for_all` with `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` /
   `JARVIS_PROP_CASE`, and the counting allocator behind the zero-allocation gate.

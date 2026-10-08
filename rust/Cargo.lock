@@ -25,6 +25,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "corpus"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "jarvis-testkit",
+ "model",
+]
+
+[[package]]
 name = "cost"
 version = "0.1.0"
 dependencies = [
@@ -80,6 +89,7 @@ name = "jarvis-cli"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "model",
 ]
 

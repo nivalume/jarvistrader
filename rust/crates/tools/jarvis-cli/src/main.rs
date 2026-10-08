@@ -5,9 +5,9 @@
 use std::io::{self, BufRead, Read, Write};
 use std::process::ExitCode;
 
+use corpus::Corpus;
 use kernel_core::sha256::{hex, Sha256};
 use model::bar::BarType;
-use model::corpus::Corpus;
 use model::log::{fingerprint, LogHeader, LogReader, LogWriter};
 use model::{InstrumentId, Money, Price, Quantity};
 

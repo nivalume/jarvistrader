@@ -19,6 +19,7 @@ members = [
   "crates/shell/jarvis-binance",
   "crates/shell/jarvis-live",
   "crates/testkit/jarvis-testkit",
+  "crates/testkit/corpus",
   "crates/tools/jarvis-cli",
 ]
 
@@ -46,6 +47,7 @@ jarvis-network = { path = "crates/shell/jarvis-network" }
 jarvis-binance = { path = "crates/shell/jarvis-binance" }
 jarvis-live = { path = "crates/shell/jarvis-live" }
 jarvis-testkit = { path = "crates/testkit/jarvis-testkit" }
+corpus = { path = "crates/testkit/corpus" }
 
 # Lints shared by every crate. Kernel crates add `#![no_std]`, `#![forbid(unsafe_code)]` and the
 # float ban in their lib.rs; the kernel directory's clippy.toml bans HashMap and unstable sorts.

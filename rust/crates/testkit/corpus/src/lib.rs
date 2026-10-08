@@ -1,43 +1,48 @@
-//! A deterministic corpus: every event kind, every order event variant, with field values drawn
-//! from a counter-based generator keyed by the seed and the record number. Two builds of the
-//! kernel must produce the same corpus byte for byte (the determinism gate), it seeds the fuzzers,
-//! and it drives the encoding property tests.
+//! A deterministic corpus of kernel inputs: every event kind, every order event variant, with
+//! field values drawn from a counter-based generator keyed by the seed and the record number.
+//!
+//! Test support, not kernel code (docs/rust-plan.md): it drives the encoding property tests, seeds
+//! the fuzzers, and is what the determinism gate fingerprints in two build profiles
+//! (`jarvis-rs corpus`). Two builds must produce the same corpus byte for byte.
 //!
 //! Every value goes through the type's validating constructor; a draw that lands on an invalid
 //! value is adjusted, never skipped, so the record count is exactly what was asked for.
+#![no_std]
+#![forbid(unsafe_code)]
+#![deny(clippy::float_arithmetic)]
 
 use kernel_core::clock::TimerKey;
 use kernel_core::rng::CounterRng;
 use kernel_core::{DurationNanos, EventKey, FixedString, FixedVec, Result, Status, UnixNanos};
 
-use crate::account::{AccountBalance, AccountState, MarginBalance};
-use crate::bar::{Bar, BarSpecification, BarType, CompositeSource};
-use crate::client_order_id;
-use crate::currency::Currency;
-use crate::data::{
+use model::account::{AccountBalance, AccountState, MarginBalance};
+use model::bar::{Bar, BarSpecification, BarType, CompositeSource};
+use model::client_order_id;
+use model::currency::Currency;
+use model::data::{
     BookOrder, FundingRateUpdate, IndexPriceUpdate, InstrumentClose, InstrumentStatus,
     LiquidationOrder, MarkPriceUpdate, OrderBookDelta, OrderBookDeltas, QuoteTick, TradeTick,
 };
-use crate::enums::{
+use model::enums::{
     AccountType, AggregationSource, AggressorSide, AssetClass, BarAggregation, BookAction,
     InstrumentCloseType, LiquiditySide, MarketStatusAction, OrderSide, OrderType, PriceType,
     RecordFlag, StopMode, TimeInForce, TriggerType,
 };
-use crate::event::{BatchEnd, Event, EventKind, RateLimitFeedback, Shutdown, TimerFired};
-use crate::fixed_point::{Price, Quantity, FIXED_SCALAR};
-use crate::identifiers::{
+use model::event::{BatchEnd, Event, EventKind, RateLimitFeedback, Shutdown, TimerFired};
+use model::fixed_point::{Price, Quantity, FIXED_SCALAR};
+use model::identifiers::{
     AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, Symbol, TradeId, TraderId,
     Venue, VenueOrderId,
 };
-use crate::instruments::{Instrument, InstrumentKind, InstrumentLimits};
-use crate::money::Money;
-use crate::order_events::{
+use model::instruments::{Instrument, InstrumentKind, InstrumentLimits};
+use model::money::Money;
+use model::order_events::{
     FillInfoFlags, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderDenied, OrderEmulated,
     OrderEvent, OrderEventHeader, OrderExpired, OrderFillVoided, OrderFilled, OrderInitialized,
     OrderModifyRejected, OrderPendingCancel, OrderPendingUpdate, OrderRejected, OrderReleased,
     OrderSubmitted, OrderTriggered, OrderUpdated,
 };
-use crate::uuid::Uuid4;
+use model::uuid::Uuid4;
 
 /// The generator. `hop` numbers in [`Draw`] name what a draw is for, so adding a field never shifts
 /// another field's value.

@@ -35,7 +35,7 @@
 > - 标识符各有规则（`InstrumentId` 按最后一个 `.` 拆分，`TraderId` 按最后一个 `-`，`AccountId` 按第一个 `-`），全部定长内联。`ClientOrderId` 格式 `{tag}-{epoch:6}-{seq:8}`，Base32 定宽，按下单顺序排序，可解码，最长 36 字符。
 > - 行情、instrument、账户、17 种订单事件、4 种仓位事件，每个类型有校验构造函数；封闭的 `Event` 枚举 17 种输入，`EventKind` 带线上 tag 与分类。
 > - 线格式 `Wire` trait：小端定宽逐字段，解码一律经过校验构造函数，因此"能解码的就是合法值"，且 `encode(decode(b)) == b`（规范编码）。事件日志：日志头（魔数、格式与 schema 版本、配置 hash、seed、标签，带 CRC）加记录（长度、kind、EventKey、body、CRC-32C）；截断与损坏分别报 `Truncated` 与 `ChecksumMismatch`，之前的记录仍可读。指纹是记录规范编码的 SHA-256 加计数，与日志头文本、分段无关。
-> - corpus：`(seed, 记录号, 用途, 序号)` 键控的 Philox 生成器产出全部事件种类与全部订单事件变体，键严格递增；任一记录可单独重算。
+> - corpus（`crates/testkit/corpus`）：`(seed, 记录号, 用途, 序号)` 键控的 Philox 生成器产出全部事件种类与全部订单事件变体，键严格递增；任一记录可单独重算。
 >
 > 验收结果：nautilus 一致性测试 4 个、model 测试 21 个通过（dev、release、det-o0）；性质测试覆盖文本往返、notional 对 i128 算术、ClientOrderId 往返、corpus 上的规范编码（两个种子各 400 条，含全部前缀截断与尾部多余字节）；日志测试覆盖最后一条记录的 4 个截断点、body 翻转一位、日志头损坏；seed 7 的 20 万条 corpus 在 release 与 det-o0 下逐字节相同（24.6 MB），指纹入 golden，`just rust-fp` 与 CI 复核；20 万条记录解码加指纹 0.29 秒。内核 crate 继续在 `x86_64-unknown-none` 上编译。
 >

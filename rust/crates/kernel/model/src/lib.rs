@@ -2,13 +2,13 @@
 //! `nautilus_trader` `crates/model` at `cd417b80` as a compatibility contract (identifiers and
 //! their string formats, fixed-point values on the 1e9 scale, enums with nautilus's integers and
 //! strings, data and event types with the same fields), and jarvis's own additions (the
-//! `ClientOrderId` format, the closed [`Event`] enum, the event log wire format, fingerprints
-//! and the deterministic corpus).
+//! `ClientOrderId` format, the closed [`Event`] enum, the event log wire format and fingerprints).
 //!
 //! The contract is checked by `tests/conformance.rs` against vectors generated from
 //! `tests/conformance/nautilus_cd417b80.json`; the encodings are checked by property tests
-//! (decode after encode is the identity, encode after decode reproduces the bytes) and by the
-//! determinism gate, which fingerprints the corpus in two build profiles.
+//! (decode after encode is the identity, encode after decode reproduces the bytes) over the
+//! `corpus` crate's deterministic corpus, and by the determinism gate, which fingerprints that
+//! corpus in two build profiles.
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(clippy::float_arithmetic)]
@@ -18,7 +18,6 @@ extern crate alloc;
 pub mod account;
 pub mod bar;
 pub mod client_order_id;
-pub mod corpus;
 pub mod currency;
 pub mod data;
 pub mod decimal;
