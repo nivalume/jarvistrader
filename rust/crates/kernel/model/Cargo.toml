@@ -14,4 +14,4 @@ workspace = true
 kernel-core.workspace = true
 
 [dev-dependencies]
-jarvis-testkit.workspace = true
+testkit.workspace = true

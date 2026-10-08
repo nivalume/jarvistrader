@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-binance"
-description = "Binance USDS-M adapter: codecs, streams, user stream, WS API, REST, instruments"
+name = "network"
+description = "Transport, WebSocket client, HTTP client, request signing"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,4 @@ workspace = true
 
 [dependencies]
 kernel-core.workspace = true
-model.workspace = true
-jarvis-network.workspace = true
-jarvis-sys.workspace = true
+sys.workspace = true

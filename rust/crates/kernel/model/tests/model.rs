@@ -4,7 +4,7 @@
 
 use core::str::FromStr;
 
-use jarvis_testkit::{for_all, Gen};
+use testkit::{for_all, Gen};
 use kernel_core::{FixedVec, Status, UnixNanos};
 use model::bar::{BarSpecification, BarType};
 use model::client_order_id;

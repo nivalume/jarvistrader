@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-network"
-description = "Transport, WebSocket client, HTTP client, request signing"
+name = "sys"
+description = "Operating system calls: durable files, sockets, shared libraries, stop signals, process, clocks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,3 @@ workspace = true
 
 [dependencies]
 kernel-core.workspace = true
-jarvis-sys.workspace = true

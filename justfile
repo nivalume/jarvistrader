@@ -156,7 +156,7 @@ rust-nostd:
 # Determinism gate of the Rust tree: the release and det-o0 builds write the seed 7 corpus
 # (200 000 records) byte for byte the same, and its fingerprint matches the golden file.
 rust-fp:
-    cd rust && cargo build -q --release -p jarvis-cli && cargo build -q --profile det-o0 -p jarvis-cli
+    cd rust && cargo build -q --release -p cli && cargo build -q --profile det-o0 -p cli
     cd rust && ./target/release/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-release.jlog > /dev/null
     cd rust && ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog > /dev/null
     cd rust && cmp target/fp-release.jlog target/fp-det-o0.jlog

@@ -10,7 +10,7 @@ cargo test --release                    # overflow-checks stay on
 cargo test --profile det-o0             # release semantics at opt-level 0: the determinism pair
 cargo clippy --all-targets -- -D warnings
 cargo check -p core --target x86_64-unknown-none   # the kernel needs no std
-cargo run -p jarvis-cli -- build-info
+cargo run -p cli -- build-info
 ```
 
 Layout (one crate per architecture layer, docs/architecture.md section 3):
@@ -30,10 +30,10 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   encoding and log tests in its own `tests/`, seeds the fuzzers, and is what the determinism gate
   fingerprints. It sits above `model`, so `model`'s own tests cannot use it (a dev-dependency
   cycle would build `model` twice); tests that need it live here.
-- `crates/testkit/jarvis-testkit`: the property-test generator (same splitmix64 stream as the
+- `crates/testkit/testkit`: the property-test generator (same splitmix64 stream as the
   C++ `testkit::Gen`), `for_all` with `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` /
   `JARVIS_PROP_CASE`, and the counting allocator behind the zero-allocation gate.
-- `crates/tools/jarvis-cli`: the `jarvis-rs` binary: `corpus`, `fingerprint`, `dump`,
+- `crates/tools/cli`: the `jarvis-rs` binary: `corpus`, `fingerprint`, `dump`,
   `roundtrip`, `sha256`, `crc32c`, `build-info`; more subcommands arrive with their layers.
 - `tests/golden/`: the Rust tree's golden fingerprints (see its README).
 - `tools/gen_conformance.py`: turns `tests/conformance/nautilus_cd417b80.json` into the

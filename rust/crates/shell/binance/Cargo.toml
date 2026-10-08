@@ -1,6 +1,6 @@
 [package]
-name = "jarvis-node"
-description = "Build info, node configuration, node composition, command-line entry points"
+name = "binance"
+description = "Binance USDS-M adapter: codecs, streams, user stream, WS API, REST, instruments"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,5 @@ workspace = true
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
-engine.workspace = true
-backtest.workspace = true
-jarvis-sys.workspace = true
+network.workspace = true
+sys.workspace = true

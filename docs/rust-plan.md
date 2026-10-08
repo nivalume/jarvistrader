@@ -15,9 +15,9 @@
 
 - [x] task: build — `rust/Cargo.toml` workspace：内核十个 crate、shell 五个 crate、testkit、cli；`[workspace.lints]` 统一 clippy 级别；`overflow-checks` 在 dev、release 全开；`det-o0` profile 继承 release 并关优化（对应 C++ 的 `det-o0` preset）
 - [x] task: build — 内核 crate 的契约写在每个 `lib.rs` 顶部：`#![no_std]`、`#![forbid(unsafe_code)]`、`#![deny(clippy::float_arithmetic)]`；分层靠 Cargo 依赖图（`data` 与 `cost` 同级不互相依赖，与 architecture.md 第 3 节的表一致）
-- [x] task: build — `rust/crates/kernel/clippy.toml`：内核禁 `HashMap`、`HashSet`、`BTreeMap`；`rust/clippy.toml`：全 workspace 禁 `std::time::{SystemTime, Instant}`（时间只能来自 `jarvis-sys`）
+- [x] task: build — `rust/crates/kernel/clippy.toml`：内核禁 `HashMap`、`HashSet`、`BTreeMap`；`rust/clippy.toml`：全 workspace 禁 `std::time::{SystemTime, Instant}`（时间只能来自 `sys`）
 - [x] task: build — `rust-toolchain.toml`（stable）、`rustfmt.toml`、`deny.toml`（内核零第三方依赖；shell 依赖按许可证白名单）
-- [x] task: testkit — `jarvis-testkit`：`Gen`（与 C++ `testkit::Gen` 同一 splitmix64 流）、`for_all` 与 `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` / `JARVIS_PROP_CASE`、`CountingAlloc` 全局分配器与 `AllocationScope`（零分配门）
+- [x] task: testkit — `testkit`：`Gen`（与 C++ `testkit::Gen` 同一 splitmix64 流）、`for_all` 与 `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` / `JARVIS_PROP_CASE`、`CountingAlloc` 全局分配器与 `AllocationScope`（零分配门）
 - [x] task: cli — `jarvis-rs` 二进制骨架：`build-info`、`sha256`、`crc32c`；其余子命令随各层落地
 - [x] task: ci — `rust` job：fmt、clippy `-D warnings`、三个 profile 的测试、`no_std` 目标检查；进入 `gate`
 - [x] task: justfile — `rust-check`、`rust-lint`、`rust-test`、`rust-nostd`
@@ -95,22 +95,22 @@
 
 ## R4 node、sys、Python 绑定（Python 示例零改动运行）
 
-- [ ] task: jarvis-sys — 崩溃安全的文件写入、阻塞 socket、共享库加载、停止信号、进程与环境变量、单调时钟（§3 sys）
-- [ ] task: jarvis-node — `NodeConfig`：toml + serde、`deny_unknown_fields`、`--env` 与 `--set` 覆盖、规范化与 hash 与 C++ 一致（§4.2）
-- [ ] task: jarvis-node — Node 生命周期状态机、`BacktestNode`、构建信息、`jarvis-rs replay` / `config` / `report`
-- [ ] task: jarvis-node — 快照文件与恢复（§16.3）
-- [ ] task: python — `jarvis-py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
+- [ ] task: sys — 崩溃安全的文件写入、阻塞 socket、共享库加载、停止信号、进程与环境变量、单调时钟（§3 sys）
+- [ ] task: node — `NodeConfig`：toml + serde、`deny_unknown_fields`、`--env` 与 `--set` 覆盖、规范化与 hash 与 C++ 一致（§4.2）
+- [ ] task: node — Node 生命周期状态机、`BacktestNode`、构建信息、`jarvis-rs replay` / `config` / `report`
+- [ ] task: node — 快照文件与恢复（§16.3）
+- [ ] task: python — `py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
 - [ ] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
 - [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `model::log`），指纹与 `jarvis-rs fingerprint` 一致
 - [ ] task: 验收 — `examples/py/` 零改动运行；回放 Rust 节点自己的日志逐字节复现输出
 
 ## R5 network、adapter、live（脚本化服务端与混沌测试通过）
 
-- [ ] task: jarvis-network — tokio + rustls + fastwebsockets 的 `WsClient`、hyper 的 `HttpsClient`、`Signer`；读空闲期限与 ping（§13）
-- [ ] task: jarvis-binance — `JsonCodec`（sonic-rs 或 simd-json）、流映射、订单簿同步、WS API、用户数据流、REST、启动检查、限速（§14）
-- [ ] task: jarvis-live — 环：热路径三条用 rtrb 传 `Event` / `QueuedCommand`，persist 用有界队列，冷路径 std mpsc；`Waker`；绑核（rust-migration.md §6.4）
-- [ ] task: jarvis-live — `MarketFeed`、`VenueIo`、`OrderTracker`、`Persister`、telemetry、admin、健康检查、`SandboxNode`、`LiveNode`（§7.1、§19）
-- [ ] task: jarvis-live — 原始帧录制与 `jarvis-capture redecode`（§13.4）
+- [ ] task: network — tokio + rustls + fastwebsockets 的 `WsClient`、hyper 的 `HttpsClient`、`Signer`；读空闲期限与 ping（§13）
+- [ ] task: binance — `JsonCodec`（sonic-rs 或 simd-json）、流映射、订单簿同步、WS API、用户数据流、REST、启动检查、限速（§14）
+- [ ] task: live — 环：热路径三条用 rtrb 传 `Event` / `QueuedCommand`，persist 用有界队列，冷路径 std mpsc；`Waker`；绑核（rust-migration.md §6.4）
+- [ ] task: live — `MarketFeed`、`VenueIo`、`OrderTracker`、`Persister`、telemetry、admin、健康检查、`SandboxNode`、`LiveNode`（§7.1、§19）
+- [ ] task: live — 原始帧录制与 `jarvis-capture redecode`（§13.4）
 - [ ] task: harness — loom 覆盖环（若自写）与 `Waker` 的交换协议；miri 覆盖全部 `unsafe`；脚本化 HTTPS / WSS 服务端移植；混沌测试与延迟基准移植
 - [ ] task: 验收 — 混沌测试两个种子通过；`redecode --check` 对自己录制的原始帧产出与运行日志一致的解码日志；sandbox 录制日志回放逐字节复现输出
 

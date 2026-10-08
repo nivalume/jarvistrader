@@ -347,8 +347,8 @@ jobs:
           cargo check $kernel --target x86_64-unknown-none
       - name: Determinism gate (release vs det-o0 corpus, golden fingerprint)
         run: |
-          cargo build --release -p jarvis-cli
-          cargo build --profile det-o0 -p jarvis-cli
+          cargo build --release -p cli
+          cargo build --profile det-o0 -p cli
           ./target/release/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-release.jlog
           ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog
           cmp target/fp-release.jlog target/fp-det-o0.jlog

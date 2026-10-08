@@ -4,8 +4,8 @@ msrv = "1.85"
 
 [[disallowed-types]]
 path = "std::time::SystemTime"
-reason = "the wall clock belongs to jarvis-sys; everything else receives time as a value"
+reason = "the wall clock belongs to sys; everything else receives time as a value"
 
 [[disallowed-types]]
 path = "std::time::Instant"
-reason = "the monotonic clock belongs to jarvis-sys; everything else receives time as a value"
+reason = "the monotonic clock belongs to sys; everything else receives time as a value"

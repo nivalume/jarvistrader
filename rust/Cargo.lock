@@ -18,10 +18,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "binance"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "model",
+ "network",
+ "sys",
+]
+
+[[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "corpus",
+ "model",
+]
+
+[[package]]
 name = "core"
 version = "0.1.0"
 dependencies = [
- "jarvis-testkit",
+ "testkit",
 ]
 
 [[package]]
@@ -29,8 +48,8 @@ name = "corpus"
 version = "0.1.0"
 dependencies = [
  "core",
- "jarvis-testkit",
  "model",
+ "testkit",
 ]
 
 [[package]]
@@ -75,73 +94,43 @@ dependencies = [
 ]
 
 [[package]]
-name = "jarvis-binance"
+name = "live"
 version = "0.1.0"
 dependencies = [
- "core",
- "jarvis-network",
- "jarvis-sys",
- "model",
-]
-
-[[package]]
-name = "jarvis-cli"
-version = "0.1.0"
-dependencies = [
- "core",
- "corpus",
- "model",
-]
-
-[[package]]
-name = "jarvis-live"
-version = "0.1.0"
-dependencies = [
+ "binance",
  "core",
  "engine",
- "jarvis-binance",
- "jarvis-network",
- "jarvis-node",
- "jarvis-sys",
  "model",
+ "network",
+ "node",
+ "sys",
 ]
-
-[[package]]
-name = "jarvis-network"
-version = "0.1.0"
-dependencies = [
- "core",
- "jarvis-sys",
-]
-
-[[package]]
-name = "jarvis-node"
-version = "0.1.0"
-dependencies = [
- "backtest",
- "core",
- "engine",
- "jarvis-sys",
- "model",
-]
-
-[[package]]
-name = "jarvis-sys"
-version = "0.1.0"
-dependencies = [
- "core",
-]
-
-[[package]]
-name = "jarvis-testkit"
-version = "0.1.0"
 
 [[package]]
 name = "model"
 version = "0.1.0"
 dependencies = [
  "core",
- "jarvis-testkit",
+ "testkit",
+]
+
+[[package]]
+name = "network"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "sys",
+]
+
+[[package]]
+name = "node"
+version = "0.1.0"
+dependencies = [
+ "backtest",
+ "core",
+ "engine",
+ "model",
+ "sys",
 ]
 
 [[package]]
@@ -178,3 +167,14 @@ dependencies = [
  "portfolio",
  "risk",
 ]
+
+[[package]]
+name = "sys"
+version = "0.1.0"
+dependencies = [
+ "core",
+]
+
+[[package]]
+name = "testkit"
+version = "0.1.0"

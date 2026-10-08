@@ -9,6 +9,6 @@ A fingerprint changes only with a deliberate change to the corpus generator or t
 which bumps `model::event::SCHEMA_VERSION`. Regenerate with:
 
 ```sh
-cargo run --release -p jarvis-cli -- corpus --seed 7 --events 200000 --out /tmp/c.jlog
-cargo run --release -p jarvis-cli -- fingerprint /tmp/c.jlog > tests/golden/corpus_seed7_200000.fingerprint
+cargo run --release -p cli -- corpus --seed 7 --events 200000 --out /tmp/c.jlog
+cargo run --release -p cli -- fingerprint /tmp/c.jlog > tests/golden/corpus_seed7_200000.fingerprint
 ```
