@@ -342,9 +342,7 @@ jobs:
       - run: cargo test --profile det-o0
       - name: Kernel crates build without std
         run: |
-          kernel=$(ls crates/kernel | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ')
-          # shellcheck disable=SC2086
-          cargo check $kernel --target x86_64-unknown-none
+          cargo check -p core -p model -p data -p cost -p portfolio -p execution -p risk -p strategy -p engine -p backtest -p corpus --target x86_64-unknown-none
       - name: Determinism gate (release vs det-o0 corpus, golden fingerprint)
         run: |
           cargo build --release -p cli

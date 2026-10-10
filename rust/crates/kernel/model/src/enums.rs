@@ -179,5 +179,13 @@ impl RecordFlag {
 }
 
 jarvis_enum!(
+    /// jarvis's own: the node's lifecycle states (docs/architecture.md section 4.4).
+    NodeState: u8 { Init = 0 => "INIT", Wired = 1 => "WIRED", Starting = 2 => "STARTING", Syncing = 3 => "SYNCING", Running = 4 => "RUNNING", Degraded = 5 => "DEGRADED", Stopping = 6 => "STOPPING", Stopped = 7 => "STOPPED", Faulted = 8 => "FAULTED" }
+);
+jarvis_enum!(
+    /// jarvis's own: why the node changed state (section 4.4).
+    LifecycleReason: u8 { Configured = 0 => "CONFIGURED", RunRequested = 1 => "RUN_REQUESTED", Started = 2 => "STARTED", Synced = 3 => "SYNCED", HealthLost = 4 => "HEALTH_LOST", HealthRestored = 5 => "HEALTH_RESTORED", EndOfData = 6 => "END_OF_DATA", ShutdownRequested = 7 => "SHUTDOWN_REQUESTED", Drained = 8 => "DRAINED", Fault = 9 => "FAULT" }
+);
+jarvis_enum!(
     /// jarvis's own: how a node stops (docs/architecture.md section 19.4).
     StopMode: u8 { CancelAllThenExit = 1 => "CANCEL_ALL_THEN_EXIT", LeaveOrders = 2 => "LEAVE_ORDERS", KillSwitch = 3 => "KILL_SWITCH" });

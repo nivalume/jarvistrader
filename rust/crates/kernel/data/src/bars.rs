@@ -116,6 +116,14 @@ impl BarAggregator {
     pub const fn bar_type(&self) -> &BarType {
         &self.bar_type
     }
+    #[must_use]
+    pub const fn price_precision(&self) -> u8 {
+        self.price_precision
+    }
+    #[must_use]
+    pub const fn size_precision(&self) -> u8 {
+        self.size_precision
+    }
     /// Whether the aggregator consumes trades (`LAST`) or quotes (`BID`, `ASK`, `MID`).
     #[must_use]
     pub fn uses_trades(&self) -> bool {

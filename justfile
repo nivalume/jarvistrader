@@ -151,7 +151,7 @@ rust-test:
     cd rust && cargo test && cargo test --release && cargo test --profile det-o0
 
 rust-nostd:
-    cd rust && cargo check $(ls crates/kernel 2>/dev/null | grep '^jarvis-' | sed 's/^/-p /' | tr '\n' ' ') --target x86_64-unknown-none
+    cd rust && cargo check -p core -p model -p data -p cost -p portfolio -p execution -p risk -p strategy -p engine -p backtest -p corpus --target x86_64-unknown-none
 
 # Determinism gate of the Rust tree: the release and det-o0 builds write the seed 7 corpus
 # (200 000 records) byte for byte the same, and its fingerprint matches the golden file.

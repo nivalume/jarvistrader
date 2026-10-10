@@ -19,3 +19,7 @@ portfolio.workspace = true
 execution.workspace = true
 risk.workspace = true
 strategy.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true
+corpus.workspace = true

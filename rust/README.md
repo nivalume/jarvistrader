@@ -9,7 +9,7 @@ cargo test                              # dev profile
 cargo test --release                    # overflow-checks stay on
 cargo test --profile det-o0             # release semantics at opt-level 0: the determinism pair
 cargo clippy --all-targets -- -D warnings
-cargo check -p core --target x86_64-unknown-none   # the kernel needs no std
+cargo check -p core -p model -p data -p cost -p portfolio -p execution -p risk -p strategy -p engine -p backtest -p corpus --target x86_64-unknown-none   # the kernel needs no std
 cargo run -p cli -- build-info
 ```
 
@@ -20,8 +20,14 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   data and event types, the event log wire format, fingerprints), `data` (interning, the
   subscription matrix and cadences, routing, tick-indexed order books, bar aggregation, the
   feature graph), `cost` (fee schedules and funding, book-depth slippage, jittered latency) and
-  `portfolio` (netting positions, the per-strategy ledger, balances, margin, funding), then
-  `execution`, `risk`, `strategy`, `engine`, `backtest` (skeletons). Every kernel crate is
+  `portfolio` (netting positions, the per-strategy ledger, balances, margin, funding),
+  `execution` (the order state machine `specs/tla/OrderLifecycle.tla` owns, the OMS, the venue
+  event path), `risk` (structural checks, the rule catalog behind Gate A and Gate B, `TradingState`
+  from `specs/tla/TradingState.tla`, the rate limit), `strategy` (the `Strategy` trait, `Context`,
+  the kernel services and the command path), `engine` (`step`, delivery cadences, kernel events,
+  the lifecycle table, snapshots) and `backtest` (sources, the simulated exchange whose queue model
+  `specs/tla/Matching.tla` owns, the two-timeline venue loop, the driver, log replay). Execution
+  algorithms, reconciliation and the post-trade monitors come with R3's second step. Every kernel crate is
   `#![no_std]`, `#![forbid(unsafe_code)]`, `#![deny(clippy::float_arithmetic)]`, and the
   directory's `clippy.toml` bans `HashMap`, `HashSet` and `BTreeMap`. Dependencies between them
   follow the layer table; Cargo refuses a cycle, which is what `tools/check-layering.py` checks
@@ -35,7 +41,9 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   cycle would build `model` twice); tests that need it live here.
 - `crates/testkit/testkit`: the property-test generator (same splitmix64 stream as the
   C++ `testkit::Gen`), `for_all` with `JARVIS_PROP_SEED` / `JARVIS_PROP_ITERS` /
-  `JARVIS_PROP_CASE`, and the counting allocator behind the zero-allocation gate.
+  `JARVIS_PROP_CASE`, the counting allocator behind the zero-allocation gate, and
+  `behaviour`: the reader of `tests/trace/behaviours/*.txt` and the forward trace driver the
+  execution, risk and backtest tests replay the TLC-generated behaviours with.
 - `crates/tools/cli`: the `jarvis-rs` binary: `corpus`, `fingerprint`, `dump`,
   `roundtrip`, `sha256`, `crc32c`, `build-info`; more subcommands arrive with their layers.
 - `tests/golden/`: the Rust tree's golden fingerprints (see its README).

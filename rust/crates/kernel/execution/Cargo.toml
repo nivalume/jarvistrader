@@ -16,3 +16,7 @@ model.workspace = true
 data.workspace = true
 cost.workspace = true
 portfolio.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true
+corpus.workspace = true

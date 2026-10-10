@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use corpus::Corpus;
 use kernel_core::sha256::{hex, Sha256};
 use model::bar::BarType;
-use model::log::{fingerprint, LogHeader, LogReader, LogWriter};
+use model::log::{fingerprint, LogHeader, LogReader, LogWriter, RecordBody};
 use model::{InstrumentId, Money, Price, Quantity};
 
 fn usage() -> ExitCode {
@@ -112,15 +112,26 @@ fn dump(args: &[String]) -> ExitCode {
         }
         match record {
             Ok(r) => {
-                let _ = writeln!(
-                    out,
-                    "{} {} {} {} {:?}",
-                    r.key.seq,
-                    r.key.ts.value(),
-                    r.key.source_id,
-                    r.event.kind().name(),
-                    r.event
-                );
+                let _ = match &r.body {
+                    RecordBody::Input(e) => writeln!(
+                        out,
+                        "{} {} {} {} {:?}",
+                        r.key.seq,
+                        r.key.ts.value(),
+                        r.key.source_id,
+                        e.kind().name(),
+                        e
+                    ),
+                    RecordBody::Output(o) => writeln!(
+                        out,
+                        "{} {} {} out {} {:?}",
+                        r.key.seq,
+                        r.key.ts.value(),
+                        r.key.source_id,
+                        o.name(),
+                        o
+                    ),
+                };
             }
             Err(e) => return fail(&format!("record {}: {e}", n + 1)),
         }

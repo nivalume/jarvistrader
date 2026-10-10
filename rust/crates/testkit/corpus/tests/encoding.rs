@@ -81,7 +81,8 @@ fn log_round_trips_and_detects_truncation_and_corruption() {
 
     let (h, reader) = LogReader::open(&bytes).unwrap();
     assert_eq!(h, header());
-    let read: Vec<_> = reader.map(|r| r.unwrap()).map(|r| (r.key, r.event)).collect();
+    let read: Vec<_> =
+        reader.map(|r| r.unwrap()).map(|r| (r.key, r.input().unwrap().clone())).collect();
     assert_eq!(read, records);
 
     // Truncated anywhere in the last record: the first 49 read, then Truncated.

@@ -42,6 +42,7 @@ pub fn route_of(
         | Event::RateLimitFeedback(_)
         | Event::TimerFired(_)
         | Event::BatchEnd(_)
+        | Event::NodeLifecycle(_)
         | Event::Shutdown(_) => Ok(None),
     }
 }

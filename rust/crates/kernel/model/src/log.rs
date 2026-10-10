@@ -1,17 +1,18 @@
 //! The event log (docs/architecture.md section 16.1): a header, then records. A record is an
-//! input event with its [`EventKey`], framed and checksummed so that a truncated or corrupted
-//! tail is detected and the records before it stay readable. The log is the WAL and the
-//! determinism trace at once; segment files, rolling and `fdatasync` belong to the node.
+//! input event with its [`EventKey`], or an output of the step that input caused, framed and
+//! checksummed so that a truncated or corrupted tail is detected and the records before it stay
+//! readable. The log is the WAL and the determinism trace at once; segment files, rolling and
+//! `fdatasync` belong to the node.
 //!
 //! Record layout, little-endian:
 //!
 //! | field | bytes | |
 //! | --- | --- | --- |
 //! | `len` | 4 | bytes that follow, up to and including the checksum |
-//! | `kind` | 2 | [`EventKind`] tag |
-//! | `flags` | 2 | reserved, zero |
-//! | `ts` `source_id` `seq` | 8 2 8 | the [`EventKey`] |
-//! | body | `len - 24` | the event, [`Wire`] encoding |
+//! | `kind` | 2 | [`EventKind`] tag of an input; [`Output`] tag of an output |
+//! | `flags` | 2 | bit 0: the record is an output; the rest zero |
+//! | `ts` `source_id` `seq` | 8 2 8 | the [`EventKey`] of the input (an output carries its input's key) |
+//! | body | `len - 24` | the event or output, [`Wire`] encoding |
 //! | `crc32c` | 4 | over `kind` through body |
 
 use alloc::vec::Vec;
@@ -21,6 +22,7 @@ use kernel_core::sha256::{self, Sha256};
 use kernel_core::{EventKey, FixedString, Result, Status};
 
 use crate::event::{Event, EventKind, SCHEMA_VERSION};
+use crate::outputs::Output;
 use crate::wire::{WireReader, WireWriter};
 
 pub const MAGIC: &[u8; 8] = b"JRVSLOG\0";
@@ -29,6 +31,8 @@ pub const FORMAT_VERSION: u16 = 1;
 /// bound keeps a corrupted length from asking for gigabytes.
 pub const MAX_BODY: usize = 16 * 1024 * 1024;
 const RECORD_FIXED: usize = 2 + 2 + 18 + 4; // kind, flags, key, crc
+/// The record flag of an output.
+pub const FLAG_OUTPUT: u16 = 1;
 
 /// The log header. Strings are free text for people and tools; the fields that decide a replay
 /// (`config_hash`, `seed`, schema) are exact.
@@ -124,11 +128,37 @@ impl WireReader<'_> {
     }
 }
 
-/// One record: the key the kernel processed it under and the event.
+/// What a record holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // records are transient; the event is the large side
+pub enum RecordBody {
+    Input(Event),
+    Output(Output),
+}
+
+/// One record: the key of the input, and the input itself or one output of its step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub key: EventKey,
-    pub event: Event,
+    pub body: RecordBody,
+}
+
+impl Record {
+    /// The input, when the record is one.
+    #[must_use]
+    pub const fn input(&self) -> Option<&Event> {
+        match &self.body {
+            RecordBody::Input(e) => Some(e),
+            RecordBody::Output(_) => None,
+        }
+    }
+    #[must_use]
+    pub const fn output(&self) -> Option<&Output> {
+        match &self.body {
+            RecordBody::Output(o) => Some(o),
+            RecordBody::Input(_) => None,
+        }
+    }
 }
 
 /// Appends records to a byte buffer. The node hands the buffer to the persist thread; a backtest
@@ -154,14 +184,30 @@ impl LogWriter {
         Self { out: WireWriter::new(), records: 0 }
     }
 
+    /// An input record.
     pub fn append(&mut self, key: EventKey, event: &Event) -> Result<()> {
+        self.frame(key, event.kind().tag(), 0, |w| event.encode_body(w))
+    }
+
+    /// An output record, keyed by the input that caused it.
+    pub fn append_output(&mut self, key: EventKey, output: &Output) -> Result<()> {
+        self.frame(key, output.tag(), FLAG_OUTPUT, |w| output.encode_body(w))
+    }
+
+    fn frame(
+        &mut self,
+        key: EventKey,
+        kind: u16,
+        flags: u16,
+        body: impl FnOnce(&mut WireWriter),
+    ) -> Result<()> {
         let len_at = self.out.len();
         self.out.u32(0); // patched below
         let start = self.out.len();
-        self.out.u16(event.kind().tag());
-        self.out.u16(0);
+        self.out.u16(kind);
+        self.out.u16(flags);
         self.out.put(&key);
-        event.encode_body(&mut self.out);
+        body(&mut self.out);
         let body_len = self.out.len() - start;
         if body_len - (RECORD_FIXED - 4) > MAX_BODY {
             return Err(Status::CapacityExceeded);
@@ -229,14 +275,19 @@ impl<'a> LogReader<'a> {
             return Err(Status::ChecksumMismatch);
         }
         let mut r = WireReader::new(payload);
-        let kind = EventKind::from_tag(r.u16()?)?;
-        if r.u16()? != 0 {
+        let kind = r.u16()?;
+        let flags = r.u16()?;
+        if flags & !FLAG_OUTPUT != 0 {
             return Err(Status::UnsupportedMessage);
         }
         let key: EventKey = r.get()?;
-        let event = Event::decode_body(kind, &mut r)?;
+        let body = if flags & FLAG_OUTPUT != 0 {
+            RecordBody::Output(Output::decode_body(kind, &mut r)?)
+        } else {
+            RecordBody::Input(Event::decode_body(EventKind::from_tag(kind)?, &mut r)?)
+        };
         r.finish()?;
-        Ok(Some(Record { key, event }))
+        Ok(Some(Record { key, body }))
     }
 
     /// Bytes consumed so far.
@@ -321,6 +372,21 @@ impl Fingerprinter {
         self.hasher.update(self.scratch.as_slice());
         self.records += 1;
     }
+    /// An output record hashes with its flag, so an output never collides with an input.
+    pub fn add_output(&mut self, key: EventKey, output: &Output) {
+        self.scratch.clear();
+        self.scratch.put(&key);
+        self.scratch.u16(FLAG_OUTPUT);
+        self.scratch.put(output);
+        self.hasher.update(self.scratch.as_slice());
+        self.records += 1;
+    }
+    pub fn add_record(&mut self, record: &Record) {
+        match &record.body {
+            RecordBody::Input(e) => self.add(record.key, e),
+            RecordBody::Output(o) => self.add_output(record.key, o),
+        }
+    }
     #[must_use]
     pub fn finish(self) -> Fingerprint {
         Fingerprint { records: self.records, digest: self.hasher.finish() }
@@ -333,8 +399,7 @@ pub fn fingerprint(bytes: &[u8]) -> Result<Fingerprint> {
     let (_, reader) = LogReader::open(bytes)?;
     let mut fp = Fingerprinter::new();
     for record in reader {
-        let record = record?;
-        fp.add(record.key, &record.event);
+        fp.add_record(&record?);
     }
     Ok(fp.finish())
 }

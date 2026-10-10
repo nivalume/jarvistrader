@@ -13,6 +13,8 @@
 //! methods are `unsafe fn` by the trait's definition and only forward to the system allocator.
 #![deny(unsafe_code)]
 
+pub mod behaviour;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

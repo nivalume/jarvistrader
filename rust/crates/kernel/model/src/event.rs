@@ -11,14 +11,14 @@ use crate::data::{
     FundingRateUpdate, IndexPriceUpdate, InstrumentClose, InstrumentStatus, LiquidationOrder,
     MarkPriceUpdate, OrderBookDeltas, QuoteTick, TradeTick,
 };
-use crate::enums::StopMode;
+use crate::enums::{LifecycleReason, NodeState, StopMode};
 use crate::instruments::Instrument;
 use crate::order_events::OrderEvent;
 use crate::wire::{Wire, WireReader, WireWriter};
 use crate::wire_struct;
 
 /// The version of the set of kinds and their encodings. It goes into the log header.
-pub const SCHEMA_VERSION: u16 = 1;
+pub const SCHEMA_VERSION: u16 = 2;
 
 /// A timer that came due, recorded as an input so a replay fires it at the same point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -34,6 +34,17 @@ pub struct BatchEnd {
     pub ts: UnixNanos,
 }
 wire_struct!(BatchEnd { ts });
+
+/// A node lifecycle transition (section 4.4), recorded so a replay starts and stops the
+/// strategies at the same inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NodeLifecycle {
+    pub from: NodeState,
+    pub to: NodeState,
+    pub reason: LifecycleReason,
+    pub ts: UnixNanos,
+}
+wire_struct!(NodeLifecycle { from, to, reason, ts });
 
 /// A request to stop, from a signal or the admin channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -52,9 +63,8 @@ pub struct RateLimitFeedback {
 }
 wire_struct!(RateLimitFeedback { used_weight_1m, order_count_10s, order_count_1m, ts_init });
 
-/// Every input the kernel's `step` takes. Market data, venue, reference, time and control events;
-/// the kernel's own recorded outputs (`NodeLifecycle`, `StrategyError`) join when their layers
-/// land (docs/rust-plan.md R3, R4).
+/// Every input the kernel's `step` takes. Market data, venue, reference, time and control events,
+/// and the node's recorded lifecycle transitions; `StrategyError` joins with the node (R4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     TradeTick(TradeTick),
@@ -73,6 +83,7 @@ pub enum Event {
     RateLimitFeedback(RateLimitFeedback),
     TimerFired(TimerFired),
     BatchEnd(BatchEnd),
+    NodeLifecycle(NodeLifecycle),
     Shutdown(Shutdown),
 }
 
@@ -96,6 +107,7 @@ pub enum EventKind {
     RateLimitFeedback = 32,
     TimerFired = 40,
     BatchEnd = 41,
+    NodeLifecycle = 42,
     Shutdown = 50,
 }
 
@@ -127,6 +139,7 @@ impl EventKind {
         EventKind::RateLimitFeedback,
         EventKind::TimerFired,
         EventKind::BatchEnd,
+        EventKind::NodeLifecycle,
         EventKind::Shutdown,
     ];
 
@@ -165,6 +178,7 @@ impl EventKind {
             EventKind::RateLimitFeedback => "RateLimitFeedback",
             EventKind::TimerFired => "TimerFired",
             EventKind::BatchEnd => "BatchEnd",
+            EventKind::NodeLifecycle => "NodeLifecycle",
             EventKind::Shutdown => "Shutdown",
         }
     }
@@ -187,7 +201,7 @@ impl EventKind {
                 EventCategory::Venue
             }
             EventKind::TimerFired | EventKind::BatchEnd => EventCategory::Time,
-            EventKind::Shutdown => EventCategory::Control,
+            EventKind::NodeLifecycle | EventKind::Shutdown => EventCategory::Control,
         }
     }
 }
@@ -212,6 +226,7 @@ impl Event {
             Event::RateLimitFeedback(_) => EventKind::RateLimitFeedback,
             Event::TimerFired(_) => EventKind::TimerFired,
             Event::BatchEnd(_) => EventKind::BatchEnd,
+            Event::NodeLifecycle(_) => EventKind::NodeLifecycle,
             Event::Shutdown(_) => EventKind::Shutdown,
         }
     }
@@ -237,6 +252,7 @@ impl Event {
             Event::RateLimitFeedback(e) => e.ts_init,
             Event::TimerFired(e) => e.deadline,
             Event::BatchEnd(e) => e.ts,
+            Event::NodeLifecycle(e) => e.ts,
             Event::Shutdown(_) => return None,
         })
     }
@@ -260,6 +276,7 @@ impl Event {
             Event::RateLimitFeedback(e) => w.put(e),
             Event::TimerFired(e) => w.put(e),
             Event::BatchEnd(e) => w.put(e),
+            Event::NodeLifecycle(e) => w.put(e),
             Event::Shutdown(e) => w.put(e),
         }
     }
@@ -283,6 +300,7 @@ impl Event {
             EventKind::RateLimitFeedback => Event::RateLimitFeedback(r.get()?),
             EventKind::TimerFired => Event::TimerFired(r.get()?),
             EventKind::BatchEnd => Event::BatchEnd(r.get()?),
+            EventKind::NodeLifecycle => Event::NodeLifecycle(r.get()?),
             EventKind::Shutdown => Event::Shutdown(r.get()?),
         })
     }

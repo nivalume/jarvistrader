@@ -7,7 +7,7 @@
 3. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展；R4 为 Rust 的事件日志写 Python 读取器。
 4. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查、`rust-fp` 确定性门），CI 的 `rust` job 跑同样的内容并进入 `gate`。
 
-状态：R0、R1（除待办项）、R2 完成；本文随每个里程碑更新。
+状态：R0、R1（除待办项）、R2 完成，R3 第一阶段完成（执行算法、对账、事后监控顺延到 R3 第二阶段）；本文随每个里程碑更新。
 
 ## R0 workspace 与门禁（在写领域代码之前，让约束先变成编译错误）
 
@@ -93,16 +93,29 @@
 
 ## R3 execution、risk、strategy、engine、backtest（订单类 golden 与 trace validation 通过）
 
-- [ ] task: execution — `OrderCore`、订单状态机转移表（`match` 穷尽）、OMS、`ExecutionEngine`（§8）
+> 2026-10-10 第一阶段完成。五个 crate 按 `docs/architecture.md` §8–§12 独立实现，规约是转移关系的唯一来源：
+> - `model`：新增 `outputs.rs`（`Output::{FeatureUpdate, StrategyRecord, SubmitOrder, ModifyOrder, CancelOrder, CancelAllOrders, OrderDenied, CountdownCancelAll}`，带线编码）与 `NodeLifecycle` 输入事件（`NodeState`、`LifecycleReason` 枚举）；日志记录分为输入与输出两类（`flags` 位 0），`LogWriter::append_output`、`Fingerprinter::add_output`，`SCHEMA_VERSION` 升为 2，三份 corpus/data golden 相应重新生成。
+> - `execution`：`fsm.rs` 的 82 条转移三元组由测试解析 `specs/tla/OrderLifecycle.tla` 的 `BEGIN/END TRANSITIONS` 核对；`OrderState` 实现 Plain/Updated/Fill/Void 与 `SavePrev` 规则；`Oms` 以固定容量持有订单（线性探测 id 表、成交记录池、已关闭订单淘汰环、按 slot 的在途数量），快照只存订单与成交，id 表与在途合计在恢复时重建；`apply_order_event` 给出 `Applied/UnknownOrder/Refused/DuplicateFill/Stale`。
+> - `risk`：`TradingStateMachine`（base、同步保持、降级保持）与 `MATRIX`、触发表由测试对照 `TradingState.tla` 的 `TRIGGERS/MATRIX`；`RateLimiter` 固定窗口；`checks.rs` 结构检查原因码；`gates.rs` 规则为函数指针表（Gate A 四条、Gate B 九条、改单闸五条），`RiskEngine` 最后消耗限速额度；`classify` 按仓位把新单归为 `Open`/`Reduce`。
+> - `strategy`：`Strategy` trait（全部回调有默认空实现，`has_state/save_state/load_state` 描述自身快照）、`Context`、`Kernel`（instrument 表、订阅矩阵、簿、bar 聚合器、特征、定时器、Conflated/OnBatch 缓冲、输出）、`Trading`（OMS、ClientOrderId 生成器、Portfolio、RiskEngine、命令链 submit/modify/cancel/cancel_all/kill_switch、venue 事件入账与仓位事件、查询视图）。订单簿在 `on_book` 回调期间借给策略（此时 `ctx.book` 为 `None`）。
+> - `engine`：`Engine::step(key, event)` 按固定顺序投递（订阅者 → 特征 → bar），`Every/Sampled/Conflated/OnBatch` 四种节奏，缓冲满时提前投递；内核事件（Submitted/Denied/Pending*、仓位事件）在回调返回后按产生顺序投递，投递中新产生的也在同一步处理；回调失败按 `ErrorPolicy` 停用策略并撤其全部订单；`NodeLifecycle` 驱动 `on_start`/`on_stop` 与 TradingState 的同步/降级保持；`lifecycle.rs` 是 §4.4 的 `next_state`；快照 = 内核状态 + 各策略自述状态。
+> - `backtest`：`SimulatedExchange`（`TopOfBook`/`QueuePosition` 成交模型、GTX -5022、IOC/FOK 余量过期、STP 三模式、GTD 到期、-2011/-2013/-4028、reduce-only -2022、手续费、自己的 Portfolio）；`VenueLoop` 三条 FIFO 通道加 `JitteredLatency`，行情在 venue 时间撮合、`ts_init` 改写为 `+L_feed`，回报 `source_id = 0xFFFE`；`Driver` 合成生命周期、定时器、`BatchEnd`，`seq` 重新编号，输出紧随输入写入运行日志；`replay` 逐输入重放并比较输出（`ReplayDivergence`）；`MergeSource`/`ReplaySource`/`VecSource`。
+> - `testkit`：`behaviour.rs` 读取 `tests/trace/behaviours/*.txt`，`Replayer` trait 与 `replay` 驱动正向 trace validation（首处偏差报行为号、步号、动作；规约动作从未出现也失败），`spec_tuples` 解析规约里的表。`corpus::fixtures` 提供各层测试共用的 instrument、账户与 17 种订单事件。
+>
+> 验收结果：execution 5 个测试（转移表 = 规约、OrderLifecycle 80 条行为逐步回放且规约未启用的事件被拒绝、venue 路径、淘汰、快照往返），risk 5 个（触发表与矩阵 = 规约、TradingState 40 条行为回放且不可接纳的命令被拒、规则原因码目录、结构检查、快照），engine 5 个（trade → 策略 → 下单 → 成交 → 仓位事件、四种节奏、错误策略、拒单输出、快照后两个引擎逐步输出与状态一致），backtest 5 个（Matching 行为回放、Binance 式回报、合并源、生命周期表、整段回测经 venue loop 运行后运行日志逐字节回放成功、同种子同指纹、不同种子不同指纹、被篡改配置报 `ReplayDivergence`），三个 profile 全部通过；十个内核 crate 与 corpus 在 `x86_64-unknown-none` 上编译；release 与 det-o0 的 200k corpus 逐字节一致并匹配 golden。`just rust-nostd` 与 CI 的 no_std 步骤原来按 `jarvis-` 前缀筛选 crate，改名后筛不到任何 crate，已改为显式列出。
+>
+> 未做（R3 第二阶段）：执行算法 `PeggedQuote`/`PassiveThenAggressive`（§11.4）、对账（§15，`Reconciliation` 规约）、事后监控与 KillSwitch 定时续期（§10.3、§10.5；`Shutdown` 的 KillSwitch 路径已有）、`StrategyError` 输入与 `RateLimitFeedback` 的 kind 字段、`NodeLifecycle`/`DepthSync`/`Reconciliation` 三个规约的正向 trace validation（分别依赖 node、adapter 与对账层）、零分配门覆盖每个 `step`（`VenueLoop` 目前按值克隆延迟事件）、criterion 基准。
+
+- [x] task: execution — `OrderState`、订单状态机转移表（由规约核对）、`Oms`、`apply_order_event`（§8）
 - [ ] task: execution — 执行算法 `PeggedQuote`、`PassiveThenAggressive`、`AlgoState` 竞技场、令牌预算（§11.4）
 - [ ] task: execution — 对账：`VenueSnapshot`、`ReconciliationDiff`、`ReconcileOutcome`（§15）
-- [ ] task: risk — 规则目录、Gate A 与 Gate B、预留敞口、`TradingState`、`TokenBucket`、事后监控（§9、§10）
-- [ ] task: strategy — `Strategy` trait、`Context`、`StaticStrategySet`（泛型）与 `DynamicStrategySet`（`dyn Strategy`，对应 C++ 的函数指针表）
-- [ ] task: engine — `Engine<S>`、`EngineState`、`EventSource` 与 `CommandSink` trait、`step(S, e) → (S′, out[])`
-- [ ] task: backtest — `ReplaySource`（多源合并）、`VenueLoop`、`SimulatedExchange`、双时间线、成交模型枚举（§12）
-- [ ] task: specs — `specs/map/*.hpp` 改为 Rust 模块；`tests/trace/` 的行为文件由 Rust 驱动运行
+- [x] task: risk — 规则目录、Gate A 与 Gate B、预留敞口、`TradingState`、固定窗口限速（§9、§10）；事后监控顺延到第二阶段
+- [x] task: strategy — `Strategy` trait、`Context`、`Kernel` 与 `Trading` 服务；策略集合为 `Vec<Box<dyn Strategy>>`（静态泛型集合待基准证明需要再做）
+- [x] task: engine — `Engine`、`step(key, e)` 与 `outputs()`、`lifecycle::next_state`、快照保存与恢复；`EventSource`/`Recorder` trait 在 backtest
+- [x] task: backtest — `ReplaySource`/`MergeSource`、`VenueLoop`、`SimulatedExchange`、双时间线、成交模型枚举、`Driver`、`replay`（§12）
+- [x] task: specs — 动作映射写在各 crate 的 trace 测试里（`testkit::behaviour`）；`tests/trace/behaviours/{OrderLifecycle,TradingState,Matching}.txt` 由 Rust 驱动运行
 - [ ] task: harness — 零分配门覆盖每个 `step`；对应层测试移植；`step/trade_to_strategy` 基准
-- [ ] task: 验收 — 订单生命周期、撮合、风控的 Rust golden 通过；快照保存与恢复逐字节往返；七个规约的正向 trace validation 通过，`tests/trace/` 的行为文件由 Rust 驱动复用
+- [x] task: 验收 — 订单生命周期、撮合、风控的测试通过；快照保存与恢复逐字节往返；运行日志逐字节回放；三个规约（OrderLifecycle、TradingState、Matching）的正向 trace validation 通过，其余四个随其层到来
 
 ## R4 node、sys、Python 绑定（Python 示例零改动运行）
 

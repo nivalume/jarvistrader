@@ -7,6 +7,7 @@ name = "backtest"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "cost",
  "data",
  "engine",
@@ -15,6 +16,7 @@ dependencies = [
  "portfolio",
  "risk",
  "strategy",
+ "testkit",
 ]
 
 [[package]]
@@ -76,6 +78,7 @@ name = "engine"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "cost",
  "data",
  "execution",
@@ -83,6 +86,7 @@ dependencies = [
  "portfolio",
  "risk",
  "strategy",
+ "testkit",
 ]
 
 [[package]]
@@ -90,10 +94,12 @@ name = "execution"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "cost",
  "data",
  "model",
  "portfolio",
+ "testkit",
 ]
 
 [[package]]
@@ -152,11 +158,13 @@ name = "risk"
 version = "0.1.0"
 dependencies = [
  "core",
+ "corpus",
  "cost",
  "data",
  "execution",
  "model",
  "portfolio",
+ "testkit",
 ]
 
 [[package]]

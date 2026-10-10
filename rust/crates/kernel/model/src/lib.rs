@@ -29,6 +29,7 @@ pub mod instruments;
 pub mod log;
 pub mod money;
 pub mod order_events;
+pub mod outputs;
 pub mod position_events;
 pub mod state_io;
 pub mod uuid;
@@ -46,5 +47,6 @@ pub use identifiers::{
     Venue, VenueOrderId,
 };
 pub use money::Money;
+pub use outputs::Output;
 pub use uuid::Uuid4;
 pub use wire::{Wire, WireReader, WireWriter};

@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod fixtures;
+
 use kernel_core::clock::TimerKey;
 use kernel_core::rng::CounterRng;
 use kernel_core::{DurationNanos, EventKey, FixedString, FixedVec, Result, Status, UnixNanos};
@@ -25,10 +27,12 @@ use model::data::{
 };
 use model::enums::{
     AccountType, AggregationSource, AggressorSide, AssetClass, BarAggregation, BookAction,
-    InstrumentCloseType, LiquiditySide, MarketStatusAction, OrderSide, OrderType, PriceType,
-    RecordFlag, StopMode, TimeInForce, TriggerType,
+    InstrumentCloseType, LifecycleReason, LiquiditySide, MarketStatusAction, NodeState, OrderSide,
+    OrderType, PriceType, RecordFlag, StopMode, TimeInForce, TriggerType,
 };
-use model::event::{BatchEnd, Event, EventKind, RateLimitFeedback, Shutdown, TimerFired};
+use model::event::{
+    BatchEnd, Event, EventKind, NodeLifecycle, RateLimitFeedback, Shutdown, TimerFired,
+};
 use model::fixed_point::{Price, Quantity, FIXED_SCALAR};
 use model::identifiers::{
     AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, Symbol, TradeId, TraderId,
@@ -113,12 +117,17 @@ impl Corpus {
         let kind =
             EventKind::ALL[self.below(EventKind::ALL.len() as u64, i, Draw::Kind, 0) as usize];
         let event = self.event(kind, i, ts_event, ts_init)?;
-        let source_id =
-            if matches!(kind, EventKind::TimerFired | EventKind::BatchEnd | EventKind::Shutdown) {
-                0
-            } else {
-                1 + self.below(3, i, Draw::Id, 9) as u16
-            };
+        let source_id = if matches!(
+            kind,
+            EventKind::TimerFired
+                | EventKind::BatchEnd
+                | EventKind::NodeLifecycle
+                | EventKind::Shutdown
+        ) {
+            0
+        } else {
+            1 + self.below(3, i, Draw::Id, 9) as u16
+        };
         Ok((EventKey::new(ts_init, source_id, i), event))
     }
 
@@ -376,6 +385,12 @@ impl Corpus {
                 deadline: ts_init,
             }),
             EventKind::BatchEnd => Event::BatchEnd(BatchEnd { ts: ts_init }),
+            EventKind::NodeLifecycle => Event::NodeLifecycle(NodeLifecycle {
+                from: self.pick(NodeState::ALL, i, 0),
+                to: self.pick(NodeState::ALL, i, 1),
+                reason: self.pick(LifecycleReason::ALL, i, 2),
+                ts: ts_init,
+            }),
             EventKind::Shutdown => {
                 Event::Shutdown(Shutdown { mode: self.pick(StopMode::ALL, i, 0) })
             }

@@ -11,7 +11,7 @@ use crate::identifiers::InstrumentId;
 use crate::wire_struct;
 
 /// `{step}-{AGG}-{PRICE_TYPE}`, for example `1-MINUTE-LAST`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BarSpecification {
     pub step: u32,
     pub aggregation: BarAggregation,
@@ -78,7 +78,7 @@ impl crate::wire::Wire for BarSpecification {
 
 /// Standard form `{instrument_id}-{step}-{AGG}-{PRICE_TYPE}-{SOURCE}`; the composite form appends
 /// `@{step}-{AGG}-{SOURCE}` naming the bars it is built from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BarType {
     pub instrument_id: InstrumentId,
     pub spec: BarSpecification,

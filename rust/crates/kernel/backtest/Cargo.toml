@@ -20,3 +20,7 @@ execution.workspace = true
 risk.workspace = true
 strategy.workspace = true
 engine.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true
+corpus.workspace = true
