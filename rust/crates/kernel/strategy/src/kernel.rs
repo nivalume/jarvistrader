@@ -18,7 +18,7 @@ use model::data::{
     FundingRateUpdate, IndexPriceUpdate, InstrumentClose, InstrumentStatus, LiquidationOrder,
     MarkPriceUpdate, QuoteTick, TradeTick,
 };
-use model::enums::{AggregationSource, NodeState};
+use model::enums::{AggregationSource, NodeState, StrategyErrorKind};
 use model::instruments::Instrument;
 use model::outputs::{Output, RecordTag, StrategyRecord};
 use model::wire::{Wire, WireWriter};
@@ -75,11 +75,28 @@ pub enum ErrorPolicy {
     Ignore,
 }
 
-/// A callback failure noticed during a step.
+/// A callback failure noticed during a step (docs/architecture.md section 7.6). The node turns
+/// it into the next `StrategyError` input; `message_hash` names the failure stably across
+/// processes (the `Status` name, or what a host reported through `Context::report_error`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StrategyFailure {
     pub strategy: StrategyIndex,
     pub status: Status,
+    pub kind: StrategyErrorKind,
+    pub message_hash: u64,
+}
+
+/// FNV-1a of `text`: the `message_hash` of a failure named by `text`.
+#[must_use]
+pub const fn failure_hash(text: &str) -> u64 {
+    let bytes = text.as_bytes();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut i = 0;
+    while i < bytes.len() {
+        h = (h ^ bytes[i] as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        i += 1;
+    }
+    h
 }
 
 /// Timers owned by the kernel itself (time-bar closes, by aggregator index) use this owner.
@@ -654,10 +671,43 @@ impl Kernel {
 
     /// The first failure of a strategy in a step wins.
     pub fn fail(&mut self, strategy: StrategyIndex, status: Status) {
+        self.fail_with(
+            strategy,
+            status,
+            StrategyErrorKind::Exception,
+            failure_hash(status.as_str()),
+        );
+    }
+
+    /// A failure a host names itself (a Python exception type, an overrun).
+    pub fn fail_with(
+        &mut self,
+        strategy: StrategyIndex,
+        status: Status,
+        kind: StrategyErrorKind,
+        message_hash: u64,
+    ) {
         if self.failures.iter().any(|f| f.strategy == strategy) {
             return;
         }
-        let _ = self.failures.push(StrategyFailure { strategy, status });
+        let _ = self.failures.push(StrategyFailure { strategy, status, kind, message_hash });
+    }
+
+    /// Disables `s` under `policy` (docs/architecture.md section 7.6): its orders are canceled
+    /// and it receives no more callbacks; `HaltNode` also asks the node to stop.
+    pub fn apply_error_policy(&mut self, s: StrategyIndex, policy: ErrorPolicy) {
+        match policy {
+            ErrorPolicy::Ignore => {}
+            ErrorPolicy::HaltStrategy | ErrorPolicy::HaltNode => {
+                if let Some(d) = self.disabled.get_mut(s.0 as usize) {
+                    *d = true;
+                }
+                let _ = self.trading.cancel_all(self.current, s, None, &mut self.outputs);
+                if policy == ErrorPolicy::HaltNode {
+                    self.halt_requested = true;
+                }
+            }
+        }
     }
 }
 

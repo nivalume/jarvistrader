@@ -29,10 +29,11 @@ use model::data::{
 use model::enums::{
     AccountType, AggregationSource, AggressorSide, AssetClass, BarAggregation, BookAction,
     InstrumentCloseType, LifecycleReason, LiquiditySide, MarketStatusAction, NodeState, OrderSide,
-    OrderType, PriceType, RecordFlag, StopMode, TimeInForce, TriggerType,
+    OrderType, PriceType, RecordFlag, StopMode, StrategyErrorKind, TimeInForce, TriggerType,
 };
 use model::event::{
-    BatchEnd, Event, EventKind, NodeLifecycle, RateLimitFeedback, Shutdown, TimerFired,
+    BatchEnd, Event, EventKind, NodeLifecycle, RateLimitFeedback, Shutdown, StrategyError,
+    TimerFired,
 };
 use model::fixed_point::{Price, Quantity, FIXED_SCALAR};
 use model::identifiers::{
@@ -391,6 +392,12 @@ impl Corpus {
                 to: self.pick(NodeState::ALL, i, 1),
                 reason: self.pick(LifecycleReason::ALL, i, 2),
                 ts: ts_init,
+            }),
+            EventKind::StrategyError => Event::StrategyError(StrategyError {
+                strategy_index: self.below(8, i, Draw::Id, 0) as u16,
+                kind: self.pick(StrategyErrorKind::ALL, i, 1),
+                message_hash: self.rng.draw(i, Draw::Id as u32, 2),
+                ts_init,
             }),
             EventKind::Shutdown => {
                 Event::Shutdown(Shutdown { mode: self.pick(StopMode::ALL, i, 0) })

@@ -6,10 +6,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import jarvis
 from jarvis import Cadence, Strategy, log
 from jarvis import model as m
 from jarvis.node import Node
+
+from conftest import HAS_EXEC_ALGOS
 
 IID = "BTCUSDT-PERP.BINANCE"
 DAY = 1_788_220_800_000_000_000  # 2026-09-01T00:00:00Z
@@ -207,6 +211,7 @@ class ParentBuyer(Strategy):
             self.views.append(ctx.parent(self.parent))
 
 
+@pytest.mark.skipif(not HAS_EXEC_ALGOS, reason="this build has no execution algorithms (docs/rust-plan.md R3, second step)")
 def test_a_passthrough_parent_order(tmp_path: Path) -> None:
     node = Node(_config(tmp_path, SIM), out=tmp_path / "run")
     strategy = ParentBuyer(id="taker-001")
@@ -256,6 +261,7 @@ class RestThenTake(Strategy):
             self.fills.append(str(event.last_px))
 
 
+@pytest.mark.skipif(not HAS_EXEC_ALGOS, reason="this build has no execution algorithms (docs/rust-plan.md R3, second step)")
 def test_passive_then_aggressive_rests_then_takes(tmp_path: Path) -> None:
     node = Node(_config(tmp_path, SIM), out=tmp_path / "run")
     strategy = RestThenTake(id="taker-001")

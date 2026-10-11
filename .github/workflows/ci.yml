@@ -354,6 +354,15 @@ jobs:
           tools/node_gate.sh target/release target/det-o0 target/node-gate
       - name: Conformance vectors are up to date
         run: python3 tools/gen_conformance.py && git diff --exit-code -- crates/kernel/model
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: python/tests on the Rust extension
+        run: |
+          python -m pip install "pytest==9.1.1" "numpy==2.5.3"
+          cargo build -p py
+          ln -sfn "$(pwd)/target/debug/lib_core.so" ../python/jarvis/_core.abi3.so
+          PYTHONPATH=../python python -m pytest -q ../python/tests
 
   gate:
     if: always()

@@ -163,6 +163,8 @@ impl Instrument {
             || multiplier.is_undef()
             || margin_init.is_undef()
             || margin_maint.is_undef()
+            || margin_init.is_zero()
+            || margin_maint.is_zero()
         {
             return Err(Status::InvalidArgument);
         }

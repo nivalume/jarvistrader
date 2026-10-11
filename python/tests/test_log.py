@@ -9,13 +9,15 @@ import pytest
 from jarvis import log
 from jarvis import model as m
 
+from conftest import RECORD_KINDS
+
 
 def test_python_round_trip_reproduces_the_log(tmp_path: Path) -> None:
     source = tmp_path / "corpus"
     log.write_corpus(str(source), 7, 3000)
     records = list(log.read(str(source)))
     assert len(records) == 3000
-    assert len({r.kind for r in records}) == 42  # every record kind
+    assert len({r.kind for r in records}) == RECORD_KINDS  # every record kind of this build
 
     copy = tmp_path / "copy"
     with log.EventLogWriter(str(copy), seed=7) as writer:

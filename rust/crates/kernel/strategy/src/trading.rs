@@ -720,7 +720,7 @@ impl Trading {
             position_id: PositionId::netting(&def.id, &self.strategy_id(s)).unwrap_or_default(),
             side: p.side(),
             signed_raw: p.signed_raw(),
-            quantity: Quantity::from_raw(p.quantity_raw(), FIXED_PRECISION).unwrap_or_default(),
+            quantity: Quantity::from_raw(p.quantity_raw(), def.size_precision).unwrap_or_default(),
             avg_px_open: p.avg_px_open(),
             realized_pnl: money(p.realized_raw() - p.commission_raw() + p.funding_raw()),
             unrealized_pnl: self.portfolio.unrealized(def, slot, p).unwrap_or(Money::zero(ccy)),

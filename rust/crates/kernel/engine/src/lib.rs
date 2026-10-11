@@ -37,7 +37,7 @@ use model::data::{
     MarkPriceUpdate, OrderBookDeltas, QuoteTick, TradeTick,
 };
 use model::enums::{NodeState, StopMode};
-use model::event::{NodeLifecycle, Shutdown, TimerFired};
+use model::event::{NodeLifecycle, Shutdown, StrategyError, TimerFired};
 use model::instruments::Instrument;
 use model::order_events::OrderEvent;
 use model::outputs::{FeatureUpdate, Output};
@@ -285,6 +285,10 @@ impl Engine {
             }
             Event::NodeLifecycle(e) => {
                 self.on_lifecycle(e);
+                Ok(())
+            }
+            Event::StrategyError(e) => {
+                self.on_strategy_error(e);
                 Ok(())
             }
             Event::Shutdown(e) => self.on_shutdown(*e),
@@ -675,18 +679,23 @@ impl Engine {
     fn note(&mut self, s: StrategyIndex, result: Result<()>) {
         let Err(status) = result else { return };
         self.kernel.fail(s, status);
-        match self.policy {
-            ErrorPolicy::Ignore => {}
-            ErrorPolicy::HaltStrategy | ErrorPolicy::HaltNode => {
-                if let Some(d) = self.kernel.disabled.get_mut(s.0 as usize) {
-                    *d = true;
-                }
-                let k = &mut self.kernel;
-                let _ = k.trading.cancel_all(k.current, s, None, &mut k.outputs);
-                if self.policy == ErrorPolicy::HaltNode {
-                    self.kernel.halt_requested = true;
-                }
-            }
+        self.kernel.apply_error_policy(s, self.policy);
+    }
+
+    /// The recorded failure of a strategy (section 7.6): the policy is applied again (a no-op
+    /// after the failing step applied it; a restored or replayed node sees the same state), then
+    /// the strategy hears about it in `on_error`. A failure of `on_error` itself applies the
+    /// policy once more and is not recorded again.
+    fn on_strategy_error(&mut self, e: &StrategyError) {
+        let s = StrategyIndex(e.strategy_index);
+        if s.0 as usize >= self.strategies.len() {
+            return;
+        }
+        self.kernel.apply_error_policy(s, self.policy);
+        let Some(strategy) = self.strategies.get_mut(s.0 as usize) else { return };
+        self.stats.callbacks += 1;
+        if strategy.on_error(&mut Context::new(&mut self.kernel, s), e).is_err() {
+            self.kernel.apply_error_policy(s, self.policy);
         }
     }
 

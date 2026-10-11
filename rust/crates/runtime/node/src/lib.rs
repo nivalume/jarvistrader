@@ -29,7 +29,9 @@ pub use config::{
 pub use event_log::{EventLogOptions, EventLogReader, EventLogWriter};
 pub use registry::Registry;
 pub use replay::{replay_run, Divergence, ReplayOptions, ReplayReport};
-pub use run_dir::{create_run_directory, load_run_config, run_header, RunManifest};
+pub use run_dir::{
+    create_run_directory, load_run_config, run_header, run_header_with, HeaderExtras, RunManifest,
+};
 pub use run_report::{build_run_report, report_text, RunReport};
 
 /// A failure of the node with what went wrong, for the person running it.

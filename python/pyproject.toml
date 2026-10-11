@@ -1,0 +1,23 @@
+# The Python package on the Rust extension (docs/rust-plan.md R4): maturin builds `jarvis._core`
+# from rust/crates/python/py and packs it with this directory's `jarvis` package, the same
+# sources the repository root's pyproject.toml ships on the C++ extension (scikit-build-core).
+# Which extension a checkout installs is the choice of pyproject: `pip install .` at the root is
+# the C++ one, `pip install ./python` (or `cd python && maturin develop --release`) the Rust one.
+# For development without a wheel, `just rust-py` links the cargo build into `jarvis/`.
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "A deterministic trading kernel with a Python strategy layer (the Rust tree)"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+
+[tool.maturin]
+manifest-path = "../rust/crates/python/py/Cargo.toml"
+module-name = "jarvis._core"
+python-source = "."
+features = ["pyo3/extension-module"]

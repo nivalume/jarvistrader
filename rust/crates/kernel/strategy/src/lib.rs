@@ -24,6 +24,7 @@ use model::data::{
     FundingRateUpdate, IndexPriceUpdate, InstrumentClose, InstrumentStatus, LiquidationOrder,
     MarkPriceUpdate, OrderBookDeltas, QuoteTick, TradeTick,
 };
+use model::event::StrategyError;
 use model::instruments::Instrument;
 use model::order_events::OrderEvent;
 use model::position_events::PositionEvent;
@@ -32,7 +33,7 @@ use model::InstrumentId;
 pub use context::Context;
 pub use data::subscription::{Cadence, DataKind, StrategyIndex};
 pub use execution::OrderIntent;
-pub use kernel::{ErrorPolicy, Kernel, KernelConfig, StrategyFailure};
+pub use kernel::{failure_hash, ErrorPolicy, Kernel, KernelConfig, StrategyFailure};
 pub use trading::{Trading, TradingConfig};
 pub use views::{ExposureView, OrderView, PositionView};
 
@@ -131,6 +132,11 @@ pub trait Strategy {
     }
     /// This strategy's positions: opened, changed, closed, adjusted (funding).
     fn on_position_event(&mut self, ctx: &mut Context<'_>, event: &PositionEvent) -> Result<()> {
+        Ok(())
+    }
+    /// This strategy's recorded failure (docs/architecture.md section 7.6), after the node
+    /// applied the error policy.
+    fn on_error(&mut self, ctx: &mut Context<'_>, error: &StrategyError) -> Result<()> {
         Ok(())
     }
     fn on_timer(

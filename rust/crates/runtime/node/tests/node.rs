@@ -80,6 +80,7 @@ fn run(catalog: &Path, out: &Path, extra: &[&str]) -> (node::NodeConfig, node::B
             resumed_from: String::new(),
         },
         out: Some(out.to_path_buf()),
+        ..BacktestRequest::default()
     };
     let result = run_backtest(&config, &request, strategies).unwrap_or_else(|e| panic!("{e}"));
     (config, result)

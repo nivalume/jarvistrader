@@ -197,6 +197,7 @@ fn routing_interns_and_classifies() {
                     | Event::TimerFired(_)
                     | Event::BatchEnd(_)
                     | Event::NodeLifecycle(_)
+                    | Event::StrategyError(_)
                     | Event::Shutdown(_)
             )),
         }

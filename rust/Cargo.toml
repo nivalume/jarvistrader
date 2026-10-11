@@ -21,6 +21,7 @@ members = [
   "crates/testkit/testkit",
   "crates/testkit/corpus",
   "crates/tools/cli",
+  "crates/python/py",
 ]
 
 [workspace.package]

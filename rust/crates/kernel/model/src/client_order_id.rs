@@ -2,7 +2,7 @@
 //! 8.4). No wall clock goes into it, and it decodes, so reconciliation can tell an order of an
 //! earlier epoch of this node from an order placed by someone else.
 //!
-//! `epoch` and `seq` are Base32 (RFC 4648 alphabet, no padding) at fixed width: six characters
+//! `epoch` and `seq` are Crockford Base32 (`0-9A-Z` without I, L, O, U; no padding) at fixed width: six characters
 //! for the 30-bit epoch, eight for the 40-bit sequence, so the id sorts in placement order and the
 //! whole id stays within Binance's 36-character limit for a tag of up to 20 characters.
 
@@ -10,7 +10,7 @@ use kernel_core::{Result, Status};
 
 use crate::identifiers::ClientOrderId;
 
-const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 pub const EPOCH_CHARS: usize = 6;
 pub const SEQ_CHARS: usize = 8;
 pub const EPOCH_MAX: u64 = (1 << 30) - 1;
@@ -27,12 +27,8 @@ fn encode_base32(mut value: u64, out: &mut [u8]) {
 fn decode_base32(text: &[u8]) -> Option<u64> {
     let mut value: u64 = 0;
     for &c in text {
-        let digit = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'2'..=b'7' => c - b'2' + 26,
-            _ => return None,
-        };
-        value = (value << 5) | u64::from(digit);
+        let digit = ALPHABET.iter().position(|&a| a == c)?;
+        value = (value << 5) | digit as u64;
     }
     Some(value)
 }

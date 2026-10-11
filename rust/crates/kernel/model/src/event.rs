@@ -11,14 +11,14 @@ use crate::data::{
     FundingRateUpdate, IndexPriceUpdate, InstrumentClose, InstrumentStatus, LiquidationOrder,
     MarkPriceUpdate, OrderBookDeltas, QuoteTick, TradeTick,
 };
-use crate::enums::{LifecycleReason, NodeState, StopMode};
+use crate::enums::{LifecycleReason, NodeState, StopMode, StrategyErrorKind};
 use crate::instruments::Instrument;
 use crate::order_events::OrderEvent;
 use crate::wire::{Wire, WireReader, WireWriter};
 use crate::wire_struct;
 
 /// The version of the set of kinds and their encodings. It goes into the log header.
-pub const SCHEMA_VERSION: u16 = 2;
+pub const SCHEMA_VERSION: u16 = 3;
 
 /// A timer that came due, recorded as an input so a replay fires it at the same point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,6 +45,18 @@ pub struct NodeLifecycle {
     pub ts: UnixNanos,
 }
 wire_struct!(NodeLifecycle { from, to, reason, ts });
+
+/// A strategy callback failed (section 7.6): recorded as an input so a replay disables the
+/// strategy at the same point without re-raising. `message_hash` is the FNV-1a of the failure's
+/// name (`python:<exception type>`, or the `Status` name), stable across processes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StrategyError {
+    pub strategy_index: u16,
+    pub kind: StrategyErrorKind,
+    pub message_hash: u64,
+    pub ts_init: UnixNanos,
+}
+wire_struct!(StrategyError { strategy_index, kind, message_hash, ts_init });
 
 /// A request to stop, from a signal or the admin channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -84,6 +96,7 @@ pub enum Event {
     TimerFired(TimerFired),
     BatchEnd(BatchEnd),
     NodeLifecycle(NodeLifecycle),
+    StrategyError(StrategyError),
     Shutdown(Shutdown),
 }
 
@@ -108,6 +121,7 @@ pub enum EventKind {
     TimerFired = 40,
     BatchEnd = 41,
     NodeLifecycle = 42,
+    StrategyError = 43,
     Shutdown = 50,
 }
 
@@ -140,6 +154,7 @@ impl EventKind {
         EventKind::TimerFired,
         EventKind::BatchEnd,
         EventKind::NodeLifecycle,
+        EventKind::StrategyError,
         EventKind::Shutdown,
     ];
 
@@ -179,6 +194,7 @@ impl EventKind {
             EventKind::TimerFired => "TimerFired",
             EventKind::BatchEnd => "BatchEnd",
             EventKind::NodeLifecycle => "NodeLifecycle",
+            EventKind::StrategyError => "StrategyError",
             EventKind::Shutdown => "Shutdown",
         }
     }
@@ -201,7 +217,9 @@ impl EventKind {
                 EventCategory::Venue
             }
             EventKind::TimerFired | EventKind::BatchEnd => EventCategory::Time,
-            EventKind::NodeLifecycle | EventKind::Shutdown => EventCategory::Control,
+            EventKind::NodeLifecycle | EventKind::StrategyError | EventKind::Shutdown => {
+                EventCategory::Control
+            }
         }
     }
 }
@@ -227,6 +245,7 @@ impl Event {
             Event::TimerFired(_) => EventKind::TimerFired,
             Event::BatchEnd(_) => EventKind::BatchEnd,
             Event::NodeLifecycle(_) => EventKind::NodeLifecycle,
+            Event::StrategyError(_) => EventKind::StrategyError,
             Event::Shutdown(_) => EventKind::Shutdown,
         }
     }
@@ -253,6 +272,7 @@ impl Event {
             Event::TimerFired(e) => e.deadline,
             Event::BatchEnd(e) => e.ts,
             Event::NodeLifecycle(e) => e.ts,
+            Event::StrategyError(e) => e.ts_init,
             Event::Shutdown(_) => return None,
         })
     }
@@ -277,6 +297,7 @@ impl Event {
             Event::TimerFired(e) => w.put(e),
             Event::BatchEnd(e) => w.put(e),
             Event::NodeLifecycle(e) => w.put(e),
+            Event::StrategyError(e) => w.put(e),
             Event::Shutdown(e) => w.put(e),
         }
     }
@@ -301,6 +322,7 @@ impl Event {
             EventKind::TimerFired => Event::TimerFired(r.get()?),
             EventKind::BatchEnd => Event::BatchEnd(r.get()?),
             EventKind::NodeLifecycle => Event::NodeLifecycle(r.get()?),
+            EventKind::StrategyError => Event::StrategyError(r.get()?),
             EventKind::Shutdown => Event::Shutdown(r.get()?),
         })
     }

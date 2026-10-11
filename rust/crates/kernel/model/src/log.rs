@@ -47,6 +47,9 @@ pub struct LogHeader {
     pub env: FixedString<16>,
     pub build: FixedString<96>,
     pub platform: FixedString<64>,
+    /// The Python host's interpreter and numpy versions; empty for a native node.
+    pub python_version: FixedString<16>,
+    pub numpy_version: FixedString<16>,
 }
 
 impl LogHeader {
@@ -62,6 +65,8 @@ impl LogHeader {
             env: FixedString::from_text(env)?,
             build: FixedString::new(),
             platform: FixedString::new(),
+            python_version: FixedString::new(),
+            numpy_version: FixedString::new(),
         })
     }
 
@@ -78,6 +83,8 @@ impl LogHeader {
         w.put(&self.env);
         w.put(&self.build);
         w.put(&self.platform);
+        w.put(&self.python_version);
+        w.put(&self.numpy_version);
         let crc = crc32c_finish(crc32c_extend(crc32c_init(), &w.as_slice()[start..]));
         w.u32(crc);
     }
@@ -101,6 +108,8 @@ impl LogHeader {
         let env = r.get()?;
         let build = r.get()?;
         let platform = r.get()?;
+        let python_version = r.get()?;
+        let numpy_version = r.get()?;
         let end = r.position();
         let crc = r.u32()?;
         let body = &r.rest_from(start)[..end - start];
@@ -117,6 +126,8 @@ impl LogHeader {
             env,
             build,
             platform,
+            python_version,
+            numpy_version,
         })
     }
 }

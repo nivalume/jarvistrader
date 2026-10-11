@@ -16,10 +16,11 @@ use engine::snapshot_schedule::{asks_for_snapshot, SnapshotSchedule};
 use engine::Engine;
 use kernel_core::sha256::{hex, Sha256};
 use kernel_core::{EventKey, Status};
+use model::enums::StrategyErrorKind;
 use model::log::{Record, RecordBody};
 use model::outputs::Output;
 use model::Event;
-use strategy::Strategy;
+use strategy::{Strategy, StrategyFailure};
 
 use crate::backtest_node::{error_policy, kernel_config, name_strategies};
 use crate::config::NodeConfig;
@@ -63,7 +64,8 @@ pub struct ReplayReport {
     pub inputs: u64,
     pub outputs: u64,
     pub divergence: Option<Divergence>,
-    /// `dump_state`: `sha256 <hex> bytes <n>` of the engine state after the last step.
+    /// `dump_state`: `state: at seq=<n> sha256 <hex> bytes <n>; ...` of the engine state after
+    /// the last step.
     pub state: String,
     /// Snapshot files that matched the replayed state.
     pub snapshots_checked: u64,
@@ -100,9 +102,18 @@ struct Replayer<'a> {
     skip_until: u64,
     computed: Vec<(EventKey, Output)>,
     matched: usize,
+    /// Failures the last step reproduced, which the next inputs must record as `StrategyError`.
+    expected_errors: Vec<StrategyFailure>,
     last_seq: u64,
     restored: bool,
     stopped: bool,
+}
+
+fn failure_text(f: &StrategyFailure) -> String {
+    format!(
+        "StrategyError strategy_index={} kind={:?} message_hash={}",
+        f.strategy.0, f.kind, f.message_hash
+    )
 }
 
 impl Replayer<'_> {
@@ -189,6 +200,36 @@ impl Replayer<'_> {
             self.stopped = true;
             return;
         }
+        // Recorded failures are read from the log, not re-raised (section 7.6): each must match
+        // one the replay reproduced in the step before, in order; an Overrun comes from a wall
+        // clock measurement and is taken as recorded.
+        if let Event::StrategyError(e) = event {
+            if e.kind != StrategyErrorKind::Overrun {
+                let expected = self.expected_errors.first().copied();
+                match expected {
+                    None => {
+                        self.diverge(
+                            key.seq,
+                            input_line(key, event),
+                            "no strategy failure at this point".to_string(),
+                        );
+                        return;
+                    }
+                    Some(f)
+                        if f.strategy.0 != e.strategy_index || f.message_hash != e.message_hash =>
+                    {
+                        self.diverge(key.seq, input_line(key, event), failure_text(&f));
+                        return;
+                    }
+                    Some(_) => {
+                        self.expected_errors.remove(0);
+                    }
+                }
+            }
+        } else if let Some(f) = self.expected_errors.first().copied() {
+            self.diverge(key.seq, input_line(key, event), failure_text(&f));
+            return;
+        }
         if let Event::NodeLifecycle(lc) = event {
             let from = self.lifecycle.state();
             if self.lifecycle.apply(lc.reason, lc.ts).is_err() {
@@ -208,6 +249,9 @@ impl Replayer<'_> {
         self.matched = 0;
         for (i, o) in self.engine.outputs().iter().enumerate() {
             self.computed.push((EventKey::new(key.ts, i as u16, key.seq), *o));
+        }
+        if !matches!(event, Event::StrategyError(_)) {
+            self.expected_errors.extend_from_slice(self.engine.failures());
         }
         self.last_seq = key.seq;
         self.report.inputs += 1;
@@ -262,12 +306,15 @@ impl Replayer<'_> {
             return;
         }
         if self.options.tolerate_torn_end {
-            self.report.torn_step = self.matched < self.computed.len();
+            self.report.torn_step =
+                self.matched < self.computed.len() || !self.expected_errors.is_empty();
             return;
         }
         if self.matched < self.computed.len() {
             let computed = self.next_computed();
             self.diverge(self.last_seq, "no output".to_string(), computed);
+        } else if let Some(f) = self.expected_errors.first() {
+            self.diverge(self.last_seq, "the end of the log".to_string(), failure_text(f));
         }
     }
 
@@ -297,10 +344,15 @@ impl Replayer<'_> {
         if self.options.dump_state {
             let state = self.engine.save_state().unwrap_or_default();
             let digest = hex(&Sha256::digest(&state));
+            let kernel = self.engine.kernel();
             self.report.state = format!(
-                "state: sha256 {} bytes {}\n",
+                "state: at seq={} sha256 {} bytes {}; instruments {}, features {}, strategies {}\n",
+                self.last_seq,
                 String::from_utf8_lossy(&digest),
-                state.len()
+                state.len(),
+                kernel.instruments.len(),
+                kernel.features.len(),
+                self.engine.strategy_count()
             );
         }
         Ok(())
@@ -331,6 +383,7 @@ pub fn replay_into(
         skip_until: 0,
         computed: Vec::new(),
         matched: 0,
+        expected_errors: Vec::new(),
         last_seq: 0,
         restored: false,
         stopped: false,

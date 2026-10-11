@@ -43,6 +43,7 @@ pub fn route_of(
         | Event::TimerFired(_)
         | Event::BatchEnd(_)
         | Event::NodeLifecycle(_)
+        | Event::StrategyError(_)
         | Event::Shutdown(_) => Ok(None),
     }
 }

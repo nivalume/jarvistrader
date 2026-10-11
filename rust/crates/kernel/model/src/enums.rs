@@ -111,6 +111,7 @@ jarvis_enum!(BarAggregation: u8 {
     Day = 14 => "DAY", Week = 15 => "WEEK", Month = 16 => "MONTH", Year = 17 => "YEAR", Renko = 18 => "RENKO",
 });
 jarvis_enum!(BarIntervalType: u8 { LeftOpen = 1 => "LEFT_OPEN", RightOpen = 2 => "RIGHT_OPEN" });
+jarvis_enum!(BetSide: u8 { Back = 1 => "BACK", Lay = 2 => "LAY" });
 jarvis_enum!(BookAction: u8 { Add = 1 => "ADD", Update = 2 => "UPDATE", Delete = 3 => "DELETE", Clear = 4 => "CLEAR" });
 jarvis_enum!(BookType: u8 { L1Mbp = 1 => "L1_MBP", L2Mbp = 2 => "L2_MBP", L3Mbo = 3 => "L3_MBO" });
 jarvis_enum!(ContingencyType: u8 { Oco = 1 => "OCO", Oto = 2 => "OTO", Ouo = 3 => "OUO" });
@@ -153,6 +154,11 @@ jarvis_enum!(
     RecordFlag: u8 { Last = 128 => "F_LAST", Tob = 64 => "F_TOB", Snapshot = 32 => "F_SNAPSHOT", Mbp = 16 => "F_MBP", Reserved2 = 8 => "RESERVED_2", Reserved1 = 4 => "RESERVED_1" }
 );
 jarvis_enum!(TimeInForce: u8 { Gtc = 1 => "GTC", Ioc = 2 => "IOC", Fok = 3 => "FOK", Gtd = 4 => "GTD", Day = 5 => "DAY", AtTheOpen = 6 => "AT_THE_OPEN", AtTheClose = 7 => "AT_THE_CLOSE" });
+jarvis_enum!(ContinuousFutureAdjustmentType: u8 {
+    BackwardSpread = 1 => "BACKWARD_SPREAD", ForwardSpread = 2 => "FORWARD_SPREAD", BackwardRatio = 3 => "BACKWARD_RATIO", ForwardRatio = 4 => "FORWARD_RATIO",
+});
+jarvis_enum!(GreeksConvention: u8 { BlackScholes = 1 => "BLACK_SCHOLES", PriceAdjusted = 2 => "PRICE_ADJUSTED" });
+jarvis_enum!(OtoTriggerMode: u8 { Partial = 0 => "PARTIAL", Full = 1 => "FULL" });
 jarvis_enum!(TradingState: u8 { Active = 1 => "ACTIVE", Reducing = 2 => "REDUCING", Halted = 3 => "HALTED" });
 jarvis_enum!(TrailingOffsetType: u8 { Price = 1 => "PRICE", BasisPoints = 2 => "BASIS_POINTS", Ticks = 3 => "TICKS", PriceTier = 4 => "PRICE_TIER" });
 jarvis_enum!(TriggerType: u8 {
@@ -189,3 +195,9 @@ jarvis_enum!(
 jarvis_enum!(
     /// jarvis's own: how a node stops (docs/architecture.md section 19.4).
     StopMode: u8 { CancelAllThenExit = 1 => "CANCEL_ALL_THEN_EXIT", LeaveOrders = 2 => "LEAVE_ORDERS", KillSwitch = 3 => "KILL_SWITCH" });
+
+jarvis_enum!(
+    /// Why a strategy failed (docs/architecture.md section 7.6): a callback raised or returned an
+    /// error, or it overran its budget `overrun_limit` times in a row (sandbox and live).
+    StrategyErrorKind: u8 { Exception = 0 => "EXCEPTION", Overrun = 1 => "OVERRUN" }
+);

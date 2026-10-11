@@ -7,7 +7,7 @@
 3. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展；R4 为 Rust 的事件日志写 Python 读取器。
 4. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查、`rust-fp` 确定性门），CI 的 `rust` job 跑同样的内容并进入 `gate`。
 
-状态：R0、R1（除待办项）、R2 完成，R3 第一阶段完成（执行算法、对账、事后监控顺延到 R3 第二阶段），R4 第一阶段完成（sys 的文件与时钟、node 的配置/运行目录/快照/目录源/回测节点/回放/报告与 CLI；Python 绑定与读取器顺延到 R4 第二阶段）；本文随每个里程碑更新。
+状态：R0、R1（除待办项）、R2 完成，R3 第一阶段完成（执行算法、对账、事后监控顺延到 R3 第二阶段），R4 完成（第一阶段 sys 与 node；第二阶段 `py` crate、`PyStrategyHost`、`python/tests/` 与 `examples/py/` 在 Rust 扩展上通过；C++ 格式目录的转换器与 sandbox/live 随 R5）；本文随每个里程碑更新。
 
 ## R0 workspace 与门禁（在写领域代码之前，让约束先变成编译错误）
 
@@ -131,14 +131,24 @@
 >
 > 未做（R4 第二阶段）：`py` crate（PyO3 + maturin）、`PyStrategyHost`、`StrategyError` 输入（Rust 策略的失败由引擎确定性处理，无需记录；Python 策略需要）、`jarvis.log` 读取器、`python/tests/` 与 `examples/py/`；C++ 格式目录到 Rust 格式的转换器；sandbox/live 的 `RunStart`/`resume`/`truncate`（随 R5）。
 
+> 2026-10-11 第二阶段完成。
+> - 内核与 node 为 Python 宿主补的部分：`StrategyError` 输入（`StrategyErrorKind` EXCEPTION/OVERRUN、`strategy_index`、`message_hash`；`SCHEMA_VERSION` 3）、`Strategy::on_error`、`Context::report_error`/`seq`、`Kernel::fail_with`（一步内每个策略只记第一个失败）；`backtest::Driver` 在每步之后把 `engine.failures()` 记成 `StrategyError` 输入，回放核对记录的错误与重算的一致（多了、少了、hash 不同都是偏差）；日志头加 `python_version`/`numpy_version`（`node::HeaderExtras`，`BacktestRequest::extras`）；`run_report` 的行改为类型化字段（`Quantity`/`Money`/`Price`），Python 报告直接拿值；`--dump-state` 的文本带 `at seq=` 与 instruments/features/strategies 计数。与 C++ 树对齐的三处修正：`ClientOrderId` 的 epoch/seq 用 Crockford Base32（`mm01-000003-00000001`，原来用 RFC 4648 字母表），合约的 `margin_init`/`margin_maint` 必须为正（nautilus 规则），`PositionView.quantity` 用合约的 size precision；另补 `BookView::sequence`、`OrderView: Default`、nautilus 快照里 Rust 模型缺的 4 个枚举（`BetSide`、`ContinuousFutureAdjustmentType`、`GreeksConvention`、`OtoTriggerMode`）。四个 golden 指纹随之重生成。
+> - `py` crate（`crates/python/py`，PyO3 0.29，abi3-py311，cdylib `_core`；`python/pyproject.toml` 用 maturin 把它与 `python/jarvis` 打成 wheel（`pip install ./python`；根目录的 pyproject 仍是 C++ 扩展），开发用 `just rust-py` 直接把 `target/debug/lib_core.so` 放进 `python/jarvis/_core.abi3.so`）。`_core.model`：`Price`/`Quantity`/`Money`/`Currency`/标识符/`UUID4`/`BarType`/`BookOrder`/`ClientOrderIdGenerator`，枚举是 `enum.Enum` 带 `from_str`，全部事件、指令输出、合约类由 Rust 的字段表生成（位置/关键字构造、缺参/多参/类型错 `TypeError`、取值错 `ValueError`、`fields`/`to_dict`/eq/hash/repr/pickle）。`_core.log`：`EventLogWriter`（header 含 Python 与 numpy 版本、`PYTHONHASHSEED`）、`EventLogReader`、`Record`、`fingerprint`、`compare`、`write_corpus`、`event_text`。`_core.node`：`Cadence`、`DataKind`、`FeatureKind`、`FeatureSpec`、`Context`、`BookView`（回调时刻的拷贝，含 `sequence`）、`TradeBatch`/`QuoteBatch`（只读 numpy 列）、`OrderIntent`、`OrderView`/`PositionView`/`ExposureView`（`signed_qty`/`max_long` 等按合约 size precision 的 `Decimal`）、`NativeSpec`（`rust:<name>`，未知名字报 `no C++ strategy named ...`）、`NodeSetup.load/load_run/run/replay`、`parse_args`/`usage`（与 C++ `node_cli` 同文案）、`run_report`、`registered_strategies`、`load_native`（Rust 树无 C++ 插件：`cannot load` / `not a jarvis strategy plugin`）、`has_live = False`、`has_exec_algos = False`。
+> - `PyStrategyHost` 实现 `strategy::Strategy`：构造时按名查 22 个回调，未定义的不触碰 Python；`Context` 对象只在回调期间持有内核上下文指针（crate 中唯一的 `unsafe`，`PyContext::with` 说明不变量），回调之后再用报 `TypeError: ... only valid during the callback`；异常打印 `jarvis: strategy <id> raised <Type> in <callback> at seq <n>:` 加 traceback（截断 4096 字符），`report_error(Exception, failure_hash("python:<Type>"))`，回调返回 `InvalidState`；批次数组是只读拷贝（`numpy.frombuffer(bytes)`），回调后批次或数组仍被引用计一次 escape 并记 `jarvis.BatchEscaped`；`on_save`/`on_load` 进 `EngineState` 快照（长度前缀的 bytes）；回调耗时进 `StrategyStats`，预算超限（sandbox/live 才量）记 `Overrun`。`submit_parent` 报 `ValueError`（执行算法随 R3 第二阶段），`parent` 返回 None。
+> - harness：`python/tests/conftest.py` 给出 `RUST`、`HAS_EXEC_ALGOS`、`RECORD_KINDS`（Rust 模型没有 live 层输入，语料 37 种记录而不是 42）；两个执行算法测试按 `has_exec_algos` 跳过，快照测试在无执行算法时不下父单，其余逐字不改。`just rust-py` 与 CI 的 rust job 构建扩展并跑 `python/tests`。
+>
+> 验收结果：`python/tests` 159 通过、8 跳过（3 个要 C++ 示例二进制、2 个要 C++ 插件构建、2 个执行算法、1 个 live）；`examples/py/trade_logger.py`、`mm_quote.py`、`trend_follow.py` 零改动在 `jarvis-rs catalog` 生成的目录上运行，`--replay` 自己的运行无偏差；Rust 三个 profile 的测试、clippy pedantic、no_std 检查、`rust-fp`（语料与 node 两半）全部通过；maturin 打出的 wheel 装进干净 venv 后 `python/tests` 同样 159 通过。
+>
+> 未做：C++ 格式目录到 Rust 格式的转换器；sandbox/live（R5）；执行算法与 `ParentView`（R3 第二阶段）；`python/jarvis/` 按构建选项选扩展——包本身不选，装进 `python/jarvis` 的是哪一个 `_core` 就用哪一个（C++ 走根目录的 scikit-build-core，Rust 走 `python/pyproject.toml` 的 maturin 或 `just rust-py`）；`jarvis.log` 不再需要纯 Python 读取器，`_core.log` 读写 Rust 日志。
+
 - [x] task: sys — 崩溃安全的文件写入、单调与墙上时钟、运行 id（§3 sys）；阻塞 socket、共享库加载、停止信号随 R5
 - [x] task: node — `NodeConfig`：toml_edit、未知键报错、`--env` 与 `--set` 覆盖、规范化与 hash 与 C++ 一致（§4.2）
 - [x] task: node — Node 生命周期状态机、`BacktestNode`、构建信息、`jarvis-rs replay` / `config` / `report`（另有 `backtest` / `snapshot` / `catalog`）
 - [x] task: node — 快照文件与恢复（§16.3）
-- [ ] task: python — `py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
-- [ ] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
-- [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `model::log`），指纹与 `jarvis-rs fingerprint` 一致
-- [ ] task: 验收 — `examples/py/` 零改动运行；回放 Rust 节点自己的日志逐字节复现输出
+- [x] task: python — `py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包加载装进去的那个扩展（C++ 或 Rust）
+- [x] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
+- [x] task: python — `jarvis.log` 读 Rust 事件日志（由 `py` crate 的 `_core.log` 提供，不是纯 Python），指纹与 `jarvis-rs fingerprint` 一致
+- [x] task: 验收 — `examples/py/` 零改动运行；回放 Rust 节点自己的日志逐字节复现输出
 
 ## R5 network、adapter、live（脚本化服务端与混沌测试通过）
 

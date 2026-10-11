@@ -1,0 +1,28 @@
+[package]
+name = "py"
+description = "The jarvis Python extension (jarvis._core): model types, event logs, strategies and the node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+kernel-core.workspace = true
+model.workspace = true
+data.workspace = true
+strategy.workspace = true
+engine.workspace = true
+backtest.workspace = true
+node.workspace = true
+corpus.workspace = true
+sys.workspace = true
+pyo3 = { version = "0.29.3", features = ["abi3-py311", "extension-module"] }

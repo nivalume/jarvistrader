@@ -265,7 +265,7 @@ fn trade_to_strategy_to_order_to_fill() {
     assert_eq!(submit.quantity, Quantity::parse("0.500").unwrap());
     let cid = seen.borrow().order_id.unwrap();
     assert_eq!(submit.client_order_id, cid);
-    assert_eq!(cid.as_str(), "jarvis-AAAAAB-AAAAAAAB");
+    assert_eq!(cid.as_str(), "jarvis-000001-00000001");
     assert_eq!(
         seen.borrow().orders,
         vec![OrderStatus::Submitted],
@@ -359,7 +359,12 @@ fn a_failing_callback_halts_the_strategy_and_cancels_its_orders() {
     e.step(key(12), &trade(12, "99.1", "0.100")).unwrap();
     assert_eq!(
         e.failures(),
-        &[strategy::StrategyFailure { strategy: StrategyIndex(0), status: Status::InvalidState }]
+        &[strategy::StrategyFailure {
+            strategy: StrategyIndex(0),
+            status: Status::InvalidState,
+            kind: model::enums::StrategyErrorKind::Exception,
+            message_hash: strategy::failure_hash("InvalidState"),
+        }]
     );
     assert!(e
         .outputs()

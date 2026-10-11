@@ -546,6 +546,11 @@ impl BookView<'_> {
     pub fn book_type(&self) -> Option<BookType> {
         self.book.book_type()
     }
+    /// Updates applied so far.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.book.sequence()
+    }
 }
 
 /// Snapshot encoding: the shape (checked against the restoring book's), the window's position,

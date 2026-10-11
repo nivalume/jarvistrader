@@ -132,8 +132,8 @@ pub(crate) fn print_backtest(result: &BacktestResult) -> ExitCode {
             .map_or_else(|| "(not recorded)".to_string(), |d| d.display().to_string())
     );
     println!(
-        "inputs: {} (data {}, venue answers {}, batches {}, timers {})",
-        s.inputs, s.data_events, s.venue_answers, s.batches, s.timers
+        "inputs: {} (data {}, venue answers {}, batches {}, timers {}, strategy errors {})",
+        s.inputs, s.data_events, s.venue_answers, s.batches, s.timers, s.strategy_errors
     );
     println!("outputs: {}", s.outputs);
     println!("skipped: {}", s.skipped);
@@ -166,7 +166,11 @@ pub(crate) fn backtest(args: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(e) => return failed(&e.message),
     };
-    let request = BacktestRequest { manifest, out: args.option("--out").map(PathBuf::from) };
+    let request = BacktestRequest {
+        manifest,
+        out: args.option("--out").map(PathBuf::from),
+        ..BacktestRequest::default()
+    };
     match run_backtest(&config, &request, strategies) {
         Ok(result) => print_backtest(&result),
         Err(e) => failed(&e.message),

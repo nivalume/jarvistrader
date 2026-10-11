@@ -10,6 +10,7 @@ use kernel_core::clock::TimerKey;
 use kernel_core::{DurationNanos, Result, Status, UnixNanos};
 use model::account::AccountBalance;
 use model::bar::BarType;
+use model::enums::StrategyErrorKind;
 use model::enums::TradingState;
 use model::instruments::Instrument;
 use model::{ClientOrderId, Currency, InstrumentId, Price, Quantity};
@@ -33,6 +34,17 @@ impl<'a> Context<'a> {
     #[must_use]
     pub const fn strategy(&self) -> StrategyIndex {
         self.strategy
+    }
+    /// The current input's seq.
+    #[must_use]
+    pub const fn seq(&self) -> u64 {
+        self.kernel.current.seq
+    }
+
+    /// Names this strategy's failure in the step (a host's exception type, an overrun); the
+    /// callback then returns an error and the node records a `StrategyError` with this hash.
+    pub fn report_error(&mut self, kind: StrategyErrorKind, message_hash: u64) {
+        self.kernel.fail_with(self.strategy, Status::InvalidState, kind, message_hash);
     }
 
     // ---- time, randomness, records ------------------------------------------------------------

@@ -24,7 +24,7 @@ use crate::event_log::{EventLogOptions, EventLogReadOptions, EventLogReader, Eve
 use crate::log_source::{
     catalog_directory, day_directories, day_start, resolve_catalog, LogSource,
 };
-use crate::run_dir::{create_run_directory, run_header, RunManifest};
+use crate::run_dir::{create_run_directory, run_header_with, HeaderExtras, RunManifest};
 use crate::snapshot_file::SnapshotInfo;
 use crate::{NodeError, NodeResult};
 
@@ -322,6 +322,8 @@ pub struct BacktestRequest {
     pub manifest: RunManifest,
     /// The run directory; `None` for `persistence.dir`.
     pub out: Option<PathBuf>,
+    /// The Python host's versions, for the log header.
+    pub extras: HeaderExtras,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -355,10 +357,14 @@ fn drive(
     let directory = create_run_directory(config, &request.manifest, request.out.as_deref())?;
     // A backtest writes the log on the core thread and never syncs it: async and barrier differ
     // only where commands reach a venue (section 16.2).
-    let writer = EventLogWriter::open(&directory, &run_header(config), EventLogOptions::default())
-        .map_err(|s| {
-            NodeError::new(s, format!("cannot open the run log in {}", directory.display()))
-        })?;
+    let writer = EventLogWriter::open(
+        &directory,
+        &run_header_with(config, &request.extras),
+        EventLogOptions::default(),
+    )
+    .map_err(|s| {
+        NodeError::new(s, format!("cannot open the run log in {}", directory.display()))
+    })?;
     let mut recorder = LogFileRecorder { writer };
     let run = Driver::new(engine, source, &mut recorder, options).run();
     let closed = recorder.writer.close();

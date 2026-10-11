@@ -45,15 +45,33 @@ fn set_text<const N: usize>(text: &str) -> FixedString<N> {
     FixedString::from_text(&text[..end]).unwrap_or_default()
 }
 
+/// What a Python host adds to the log header (docs/architecture.md section 16.1); empty for a
+/// native node.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeaderExtras {
+    pub python_version: String,
+    pub numpy_version: String,
+    pub python_hash_seed: Option<u32>,
+}
+
 /// The log header of a run under `config`: seed, config hash and the build identity.
 #[must_use]
 pub fn run_header(config: &NodeConfig) -> LogHeader {
+    run_header_with(config, &HeaderExtras::default())
+}
+
+/// `run_header` with a host's extras.
+#[must_use]
+pub fn run_header_with(config: &NodeConfig, extras: &HeaderExtras) -> LogHeader {
     let mut header = LogHeader::new(config_hash(config), config.node.seed, "", "")
         .unwrap_or_else(|_| unreachable!("empty tags fit"));
     header.node_tag = set_text(&config.node.id);
     header.env = set_text(env_name(config.node.env));
     header.build = set_text(&build_info::build_text());
     header.platform = set_text(&build_info::platform_text());
+    header.python_version = set_text(&extras.python_version);
+    header.numpy_version = set_text(&extras.numpy_version);
+    header.python_hash_seed = extras.python_hash_seed;
     header
 }
 

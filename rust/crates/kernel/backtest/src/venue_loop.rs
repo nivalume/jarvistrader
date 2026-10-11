@@ -151,6 +151,7 @@ fn set_ts_init(event: &mut Event, ts: UnixNanos) {
         Event::TimerFired(_)
         | Event::BatchEnd(_)
         | Event::NodeLifecycle(_)
+        | Event::StrategyError(_)
         | Event::Shutdown(_) => {}
     }
 }

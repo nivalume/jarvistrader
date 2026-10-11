@@ -25,10 +25,11 @@ use engine::snapshot_schedule::{asks_for_snapshot, SnapshotSchedule};
 use engine::Engine;
 use kernel_core::{EventKey, Result, UnixNanos};
 use model::enums::{LifecycleReason, NodeState};
-use model::event::{BatchEnd, TimerFired};
+use model::event::{BatchEnd, StrategyError, TimerFired};
 use model::log::{Fingerprint, Fingerprinter, LogWriter};
 use model::outputs::Output;
 use model::Event;
+use strategy::StrategyFailure;
 
 use crate::source::EventSource;
 use crate::venue_loop::{VenueLoop, VENUE_SOURCE};
@@ -126,6 +127,8 @@ pub struct RunSummary {
     pub timers: u64,
     /// Order events from the simulated venue.
     pub venue_answers: u64,
+    /// `StrategyError` inputs recorded (section 7.6).
+    pub strategy_errors: u64,
     /// A strategy error stopped the node (`ErrorPolicy::HaltNode`).
     pub halted: bool,
     /// Orders still open when the node stopped.
@@ -405,6 +408,25 @@ impl<'a, R: Recorder> Driver<'a, R> {
             match self.recorder.snapshot(self.engine, key) {
                 Ok(()) => self.summary.snapshots += 1,
                 Err(_) => self.summary.snapshot_failures += 1,
+            }
+        }
+        // A callback failure becomes the next input (section 7.6), so a replay disables the
+        // strategy at the same point without re-raising. A failure of `on_error` itself is not
+        // recorded again.
+        if !matches!(event, Event::StrategyError(_)) {
+            let failures: Vec<StrategyFailure> = self.engine.failures().to_vec();
+            for f in failures {
+                let error = StrategyError {
+                    strategy_index: f.strategy.0,
+                    kind: f.kind,
+                    message_hash: f.message_hash,
+                    ts_init: key.ts,
+                };
+                self.summary.strategy_errors += 1;
+                self.step_input(
+                    EventKey::new(key.ts, KERNEL_SOURCE, 0),
+                    &Event::StrategyError(error),
+                )?;
             }
         }
         Ok(())

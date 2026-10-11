@@ -29,33 +29,68 @@ use crate::event_log::{EventLogReadOptions, EventLogReader};
 use crate::run_dir::load_run_config;
 use crate::{NodeError, NodeResult};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// One (strategy, instrument) line of the report. Amounts are typed so the Python report can
+/// hand them out as values; `text` formats them.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportRow {
     pub strategy: String,
     pub instrument: String,
     pub fills: u64,
     pub maker_fills: u64,
     pub taker_fills: u64,
-    pub bought: String,
-    pub sold: String,
+    pub bought: Quantity,
+    pub sold: Quantity,
     /// Traded notional in the settlement currency.
-    pub notional: String,
+    pub notional: Money,
     /// Paid (positive).
-    pub commission: String,
+    pub commission: Money,
     /// Received (positive) or paid.
-    pub funding: String,
+    pub funding: Money,
     /// Gross of commission and funding.
-    pub realized: String,
+    pub realized: Money,
     /// At the valuation price.
-    pub unrealized: String,
+    pub unrealized: Money,
     /// `realized - commission + funding + unrealized`.
-    pub net: String,
-    /// Signed, at the end.
-    pub position: String,
-    pub avg_px_open: Option<String>,
-    pub valuation: Option<String>,
+    pub net: Money,
+    /// Signed, at the end: raw at the 1e9 scale, shown at the instrument's size precision.
+    pub position_raw: i64,
+    pub size_precision: u8,
+    pub avg_px_open: Option<Price>,
+    pub valuation: Option<Price>,
     /// `mark`, `last trade`, `last quote mid` or `none`.
     pub valuation_source: String,
+}
+
+impl ReportRow {
+    fn blank(strategy: String, instrument: String, acc: &Acc, currency: Currency) -> Self {
+        let zero = Money::zero(currency);
+        Self {
+            strategy,
+            instrument,
+            fills: acc.fills,
+            maker_fills: acc.maker,
+            taker_fills: acc.taker,
+            bought: Quantity::default(),
+            sold: Quantity::default(),
+            notional: zero,
+            commission: zero,
+            funding: zero,
+            realized: zero,
+            unrealized: zero,
+            net: zero,
+            position_raw: 0,
+            size_precision: 0,
+            avg_px_open: None,
+            valuation: None,
+            valuation_source: "none".to_string(),
+        }
+    }
+
+    /// The signed position as decimal text at the instrument's size precision.
+    #[must_use]
+    pub fn position_text(&self) -> String {
+        decimal(self.position_raw, self.size_precision)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,8 +128,8 @@ pub struct RunReport {
     pub venue: String,
     pub fill_model: String,
     pub fee_schedule: String,
-    pub starting_balances: Vec<String>,
-    pub ending_balances: Vec<String>,
+    pub starting_balances: Vec<Money>,
+    pub ending_balances: Vec<Money>,
     pub rows: Vec<ReportRow>,
     /// By strategy.
     pub orders: Vec<(String, OrderCounts)>,
@@ -543,21 +578,15 @@ impl<'a> Reporter<'a> {
 
     fn row(&mut self, strategy: u16, slot: u32, acc: &Acc) -> ReportRow {
         let m = &self.markets[slot as usize];
-        let mut r = ReportRow {
-            strategy: self.strategy_name(strategy),
-            instrument: m.id.to_string(),
-            fills: acc.fills,
-            maker_fills: acc.maker,
-            taker_fills: acc.taker,
-            ..ReportRow::default()
-        };
+        let currency = m.definition.map_or_else(Currency::default, |d| d.settlement_currency());
+        let mut r = ReportRow::blank(self.strategy_name(strategy), m.id.to_string(), acc, currency);
         let Some(def) = m.definition else { return r };
-        let ccy = def.settlement_currency();
+        let ccy = currency;
         let size = def.size_precision;
-        r.bought = decimal(acc.bought as i64, size);
-        r.sold = decimal(acc.sold as i64, size);
-        r.notional = money(acc.notional as i64, ccy).to_string();
-        r.valuation_source = "none".to_string();
+        r.size_precision = size;
+        r.bought = Quantity::from_raw(acc.bought.max(0) as u64, size).unwrap_or_default();
+        r.sold = Quantity::from_raw(acc.sold.max(0) as u64, size).unwrap_or_default();
+        r.notional = money(acc.notional as i64, ccy);
         if m.mark {
             r.valuation_source = "mark".to_string();
         } else if m.trade {
@@ -566,7 +595,7 @@ impl<'a> Reporter<'a> {
             let _ = self.portfolio.on_trade_price(InstrumentSlot(slot), mid);
             r.valuation_source = "last quote mid".to_string();
         }
-        r.valuation = self.portfolio.valuation(InstrumentSlot(slot)).map(|p| p.to_string());
+        r.valuation = self.portfolio.valuation(InstrumentSlot(slot));
         let Some(p) =
             self.portfolio.position(StrategyIndex(strategy), InstrumentSlot(slot)).copied()
         else {
@@ -574,27 +603,26 @@ impl<'a> Reporter<'a> {
         };
         let unrealized =
             self.portfolio.unrealized(&def, InstrumentSlot(slot), &p).map_or(0, |m| m.raw());
-        r.realized = money(p.total_realized_raw(), ccy).to_string();
-        r.commission = money(p.total_commission_raw(), ccy).to_string();
-        r.funding = money(p.total_funding_raw(), ccy).to_string();
-        r.unrealized = money(unrealized, ccy).to_string();
+        r.realized = money(p.total_realized_raw(), ccy);
+        r.commission = money(p.total_commission_raw(), ccy);
+        r.funding = money(p.total_funding_raw(), ccy);
+        r.unrealized = money(unrealized, ccy);
         r.net = money(
             p.total_realized_raw() - p.total_commission_raw() + p.total_funding_raw() + unrealized,
             ccy,
-        )
-        .to_string();
-        r.position = decimal(p.signed_raw(), size);
+        );
+        r.position_raw = p.signed_raw();
         if p.is_open() {
-            r.avg_px_open = p.avg_px_open().map(|px| px.to_string());
+            r.avg_px_open = p.avg_px_open();
         }
         r
     }
 
     fn finish(mut self, out: &mut RunReport) {
-        out.starting_balances = self.start.iter().map(ToString::to_string).collect();
+        out.starting_balances.clone_from(&self.start);
         for m in &self.start {
             if let Some(w) = self.portfolio.wallet(m.currency()) {
-                out.ending_balances.push(w.to_string());
+                out.ending_balances.push(w);
             }
         }
         let accs: Vec<((u16, u32), Acc)> = self.accs.iter().map(|(k, v)| (*k, *v)).collect();
@@ -647,8 +675,13 @@ pub fn build_run_report(directory: &Path) -> NodeResult<RunReport> {
 #[must_use]
 pub fn report_text(r: &RunReport) -> String {
     let join = |items: &[String]| items.join(", ");
-    let balances =
-        |items: &[String]| if items.is_empty() { "none".to_string() } else { items.join(", ") };
+    let balances = |items: &[Money]| {
+        if items.is_empty() {
+            "none".to_string()
+        } else {
+            items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        }
+    };
     let mut out = String::new();
     let _ = writeln!(out, "run: {}", r.directory);
     let _ = writeln!(out, "node: {} ({}, seed {})", r.node_id, r.env, r.seed);
@@ -680,7 +713,7 @@ pub fn report_text(r: &RunReport) -> String {
             "  realized {}, commission {}, funding {}",
             row.realized, row.commission, row.funding
         );
-        let _ = write!(out, "  position {}", row.position);
+        let _ = write!(out, "  position {}", row.position_text());
         if let Some(avg) = &row.avg_px_open {
             let _ = write!(out, " at {avg}");
         }

@@ -12,13 +12,14 @@ from jarvis import Cadence, Strategy
 from jarvis import model as m
 from jarvis.node import Node
 
+from conftest import HAS_EXEC_ALGOS
 from test_sim import IID, MS, SIM, _config
 
 
 class Stateful(Strategy):
     """Quotes a post-only bid every other quote, cancels on the next, buys at market every
-    seventh, and runs a passive_then_aggressive parent from the third: its counters and ids are
-    its own state, saved and restored as JSON."""
+    seventh, and (where the build has execution algorithms) runs a passive_then_aggressive parent
+    from the third: its counters and ids are its own state, saved and restored as JSON."""
 
     def __init__(self, params: Any = None, **kwargs: Any) -> None:
         super().__init__(params, **kwargs)
@@ -32,7 +33,7 @@ class Stateful(Strategy):
 
     def on_quote(self, ctx: jarvis.Context, quote: m.QuoteTick) -> None:
         self.quotes += 1
-        if self.quotes == 3:
+        if self.quotes == 3 and HAS_EXEC_ALGOS:
             intent = ctx.market(IID, m.OrderSide.BUY, "0.010")
             self.parent = str(
                 ctx.submit_parent(intent, algo="passive_then_aggressive", params=[400 * MS])

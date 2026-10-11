@@ -25,6 +25,29 @@ pub struct OrderView {
     pub ts_init: UnixNanos,
 }
 
+/// A placeholder for buffers `Context::open_orders` fills: `INITIALIZED`, empty quantities.
+impl Default for OrderView {
+    fn default() -> Self {
+        Self {
+            client_order_id: ClientOrderId::default(),
+            venue_order_id: None,
+            instrument_id: InstrumentId::default(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            time_in_force: TimeInForce::Gtc,
+            post_only: false,
+            reduce_only: false,
+            price: None,
+            status: OrderStatus::Initialized,
+            quantity: Quantity::default(),
+            filled: Quantity::default(),
+            leaves: Quantity::default(),
+            avg_px: None,
+            ts_init: UnixNanos::default(),
+        }
+    }
+}
+
 /// A strategy's position in one instrument (its share of the venue position, from its own
 /// fills). PnL amounts are in the settlement currency; `realized_pnl` is net of commissions and
 /// funding since the position opened.

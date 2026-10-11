@@ -142,7 +142,7 @@ lint: (configure dev)
 
 # The Rust tree (docs/rust-plan.md): what the `rust` CI job runs. `just rust-check` is the whole
 # tier; the pieces are rust-lint, rust-test and rust-nostd.
-rust-check: rust-lint rust-test rust-nostd rust-fp
+rust-check: rust-lint rust-test rust-nostd rust-fp rust-py
 
 rust-lint:
     cd rust && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings
@@ -155,6 +155,13 @@ rust-nostd:
 
 # Determinism gate of the Rust tree: the release and det-o0 builds write the seed 7 corpus
 # (200 000 records) byte for byte the same, and its fingerprint matches the golden file.
+# The Python extension built from the Rust tree (docs/rust-plan.md R4): the `py` crate's cdylib
+# goes into python/jarvis as `_core.abi3.so` and python/tests runs on it. Needs numpy and pytest.
+rust-py:
+    cd rust && cargo build -q -p py
+    ln -sfn "$(pwd)/rust/target/debug/lib_core.so" python/jarvis/_core.abi3.so
+    PYTHONPATH=python python3 -m pytest -q python/tests
+
 rust-fp:
     cd rust && cargo build -q --release -p cli && cargo build -q --profile det-o0 -p cli
     cd rust && ./target/release/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-release.jlog > /dev/null

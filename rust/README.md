@@ -11,6 +11,7 @@ cargo test --profile det-o0             # release semantics at opt-level 0: the 
 cargo clippy --all-targets -- -D warnings
 cargo check -p core -p model -p data -p cost -p portfolio -p execution -p risk -p strategy -p engine -p backtest -p corpus --target x86_64-unknown-none   # the kernel needs no std
 cargo run -p cli -- build-info
+just rust-py                            # the Python extension: builds `py`, links it into python/jarvis, runs python/tests
 ```
 
 Layout (one crate per architecture layer, docs/architecture.md section 3):
@@ -38,6 +39,16 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   snapshot files, catalog sources, the backtest node, replay with snapshot checks, the run report,
   the strategy registry with `rust:Probe`); `network`, `binance`, `live` are skeletons until R5.
   std and third-party crates allowed; `unsafe` only in a module that says why.
+- `crates/python/py`: the Python extension `jarvis._core` (PyO3, abi3 for Python 3.11+), the
+  same module the C++ tree's nanobind build provides, so `python/jarvis`, `python/tests` and
+  `examples/py` run unchanged on it: `model` (value types, enums, every event class generated
+  from the Rust field tables), `log` (the event log reader and writer, fingerprints, compare) and
+  `node` (`Context`, cadences, feature declarations, order intents and views, the batch columns
+  as read-only numpy arrays, `NodeSetup` to run and replay, the report). `PyStrategyHost` adapts a
+  Python strategy object to the `Strategy` trait; a `Context` object holds the kernel context only
+  during the callback it was passed to (the crate's one `unsafe`, in `host::PyContext::with`).
+  `python/pyproject.toml` builds the wheel with maturin (`pip install ./python`); `just rust-py`
+  is the cargo-only development path.
 - `crates/testkit/corpus`: the deterministic corpus of kernel inputs (every event kind, every
   order event variant, a pure function of the seed). Test support, not kernel code: it drives the
   encoding and log tests in its own `tests/`, seeds the fuzzers, and is what the determinism gate
