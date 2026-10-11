@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 
 use data::subscription::StrategyIndex;
 use engine::lifecycle::{is_terminal, Lifecycle};
+use engine::snapshot_schedule::{asks_for_snapshot, SnapshotSchedule};
 use engine::Engine;
 use kernel_core::{EventKey, Result, UnixNanos};
 use model::enums::{LifecycleReason, NodeState};
@@ -34,10 +35,19 @@ use crate::venue_loop::{VenueLoop, VENUE_SOURCE};
 
 pub const KERNEL_SOURCE: u16 = 0;
 
-/// Receives every input before it is stepped and every output after.
+/// Receives every input before it is stepped and every output after. A recorder that keeps
+/// `EngineState` snapshots (section 16.3) overrides `takes_snapshots` and `snapshot`: the driver
+/// calls the latter at each point of the [`SnapshotSchedule`], with the `BatchEnd` input's key.
 pub trait Recorder {
     fn record(&mut self, key: EventKey, event: &Event) -> Result<()>;
     fn emit(&mut self, key: EventKey, output: &Output) -> Result<()>;
+    fn takes_snapshots(&self) -> bool {
+        false
+    }
+    fn snapshot(&mut self, engine: &Engine, key: EventKey) -> Result<()> {
+        let _ = (engine, key);
+        Ok(())
+    }
 }
 
 /// Records nothing but the fingerprint.
@@ -101,6 +111,8 @@ pub struct DriverOptions {
     pub end: Option<UnixNanos>,
     /// Inputs stepped while the node is `Syncing` (instrument definitions, the account snapshot).
     pub preamble: Vec<Event>,
+    /// `persistence.snapshot_every`; 0: no snapshots.
+    pub snapshot_every: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -118,6 +130,10 @@ pub struct RunSummary {
     pub halted: bool,
     /// Orders still open when the node stopped.
     pub left_open: u32,
+    /// `EngineState` snapshots taken, and those the recorder could not take (the run goes on:
+    /// the log, not the snapshot, is the record).
+    pub snapshots: u64,
+    pub snapshot_failures: u64,
     pub state: NodeState,
     pub first_ts: UnixNanos,
     pub last_ts: UnixNanos,
@@ -150,6 +166,7 @@ pub struct Driver<'a, R: Recorder> {
     seq: u64,
     last_ts: UnixNanos,
     batch: Option<UnixNanos>,
+    snapshots: SnapshotSchedule,
 }
 
 impl<'a, R: Recorder> Driver<'a, R> {
@@ -159,6 +176,7 @@ impl<'a, R: Recorder> Driver<'a, R> {
         recorder: &'a mut R,
         options: DriverOptions,
     ) -> Self {
+        let snapshots = SnapshotSchedule::new(options.snapshot_every);
         Self {
             engine,
             source,
@@ -169,6 +187,7 @@ impl<'a, R: Recorder> Driver<'a, R> {
             seq: 0,
             last_ts: UnixNanos::default(),
             batch: None,
+            snapshots,
         }
     }
 
@@ -377,6 +396,17 @@ impl<'a, R: Recorder> Driver<'a, R> {
             self.recorder.emit(EventKey::new(key.ts, i as u16, key.seq), o)?;
         }
         self.summary.outputs += self.engine.outputs().len() as u64;
+        if asks_for_snapshot(event, self.engine.stop_requested()) {
+            self.snapshots.request();
+        }
+        if self.snapshots.due(key.seq, matches!(event, Event::BatchEnd(_)))
+            && self.recorder.takes_snapshots()
+        {
+            match self.recorder.snapshot(self.engine, key) {
+                Ok(()) => self.summary.snapshots += 1,
+                Err(_) => self.summary.snapshot_failures += 1,
+            }
+        }
         Ok(())
     }
 }

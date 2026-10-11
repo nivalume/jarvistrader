@@ -161,4 +161,5 @@ rust-fp:
     cd rust && ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog > /dev/null
     cd rust && cmp target/fp-release.jlog target/fp-det-o0.jlog
     cd rust && ./target/release/jarvis-rs fingerprint target/fp-release.jlog | diff - tests/golden/corpus_seed7_200000.fingerprint
-    @echo "rust-fp: release and det-o0 corpora are identical and match the golden fingerprint"
+    cd rust && tools/node_gate.sh target/release target/det-o0 target/node-gate
+    @echo "rust-fp: release and det-o0 corpora and node runs are identical and match the golden fingerprints"

@@ -2,6 +2,8 @@
 //! (docs/rust-plan.md); the ones below are what exists today.
 #![forbid(unsafe_code)]
 
+mod node_cli;
+
 use std::io::{self, BufRead, Read, Write};
 use std::process::ExitCode;
 
@@ -22,10 +24,20 @@ fn usage() -> ExitCode {
          \x20 dump FILE [--limit N]                    print records as text\n\
          \x20 roundtrip                                parse each stdin line as a model value and print its text form\n\
          \x20 sha256 [FILE] | crc32c [FILE]            digests of a file or standard input\n\
+         \x20 config FILE [--env ENV] [--set path=value]... [--out FILE]\n\
+         \x20                                          the canonical configuration text and its hash\n\
+         \x20 backtest --config FILE [--env ENV] [--set path=value]... [--out DIR]\n\
+         \x20                                          run the node over the catalog, writing the run directory\n\
+         \x20 replay RUN_DIR [--from-snapshot FILE] [--until SEQ] [--dump-state]\n\
+         \x20                                          recompute a run's outputs; exit 3 on a divergence\n\
+         \x20 report RUN_DIR [--out FILE]              fills, fees and PnL of a run\n\
+         \x20 snapshot FILE                            describe an EngineState snapshot file\n\
+         \x20 catalog --seed N --out DIR [--instrument]\n\
+         \x20                                          write the golden catalog (one day, BTCUSDT-PERP)\n\
          \n\
-         pending (docs/rust-plan.md): config, replay, report"
+         exit status: 0 success, 1 failure, 2 usage, 3 replay divergence"
     );
-    ExitCode::from(2)
+    ExitCode::from(node_cli::EXIT_USAGE)
 }
 
 fn read_input(path: Option<&str>) -> io::Result<Vec<u8>> {
@@ -186,6 +198,12 @@ fn main() -> ExitCode {
         Some("fingerprint") => fingerprint_cmd(rest),
         Some("dump") => dump(rest),
         Some("roundtrip") => roundtrip(),
+        Some("config") => node_cli::config(rest),
+        Some("backtest") => node_cli::backtest(rest),
+        Some("replay") => node_cli::replay(rest),
+        Some("report") => node_cli::report(rest),
+        Some("snapshot") => node_cli::snapshot(rest),
+        Some("catalog") => node_cli::catalog(rest),
         Some("sha256") => match read_input(rest.first().map(String::as_str)) {
             Ok(data) => {
                 let digest = hex(&Sha256::digest(&data));

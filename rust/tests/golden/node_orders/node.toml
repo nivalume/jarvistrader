@@ -1,0 +1,31 @@
+# The orders plan of rust:Probe (crates/runtime/node/src/probe.rs) against the simulated venue:
+# both sides quoted at the touch (queue-position fills, latency with jitter), with cancels,
+# rejections, taker fills, expiries, denials and modifies racing fills. tools/node_gate.sh runs it
+# in two builds; the run log's fingerprint is node_orders_seed7.fingerprint.
+[node]
+id = "golden"
+seed = 3
+
+[data]
+catalog = "catalog"  # replaced with --set by the gate
+range = { start = "2026-09-01T00:00:00Z", end = "2026-09-01T00:03:00Z" }
+
+[[data.streams]]
+venue = "BINANCE_USDM"
+instruments = ["BTCUSDT-PERP.BINANCE"]
+streams = ["aggTrade", "bookTicker"]
+
+[[venues]]
+id = "BINANCE_USDM"
+kind = "binance_usdm"
+
+[venues.sim]
+fill_model = "queue_position"
+latency = { feed_ns = 1000000, out_ns = 20000000, in_ns = 5000000, jitter_ns = 2000000 }
+fee = { schedule = "binance_usdm_vip0" }
+balances = ["10000 USDT"]
+
+[[strategies]]
+id = "golden-001"
+impl = "rust:Probe"
+params = { plan = "orders" }

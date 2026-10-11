@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-description = "The jarvis command-line tool of the Rust tree: corpus, fingerprint, dump, roundtrip, config, replay"
+description = "The jarvis command-line tool of the Rust tree: corpus, fingerprint, dump, roundtrip, config, backtest, replay, report, snapshot, catalog"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,4 +17,5 @@ path = "src/main.rs"
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
+node.workspace = true
 corpus.workspace = true

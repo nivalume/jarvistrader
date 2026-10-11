@@ -7,7 +7,7 @@
 3. Rust 树在 `rust/`，与 C++ 树并行，不混进同一个二进制。R6 之前 Python 包仍加载 C++ 扩展；R4 为 Rust 的事件日志写 Python 读取器。
 4. 门禁：`just rust-check`（格式、clippy 作为错误、dev / release / det-o0 三个 profile 的测试、内核 crate 的 `no_std` 目标检查、`rust-fp` 确定性门），CI 的 `rust` job 跑同样的内容并进入 `gate`。
 
-状态：R0、R1（除待办项）、R2 完成，R3 第一阶段完成（执行算法、对账、事后监控顺延到 R3 第二阶段）；本文随每个里程碑更新。
+状态：R0、R1（除待办项）、R2 完成，R3 第一阶段完成（执行算法、对账、事后监控顺延到 R3 第二阶段），R4 第一阶段完成（sys 的文件与时钟、node 的配置/运行目录/快照/目录源/回测节点/回放/报告与 CLI；Python 绑定与读取器顺延到 R4 第二阶段）；本文随每个里程碑更新。
 
 ## R0 workspace 与门禁（在写领域代码之前，让约束先变成编译错误）
 
@@ -119,10 +119,22 @@
 
 ## R4 node、sys、Python 绑定（Python 示例零改动运行）
 
-- [ ] task: sys — 崩溃安全的文件写入、阻塞 socket、共享库加载、停止信号、进程与环境变量、单调时钟（§3 sys）
-- [ ] task: node — `NodeConfig`：toml + serde、`deny_unknown_fields`、`--env` 与 `--set` 覆盖、规范化与 hash 与 C++ 一致（§4.2）
-- [ ] task: node — Node 生命周期状态机、`BacktestNode`、构建信息、`jarvis-rs replay` / `config` / `report`
-- [ ] task: node — 快照文件与恢复（§16.3）
+> 2026-10-11 第一阶段完成。
+> - `sys`：`DurableFile`（`CreateNew`/`Truncate`、`write_all`、`sync_data`/`sync`）、`sync_directory`、`replace_file`、`write_text_atomic`、`read_bytes`/`read_text`；`wall_now`、`Stopwatch`、`run_id`（`YYYYmmddTHHMMSSZ`）。socket、信号、共享库加载随 R5 的 live 层到来。
+> - `node::config`：用 `toml_edit`（保留 span，错误报到源文件行号）而不是 serde：未知键、浮点、类型、取值范围、交叉检查（venue/strategy id 重复、策略数超容量、`data.streams` 的 venue 必须存在）全部按 C++ 的规则报错，错误按行排序、`--set` 与交叉检查的行号 0 排在最后；`--env` 先应用，`--set path=value` 的段按表键 / 数组下标 / 按 `id` 选 `[[...]]` 元素，值按 TOML 解析，解析不了的裸词按原文；规范化文本（hashed 部分与 operational 部分）、`config_hash = SHA-256("jarvis-node-config-v1\n" + hashed)` 与 `jarvis config` 的输出格式与 C++ 逐字节一致：`tests/golden/node_config/expected.{canonical,overridden}.txt` 直接作为测试期望通过。
+> - `node::event_log`：按段滚动的运行日志（`events-NNNNNN.jlog`，每段以日志头开始，`segment_bytes`、`sync_on_flush`、`durable`），读取器跨段读、可选容忍被截断的尾部（`torn_bytes`）。`snapshot_file`：`JARVISSN | format | 日志头 | seq | ts | complete | strategies | body_len | body | crc32c`，临时文件加重命名写入；`load_snapshot` 要求完整且来自同一构建（日志头的 `build` 字段）。`run_dir`：`config.toml`、`run.toml`（source、env、sets、config_hash、resumed_from）、`{node_id}`/`{run_id}` 替换与 `-2`/`-3` 后缀、`node_runs`、`load_run_config`（重建配置并核对日志头的 hash）。
+> - `node::log_source`：目录结构 `{catalog}/{instrument}/{stream}/{YYYY-MM-DD}/events-*.jlog`（Rust 日志格式；C++ 目录的转换器顺延），`LogSource` 跨日读取并把 seq 加上前面各日的记录数，`resolve_catalog` 按 `data.range` 选日。`backtest_node`：`kernel_config`/`error_policy`/`name_strategies`（策略 id、按 instruments 白名单 `restrict/allow`）、preamble（目录里最后一条 instrument 定义 + `[venues.sim] balances` 的账户快照）、`venue_loop_config`、`MergeSource` 合并各流、`LogFileRecorder` 把输入、输出与快照写入运行目录、`run_backtest`。`replay`：按 `persistence.snapshot_every` 在相同点取快照并与文件逐字节比较，`--from-snapshot`、`--until`、`--dump-state`（状态的 SHA-256），日志不从 seq 1 开始时自动选覆盖它的最早快照。`run_report`：订单经 `execution::apply_order_event` 的新 OMS、成交经 `Portfolio` 重算，文本格式同 C++ `report_text`。`registry`：`impl = "rust:<name>"` 查工厂，`py:` 报需要 Python 宿主，`cpp:` 报属于 C++ 树；内建 `rust:Probe`（C++ `GoldenStrategy` 的移植：trade/batch/quote/book/bar/feature/orders 七个计划，自述快照状态）。
+> - `engine::snapshot_schedule`：`SnapshotSchedule`（BatchEnd 后、自上次快照点起 ≥ every 个输入）与 `asks_for_snapshot`；`backtest::Driver` 的 `Recorder` 增加 `takes_snapshots`/`snapshot` 钩子，`DriverOptions::snapshot_every`，`RunSummary::{snapshots, snapshot_failures}`。`corpus::golden`：C++ `golden_node catalog` 的移植（splitmix64，一天 BTCUSDT-PERP 的 aggTrade/bookTicker/depth/kline_1m 加 instrument 定义），`node::catalog::write_stream` 写成目录日志。
+> - `cli`：`jarvis-rs config | backtest | replay | report | snapshot | catalog`，退出码 0/1/2/3；`tools/node_gate.sh` 加入 `just rust-fp` 与 CI：release 与 det-o0 两个构建各自生成目录、跑 orders 计划、运行日志与快照逐字节相同、互相回放对方的运行、指纹等于 `tests/golden/node_orders_seed7.fingerprint`。
+>
+> 验收结果：node 7 个测试（规范化配置与覆盖后的配置等于 C++ golden、orders 计划整段运行 → 运行目录完整 → `load_run_config` 重建配置 → 全量回放无偏差且快照全部匹配 → 从中间快照回放其余部分 → 第二次运行逐字节相同 → 改参数后回放报偏差 → 报告有成交/拒单/过期/改单计数 → 已有日志的目录拒绝再写、六个其余计划各自运行并回放、日志分段滚动与截断尾部、快照文件往返与校验和、运行日志指纹等于 golden），三个 profile 全部通过；`node_gate.sh` 通过。
+>
+> 未做（R4 第二阶段）：`py` crate（PyO3 + maturin）、`PyStrategyHost`、`StrategyError` 输入（Rust 策略的失败由引擎确定性处理，无需记录；Python 策略需要）、`jarvis.log` 读取器、`python/tests/` 与 `examples/py/`；C++ 格式目录到 Rust 格式的转换器；sandbox/live 的 `RunStart`/`resume`/`truncate`（随 R5）。
+
+- [x] task: sys — 崩溃安全的文件写入、单调与墙上时钟、运行 id（§3 sys）；阻塞 socket、共享库加载、停止信号随 R5
+- [x] task: node — `NodeConfig`：toml_edit、未知键报错、`--env` 与 `--set` 覆盖、规范化与 hash 与 C++ 一致（§4.2）
+- [x] task: node — Node 生命周期状态机、`BacktestNode`、构建信息、`jarvis-rs replay` / `config` / `report`（另有 `backtest` / `snapshot` / `catalog`）
+- [x] task: node — 快照文件与恢复（§16.3）
 - [ ] task: python — `py` crate（PyO3 + maturin，abi3）：绑定全部模型类型、`PyStrategyHost`、`on_batch` 的只读 ndarray 视图、`jarvis.log` 读写；`python/jarvis/` 包按构建选项加载 C++ 或 Rust 扩展
 - [ ] task: harness — `python/tests/` 对 Rust 扩展全部通过；`tests/golden/node_config` 通过
 - [ ] task: python — `jarvis.log` 的纯 Python 读取器读 Rust 事件日志（线格式见 `model::log`），指纹与 `jarvis-rs fingerprint` 一致

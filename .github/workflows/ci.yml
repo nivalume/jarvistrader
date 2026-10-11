@@ -351,6 +351,7 @@ jobs:
           ./target/det-o0/jarvis-rs corpus --seed 7 --events 200000 --out target/fp-det-o0.jlog
           cmp target/fp-release.jlog target/fp-det-o0.jlog
           ./target/release/jarvis-rs fingerprint target/fp-release.jlog | diff - tests/golden/corpus_seed7_200000.fingerprint
+          tools/node_gate.sh target/release target/det-o0 target/node-gate
       - name: Conformance vectors are up to date
         run: python3 tools/gen_conformance.py && git diff --exit-code -- crates/kernel/model
 

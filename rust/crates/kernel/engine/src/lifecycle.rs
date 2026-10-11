@@ -40,6 +40,12 @@ pub struct Lifecycle {
 }
 
 impl Lifecycle {
+    /// A lifecycle already in `state` (a restored snapshot).
+    #[must_use]
+    pub const fn at(state: NodeState) -> Self {
+        Self { state }
+    }
+
     #[must_use]
     pub const fn state(&self) -> NodeState {
         self.state

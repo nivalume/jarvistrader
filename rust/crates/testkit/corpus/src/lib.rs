@@ -12,6 +12,7 @@
 #![deny(clippy::float_arithmetic)]
 
 pub mod fixtures;
+pub mod golden;
 
 use kernel_core::clock::TimerKey;
 use kernel_core::rng::CounterRng;

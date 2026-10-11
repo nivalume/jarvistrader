@@ -13,6 +13,16 @@ workspace = true
 [dependencies]
 kernel-core.workspace = true
 model.workspace = true
+data.workspace = true
+cost.workspace = true
+portfolio.workspace = true
+execution.workspace = true
+risk.workspace = true
+strategy.workspace = true
 engine.workspace = true
 backtest.workspace = true
 sys.workspace = true
+toml_edit = "0.25.17"
+
+[dev-dependencies]
+corpus.workspace = true

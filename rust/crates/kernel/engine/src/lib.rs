@@ -19,6 +19,7 @@
 extern crate alloc;
 
 pub mod lifecycle;
+pub mod snapshot_schedule;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;

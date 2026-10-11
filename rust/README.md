@@ -32,8 +32,12 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   directory's `clippy.toml` bans `HashMap`, `HashSet` and `BTreeMap`. Dependencies between them
   follow the layer table; Cargo refuses a cycle, which is what `tools/check-layering.py` checks
   in the C++ tree.
-- `crates/runtime/`: `sys`, `node`, `network`, `binance`, `live` (skeletons). std and third-party
-  crates allowed; `unsafe` only in a module that says why.
+- `crates/runtime/`: `sys` (crash-safe file writes, atomic replace, the clocks, run ids) and
+  `node` (the composition root: `NodeConfig` from TOML with `--env`/`--set` overrides and the
+  canonical text and hash the C++ tree's golden fixes, the run directory, the segmented run log,
+  snapshot files, catalog sources, the backtest node, replay with snapshot checks, the run report,
+  the strategy registry with `rust:Probe`); `network`, `binance`, `live` are skeletons until R5.
+  std and third-party crates allowed; `unsafe` only in a module that says why.
 - `crates/testkit/corpus`: the deterministic corpus of kernel inputs (every event kind, every
   order event variant, a pure function of the seed). Test support, not kernel code: it drives the
   encoding and log tests in its own `tests/`, seeds the fuzzers, and is what the determinism gate
@@ -45,15 +49,17 @@ Layout (one crate per architecture layer, docs/architecture.md section 3):
   `behaviour`: the reader of `tests/trace/behaviours/*.txt` and the forward trace driver the
   execution, risk and backtest tests replay the TLC-generated behaviours with.
 - `crates/tools/cli`: the `jarvis-rs` binary: `corpus`, `fingerprint`, `dump`,
-  `roundtrip`, `sha256`, `crc32c`, `build-info`; more subcommands arrive with their layers.
+  `roundtrip`, `sha256`, `crc32c`, `build-info`, and the node's `config`, `backtest`, `replay`,
+  `report`, `snapshot`, `catalog` (exit status 0 success, 1 failure, 2 usage, 3 replay
+  divergence). `tools/node_gate.sh` is the node half of the determinism gate.
 - `tests/golden/`: the Rust tree's golden fingerprints (see its README).
 - `tools/gen_conformance.py`: turns `tests/conformance/nautilus_cd417b80.json` into the
   currency table and the conformance test vectors; CI checks the output is current.
 
 The C++ tree is a design reference, not an oracle: the Rust tree implements the contract in
 `docs/architecture.md` on its own and is verified by its tests, the TLA+ specifications and the
-determinism gate (`just rust-fp`: the `release` and `det-o0` builds write the same corpus byte for
-byte).
+determinism gate (`just rust-fp`: the `release` and `det-o0` builds write the same corpus and the
+same run log and snapshots byte for byte, and each replays the other's run).
 
 `overflow-checks` is on in every profile: an overflow is a bug (ADR 0001), and it must fail the
 same way in `release` and `det-o0`.
